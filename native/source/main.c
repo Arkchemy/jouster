@@ -1,5 +1,5 @@
 // Real Milestone 2: a genuine libnx homebrew app that calls
-// PortalRecomp's recompiler output (generated.c, produced from
+// Bramble's recompiler output (generated.c, produced from
 // testdata/arithmetic.c by `recomp`) and displays the result on screen.
 //
 // This is the actual end-to-end proof the project needs: not just "does a
@@ -26,7 +26,7 @@ int main(int argc, char *argv[]) {
     ctx.r[1] = sizeof(ctx.mem) - 256; // stack pointer, headroom for stwu
     ppc_compute(&ctx);
 
-    printf("PortalRecomp -- Milestone 2\n\n");
+    printf("Bramble -- Milestone 2\n\n");
     printf("Recompiled PowerPC result: %d\n", (int32_t)ctx.r[3]);
     printf("Expected (ground truth):   260\n\n");
     printf("%s\n\n", (int32_t)ctx.r[3] == 260 ? "MATCH" : "MISMATCH");

@@ -11,7 +11,7 @@ already set.
 ## What it does
 
 `source/main.c` is a standard libnx console app (via `consoleInit`) that
-calls `ppc_compute()` — the actual output of running PortalRecomp's
+calls `ppc_compute()` — the actual output of running Bramble's
 recompiler (`recomp/`) against `testdata/arithmetic.c` — and prints the
 result on screen, comparing it against the known-correct value (**260**,
 per `tools/verify.sh`, which checks the same generated code on the host and
@@ -42,6 +42,6 @@ export DEVKITPRO=/opt/devkitpro   # if not already set by the installer
 make
 ```
 
-Output: `PortalRecomp.nro`. Copy it to `/switch/PortalRecomp/` on your SD
-card (alongside, or replacing, `switch/build/portalrecomp_poc.nro` from the
+Output: `Bramble.nro`. Copy it to `/switch/Bramble/` on your SD
+card (alongside, or replacing, `switch/build/bramble_poc.nro` from the
 libnx-free attempt). Drop what happens in `switch/test-results/`.

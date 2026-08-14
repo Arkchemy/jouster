@@ -1,5 +1,5 @@
-#ifndef PORTALRECOMP_PPC_RUNTIME_H
-#define PORTALRECOMP_PPC_RUNTIME_H
+#ifndef BRAMBLE_PPC_RUNTIME_H
+#define BRAMBLE_PPC_RUNTIME_H
 
 #include <stdint.h>
 #include <string.h>
@@ -45,4 +45,4 @@ static inline void ppc_cmpw(PpcContext *ctx, int32_t a, int32_t b) {
     ctx->cr0_eq = a == b;
 }
 
-#endif /* PORTALRECOMP_PPC_RUNTIME_H */
+#endif /* BRAMBLE_PPC_RUNTIME_H */

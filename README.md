@@ -72,5 +72,5 @@ put whatever you see in `switch/test-results/`.
 switch/build.sh
 ```
 
-Output: `switch/build/portalrecomp_poc.nro`. Copy it to
-`/switch/PortalRecomp/portalrecomp_poc.nro` on your SD card.
+Output: `switch/build/bramble_poc.nro`. Copy it to
+`/switch/Bramble/bramble_poc.nro` on your SD card.

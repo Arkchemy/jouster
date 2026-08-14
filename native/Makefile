@@ -13,14 +13,14 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET		:=	PortalRecomp
+TARGET		:=	Bramble
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	include
 
-APP_TITLE	:=	PortalRecomp Milestone 2
-APP_AUTHOR	:=	PortalRecomp project
+APP_TITLE	:=	Bramble Milestone 2
+APP_AUTHOR	:=	Bramble project
 
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
