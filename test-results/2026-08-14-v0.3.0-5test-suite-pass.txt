@@ -1,0 +1,30 @@
+Bramble v0.3.0 release (commit 1ff9469f6df3e72ef40ccaffc32028814df85e8c),
+switch/native/Bramble.nro, run on real modded Switch hardware.
+
+First hardware confirmation of the expanded 5-test suite (previous
+hardware confirmation, in an earlier release, only covered the original
+single-test MATCH/260 version). All 5 pass, matching host + QEMU-ARM64
+exactly -- confirms the rodata-addressing fix, indirect calls (mtctr/
+bctrl), and counted loops (mtctr/bdnz) all behave correctly on real
+hardware, not just in the recompiler's own host/QEMU verification.
+
+== Bramble on-hardware test suite starting ==
+running t1_arithmetic (integer arithmetic/calls)...
+[t1_arithmetic] got=260 want=260 -- PASS
+running t2_floating (single-precision FP + rodata constants)...
+[t2_floating (x100)] got=2025 want=2025 -- PASS
+running t3_loop (mtctr/bdnz counted-loop branches, -O2)...
+[t3_loop] got=35 want=35 -- PASS
+running t4_rodata (switch-statement lookup table, -O2)...
+  classify(0) got=7 want=7 -- ok
+  classify(1) got=300 want=300 -- ok
+  classify(2) got=-19 want=-19 -- ok
+  classify(3) got=42 want=42 -- ok
+  classify(4) got=1001 want=1001 -- ok
+  classify(5) got=5 want=5 -- ok
+  classify(6) got=-1 want=-1 -- ok
+[t4_rodata] -- PASS
+running t5_fnptr (mtctr/bctrl indirect calls)...
+[t5_fnptr] add=30(want 30) mul=200(want 200) -- PASS
+
+== done: 5 passed, 0 failed ==
