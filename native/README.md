@@ -1,12 +1,14 @@
 # Milestone 2, real version: recompiled code running as actual libnx homebrew
 
 Unlike `switch/src/start.s` (the hand-rolled, libnx-free "does anything
-boot at all" test built entirely from this project's dev sandbox, which
-can't reach devkitPro), this is a genuine devkitA64/libnx project. It needs
-a real devkitPro install (`sudo pacman -S switch-dev` on Fedora, or the
-platform-appropriate equivalent) — see the main project README and the
-Notion project log for how to get that installed if `DEVKITPRO` isn't
-already set.
+boot at all" test), this is a genuine devkitA64/libnx project. It needs a
+real devkitPro install — `sudo pacman -S switch-dev` on Fedora, or the
+platform-appropriate equivalent — but since it depends on nothing beyond
+`libnx` itself (no portlibs), it builds fine directly in this project's
+dev sandbox too, now that the `devkitA64`+`libnx` toolchain already
+installed there is usable (devkitpro.org's package mirror, needed for
+*additional* libraries, is still blocked from the sandbox — that only
+affects projects, like Viridite, that need portlibs).
 
 ## What it does
 
