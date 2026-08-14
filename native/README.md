@@ -13,28 +13,50 @@ affects projects, like Viridite, that need portlibs).
 ## What it does
 
 `source/main.c` is a standard libnx console app (via `consoleInit`) that
-calls `ppc_compute()` — the actual output of running Bramble's
-recompiler (`recomp/`) against `testdata/arithmetic.c` — and prints the
-result on screen, comparing it against the known-correct value (**260**,
-per `tools/verify.sh`, which checks the same generated code on the host and
-under QEMU-ARM64).
+runs **five** of Bramble's recompiler test programs — not just one —
+against real ARM64 Switch hardware, checking each against the exact same
+known-correct values `tools/verify.sh` already checks under QEMU-ARM64:
 
-This is the real end-to-end validation the project needs: not just "did
-something boot," but "does recompiled PowerPC code, running as actual
-Switch homebrew, produce the correct result." If the screen shows `MATCH`,
-that's the first real proof the whole pipeline (disassemble → recover
-functions → emit C → compile for ARM64 → run on real Switch hardware)
-works, closing out the plan's "Recommended First Step."
+- `t1_arithmetic` (`testdata/arithmetic.c`) — integer arithmetic/calls.
+- `t2_floating` (`testdata/floating.c`) — single-precision FP + rodata
+  constant resolution.
+- `t3_loop` (`testdata/loop_counted.c`) — `mtctr`/`bdnz` counted-loop
+  branches.
+- `t4_rodata` (`testdata/rodata_table.c`) — a compiler-generated
+  switch-statement lookup table, indexed at runtime: the real read-only-
+  data addressing bug this project found and fixed, run here on real
+  hardware rather than just QEMU.
+- `t5_fnptr` (`testdata/fnptr.c`) — `mtctr`/`bctrl` indirect calls through
+  a function pointer.
 
-`source/generated.c` and `include/ppc_runtime.h` are copied in from
-`recomp`'s output, not hand-written — see the top-level `README.md` for how
-they're produced. If `testdata/arithmetic.c` or `recomp` changes, regenerate
-with:
+QEMU is a good proxy for "does the recompiled code compute the right
+answer," but it's still an emulator — this is the actual target hardware,
+running actual recompiler output, across several distinct instruction
+categories, not just one integer-arithmetic program.
+
+**Logging, not just an on-screen result.** Per the project's own Notion
+plan ("Tooling & Development Approach" — self-instrumented automated
+testing), the app writes a checkpointed log to
+`sdmc:/switch/Bramble/test-results.log` as it runs, flushed after every
+line — not just a summary at exit. If the app freezes or crashes partway
+through a future, more ambitious test, the last-written checkpoint in that
+log narrows down where, without needing a human to guess blind. The same
+checkpoints also print to the console in real time.
+
+## Regenerating the test programs
+
+`source/generated_t*.c` and `include/ppc_runtime.h` are copied/generated
+from `recomp`'s output, not hand-written. Each test's generated C defines
+functions under the same names every time (`compute`, `init_globals`,
+`dispatch`, ...), which collide once more than one test is linked into the
+same binary — `regenerate.sh` handles this by renaming every generated
+symbol to a per-test prefix (`t1_arithmetic_compute`, `t2_floating_compute`,
+etc.), leaving the shared runtime helpers in `ppc_runtime.h`
+(`ppc_load_u32` and friends) untouched. Re-run it whenever `recomp` or the
+underlying `testdata/*.c` files change:
 
 ```sh
-testdata/build_ppc.sh /tmp/arithmetic_ppc.o
-recomp/build/recomp /tmp/arithmetic_ppc.o -o switch/native/source/generated.c
-cp recomp/include/ppc_runtime.h switch/native/include/
+switch/native/regenerate.sh
 ```
 
 ## Building
@@ -46,4 +68,6 @@ make
 
 Output: `Bramble.nro`. Copy it to `/switch/Bramble/` on your SD
 card (alongside, or replacing, `switch/build/bramble_poc.nro` from the
-libnx-free attempt). Drop what happens in `switch/test-results/`.
+libnx-free attempt). Drop what happens in `switch/test-results/`, and grab
+`sdmc:/switch/Bramble/test-results.log` off the SD card for the full
+checkpoint trail.
