@@ -70,7 +70,9 @@ static void checkResult(const char *name, int32_t got, int32_t want) {
 static void runArithmetic(void) {
     checkpoint("running t1_arithmetic (integer arithmetic/calls)...");
     static PpcContext ctx;
-    ctx.r[1] = sizeof(ctx.mem) - 256;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
     t1_arithmetic_compute(&ctx);
     checkResult("t1_arithmetic", (int32_t)ctx.r[3], 260);
 }
@@ -78,7 +80,9 @@ static void runArithmetic(void) {
 static void runFloating(void) {
     checkpoint("running t2_floating (single-precision FP + rodata constants)...");
     static PpcContext ctx;
-    ctx.r[1] = sizeof(ctx.mem) - 256;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
     t2_floating_init_globals(&ctx);
     t2_floating_compute(&ctx);
     // compute() returns float in f1; ground truth is 20.25 exactly, so an
@@ -90,7 +94,9 @@ static void runFloating(void) {
 static void runLoop(void) {
     checkpoint("running t3_loop (mtctr/bdnz counted-loop branches, -O2)...");
     static PpcContext ctx;
-    ctx.r[1] = sizeof(ctx.mem) - 256;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
     t3_loop_init_globals(&ctx);
     uint32_t acc_addr = 0x100;
     ppc_store_u32(&ctx, acc_addr, 7);
@@ -103,7 +109,9 @@ static void runLoop(void) {
 static void runRodataTable(void) {
     checkpoint("running t4_rodata (switch-statement lookup table, -O2)...");
     static PpcContext ctx;
-    ctx.r[1] = sizeof(ctx.mem) - 256;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
     t4_rodata_init_globals(&ctx);
     static const int32_t expect[7] = {7, 300, -19, 42, 1001, 5, -1};
     int allPass = 1;
@@ -122,7 +130,9 @@ static void runRodataTable(void) {
 static void runFnptr(void) {
     checkpoint("running t5_fnptr (mtctr/bctrl indirect calls)...");
     static PpcContext ctx;
-    ctx.r[1] = sizeof(ctx.mem) - 256;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
     t5_fnptr_init_globals(&ctx);
 
     ctx.r[3] = 10; ctx.r[4] = 20; ctx.r[5] = 0; // which=0 -> add

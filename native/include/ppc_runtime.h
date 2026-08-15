@@ -67,16 +67,49 @@ typedef struct PpcContext {
      * real elapsed-time value. Anything relying on actual wall-clock
      * timing from this would be a known, narrow gap. */
     uint32_t tb;
-    uint8_t mem[65536];
+    /* `shared`, not an inline array: was a 65536-byte (64KB) inline
+     * `mem[]` sized only for tiny test programs, then grown 64x to 4MB
+     * inline -- still fine for one `PpcContext`, but real threading
+     * (OSCreateThread, still unimplemented at the time of this change)
+     * needs multiple *concurrent* PpcContexts (one per real host thread,
+     * each with its own registers) that all see the *same* underlying
+     * guest memory, the same way real Wii U threads share one address
+     * space. An inline array can't be shared between separate struct
+     * instances; a pointer to a separately-allocated `PpcSharedMemory`
+     * can -- every thread's `PpcContext` gets its own fresh registers
+     * but points `shared` at the same block. A single-threaded program
+     * (everything so far) just points its one `PpcContext` at its own
+     * privately-owned `PpcSharedMemory` -- behaviorally identical to the
+     * old inline array, see `PPC_MEM_SIZE` below for the size (unchanged
+     * at 4MB, still an arbitrary, generous, documented placeholder, not
+     * a claim this matches real Wii U game scale).
+     *
+     * Every existing `PpcContext` consumer (tools/gen_harness*.c,
+     * switch/native/source/main.c) already used `static` storage
+     * instead of a stack-local -- updated to also allocate and bind a
+     * `static PpcSharedMemory` alongside, the same mechanical pattern
+     * every one of those files now follows. New standalone shim tests
+     * should do the same (`ctx.shared = &some_static_PpcSharedMemory;`
+     * before first use) -- `shared` is NULL by default (zeroed BSS/
+     * stack), so forgetting this is a fast, loud NULL-deref crash, not
+     * a silent wrong-answer bug.
+     */
+    struct PpcSharedMemory *shared;
 } PpcContext;
 
+#define PPC_MEM_SIZE (4 * 1024 * 1024)
+
+typedef struct PpcSharedMemory {
+    uint8_t mem[PPC_MEM_SIZE];
+} PpcSharedMemory;
+
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
-    uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
     p[2] = (uint8_t)(val >> 8);
@@ -84,20 +117,20 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
 }
 
 static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
-    return ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    return ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
 }
 
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
-    ctx->mem[addr & (sizeof(ctx->mem) - 1)] = val;
+    ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
 static inline uint16_t ppc_load_u16(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[0] << 8) | (uint32_t)p[1]);
 }
 
 static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
-    uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 8);
     p[1] = (uint8_t)val;
 }
@@ -106,12 +139,12 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
  * big-endian bytes as ppc_load_u32/u16, then swaps them) -- code that
  * needs little-endian data from a big-endian machine, or vice versa. */
 static inline uint32_t ppc_load_u32_brx(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
 }
 
 static inline uint16_t ppc_load_u16_brx(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[1] << 8) | (uint32_t)p[0]);
 }
 
@@ -406,5 +439,25 @@ static inline double ppc_frsqrte(double val) { return 1.0 / sqrt(val); }
  * (fadds/fsubs/fmuls/fdivs/fmadds/...), which compute as double but store
  * a single-rounded result back into the (still 64-bit) FPR. */
 static inline double ppc_frsp(double val) { return (double)(float)val; }
+
+/*
+ * ppc_dispatch: recomp emits a real definition of this once per compiled
+ * program (see main.cpp) -- a switch over every recovered function's
+ * address, used to resolve mtctr/bctrl indirect calls at runtime since
+ * their target isn't known until then. Declared here (not defined --
+ * every real generated program provides the real definition) so CafeOS
+ * shim headers can reuse the exact same mechanism to call *into*
+ * recompiled code for real guest callback invocation (e.g. an FSAsyncData
+ * completion callback, or nsyshid's HIDCallback) -- setting up the
+ * callback's arguments in ctx->r[3..], calling this, then restoring
+ * ctx->r[3] to the shim's own actual return value afterward, exactly the
+ * same calling convention a real indirect call already uses. This is the
+ * one piece of shim-authored code that depends on something the
+ * recompiler itself emits rather than being fully self-contained --
+ * shims that use it are not yet exercised through the real recompile
+ * pipeline (see docs/phase1d_import_surface.md), only via a standalone
+ * test that supplies its own fake ppc_dispatch.
+ */
+void ppc_dispatch(PpcContext *ctx, uint32_t addr);
 
 #endif /* BRAMBLE_PPC_RUNTIME_H */

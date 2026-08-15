@@ -8,6 +8,7 @@
  */
 #include "skylanders_portal.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <switch.h>
 
