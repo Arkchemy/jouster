@@ -14,6 +14,7 @@
 #include <switch.h>
 
 #include "ppc_runtime.h"
+#include "skylanders_figure.h"
 
 // t1_arithmetic (testdata/arithmetic.c) -- integer arithmetic/calls,
 // stripped-binary heuristic recovery's target in tools/verify.sh (not
@@ -149,6 +150,34 @@ static void runFnptr(void) {
                pass ? "PASS" : "FAIL");
 }
 
+static int g_figures_found;
+
+static void onFigureFound(const SkylandersDumpEntry *entry, void *user_data) {
+    (void)user_data;
+    g_figures_found++;
+    if (entry->name) {
+        checkpoint("  %s: CharacterID=%d VariantID=%d -- %s", entry->path,
+                   entry->figure.character_id, entry->figure.variant_id,
+                   entry->variant_name ? entry->variant_name : entry->name);
+    } else {
+        checkpoint("  %s: CharacterID=%d VariantID=%d -- not in this project's table",
+                   entry->path, entry->figure.character_id, entry->figure.variant_id);
+    }
+}
+
+static void runFigureScan(void) {
+    checkpoint("scanning sdmc:/switch/Bramble/figures for local figure dumps (Phase 3b)...");
+    g_figures_found = 0;
+    int n = skylanders_figure_scan_dir("sdmc:/switch/Bramble/figures", onFigureFound, NULL);
+    if (n < 0) {
+        checkpoint("[figure scan] could not open sdmc:/switch/Bramble/figures");
+    } else if (n == 0) {
+        checkpoint("[figure scan] no dumps found (drop real figure dumps in that folder to test this)");
+    } else {
+        checkpoint("[figure scan] found %d dump(s)", n);
+    }
+}
+
 int main(int argc, char *argv[]) {
     consoleInit(NULL);
 
@@ -167,6 +196,16 @@ int main(int argc, char *argv[]) {
     mkdir("sdmc:/switch/Bramble", 0777);
     g_log = fopen("sdmc:/switch/Bramble/test-results.log", "w");
 
+    // Phase 3b (local figure dumps, no portal needed): scan a dedicated
+    // SD card folder for real figure dumps, matching the project plan's
+    // own convention (a Skylanders/figures folder, browsable subfolders).
+    // An empty folder finding 0 dumps is a normal, expected outcome (no
+    // dumps placed there yet) -- not a pass/fail test, so it doesn't
+    // count toward g_pass_count/g_fail_count, same reasoning as
+    // portal_init() reporting "no portal attached" as a normal outcome
+    // rather than an error.
+    mkdir("sdmc:/switch/Bramble/figures", 0777);
+
     printf("Bramble -- on-hardware recompiler test suite\n\n");
     checkpoint("== Bramble on-hardware test suite starting ==");
     if (!g_log) {
@@ -178,6 +217,7 @@ int main(int argc, char *argv[]) {
     runLoop();
     runRodataTable();
     runFnptr();
+    runFigureScan();
 
     checkpoint("");
     checkpoint("== done: %d passed, %d failed ==", g_pass_count, g_fail_count);
