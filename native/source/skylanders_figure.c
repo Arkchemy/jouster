@@ -1,7 +1,9 @@
 #include "skylanders_figure.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /*
  * CHARACTER_IDS, ported verbatim (same IDs, same names) from
@@ -115,4 +117,55 @@ bool skylanders_figure_identify_dump(const char *path, SkylandersFigureId *out) 
     if (!skylanders_figure_load_block(path, 1, block1)) return false;
     *out = skylanders_figure_decode_block1(block1);
     return true;
+}
+
+static int scan_dir_at_depth(const char *dir_path, int depth, SkylandersDumpCallback callback, void *user_data) {
+    DIR *d = opendir(dir_path);
+    struct dirent *de;
+    int found = 0;
+
+    if (!d) return -1;
+
+    while ((de = readdir(d)) != NULL) {
+        char full_path[SKYLANDERS_FIGURE_MAX_PATH];
+        struct stat st;
+        int written;
+
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+
+        written = snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, de->d_name);
+        if (written < 0 || (size_t)written >= sizeof(full_path)) continue; /* path too long -- skip rather than silently truncate and misread */
+
+        if (stat(full_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            if (depth < 1) { /* exactly one level of subfolder recursion -- see header comment */
+                int sub = scan_dir_at_depth(full_path, depth + 1, callback, user_data);
+                if (sub > 0) found += sub;
+            }
+            continue;
+        }
+
+        {
+            SkylandersDumpEntry entry;
+            uint8_t block1[16];
+            if (!skylanders_figure_load_block(full_path, 1, block1)) continue; /* not a valid dump */
+
+            memset(&entry, 0, sizeof(entry));
+            snprintf(entry.path, sizeof(entry.path), "%s", full_path);
+            entry.figure = skylanders_figure_decode_block1(block1);
+            entry.name = skylanders_figure_name(entry.figure.character_id);
+            entry.variant_name = skylanders_figure_variant_name(entry.figure.character_id, entry.figure.variant_id);
+
+            if (callback) callback(&entry, user_data);
+            found++;
+        }
+    }
+
+    closedir(d);
+    return found;
+}
+
+int skylanders_figure_scan_dir(const char *dir_path, SkylandersDumpCallback callback, void *user_data) {
+    return scan_dir_at_depth(dir_path, 0, callback, user_data);
 }

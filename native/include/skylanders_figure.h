@@ -72,4 +72,44 @@ bool skylanders_figure_load_block(const char *path, uint32_t block_index, uint8_
  * meaningless in that case). */
 bool skylanders_figure_identify_dump(const char *path, SkylandersFigureId *out);
 
+#define SKYLANDERS_FIGURE_MAX_PATH 512
+
+typedef struct SkylandersDumpEntry {
+    char path[SKYLANDERS_FIGURE_MAX_PATH]; /* full path, ready to pass back into the load_block/identify_dump functions above */
+    SkylandersFigureId figure;
+    const char *name;         /* NULL if character_id isn't in this project's table */
+    const char *variant_name; /* NULL if no known variant, or character has no variant table */
+} SkylandersDumpEntry;
+
+typedef void (*SkylandersDumpCallback)(const SkylandersDumpEntry *entry, void *user_data);
+
+/* Scans `dir_path` for local figure-dump files -- per the project plan's
+ * own Phase 3b requirement ("must not be hardcoded to the SD card
+ * specifically... a folder on the SD card, external HDD/USB drive
+ * connected to the Switch, or in principle any storage type"),
+ * `dir_path` is just a real path the caller chooses (`sdmc:/...` under
+ * libnx, an external drive's mount path, or a plain host path when
+ * built/tested off-Switch) -- nothing here is SD-card-specific.
+ *
+ * Recurses exactly one level into subdirectories, matching re_nsyshid's
+ * own real convention this project has already noted elsewhere
+ * ("SD card figure dumps, browsable subfolders") -- a folder-per-figure
+ * or folder-per-box layout works, a deeply nested tree doesn't (a
+ * deliberate simplicity choice, not a discovered real constraint).
+ *
+ * Doesn't rely on a specific file extension (no confirmed real
+ * community convention for one) -- instead, every regular file found is
+ * a candidate: `skylanders_figure_load_block(path, 1, ...)` is
+ * attempted, and only files that genuinely contain a real, readable
+ * block 1 (i.e. are at least 32 bytes -- long enough to hold blocks 0
+ * and 1) are reported at all, via one `callback` invocation each. An ID
+ * that doesn't match this project's `CHARACTER_IDS` table is still
+ * reported (with `name = NULL`) rather than silently skipped -- it
+ * might be a real figure this table just doesn't cover yet, not
+ * necessarily a non-dump file.
+ *
+ * Returns the number of valid dump files found (0 if none), or -1 if
+ * `dir_path` itself couldn't be opened as a directory. */
+int skylanders_figure_scan_dir(const char *dir_path, SkylandersDumpCallback callback, void *user_data);
+
 #endif /* BRAMBLE_SKYLANDERS_FIGURE_H */
