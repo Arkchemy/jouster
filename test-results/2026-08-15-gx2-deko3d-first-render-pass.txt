@@ -1,0 +1,43 @@
+Bramble @ commit ebd546f03c9e98db54bebf18e76b0ab36580628f (2026-08-15),
+switch/gx2_test/BrambleGx2Test.nro, run on real modded Switch hardware.
+
+First real hardware confirmation of any gx2 rendering: the real
+ppc_import_gx2_GX2Init/GX2ClearColor/GX2SwapScanBuffers shim functions
+(recomp/include/cafeos_gx2.h), called through the same PpcContext-based
+convention real recompiled code uses, against a real deko3d device,
+queue, swapchain, and command buffer -- not a stub, not a simulation.
+
+Attempt 1 (commit 8e6d744): screen correctly cleared to the requested
+blue (0.10, 0.40, 0.70) -- real, genuine confirmation the GX2->deko3d
+bridge produces actual pixels on real hardware -- then crashed/exited
+after a moment. Real root cause found from this result, not caught by
+compiling/linking: GX2SwapScanBuffers never reset the command buffer
+between frames, so every frame's recorded commands (bindRenderTargets +
+clearColor) kept accumulating in the same fixed 64KB command-memory
+pool until it overflowed.
+
+Fix (commit ebd546f): dkQueueWaitIdle + dkCmdBufClear after presenting
+each frame, reclaiming the command buffer for the next frame's
+recording (a real, documented simplification -- trades pipelining for
+straightforward correctness at this stage; double-buffered command
+memory is the real next step once that's worth the complexity).
+
+Attempt 2 (this result, same commit ebd546f): screen clears to blue and
+*stays* that way indefinitely, updating every frame, exactly the
+expected behavior -- confirmed stable over an extended real run
+("stays on blue screen for ages"), not just the first frame or two.
+This is the first real, stable, on-hardware-confirmed rendering output
+from this project's Phase 2 (gx2/graphics) work.
+
+What this does and doesn't confirm: real device/queue/swapchain/
+command-buffer lifecycle management is correct under real, sustained,
+repeated per-frame use (real GPU synchronization via dkQueueWaitIdle,
+real command buffer reuse via dkCmdBufClear, real present via
+dkQueuePresentImage all working correctly together, repeatedly, without
+leaking or crashing). Does NOT yet confirm anything about real draw
+calls, real vertex/pixel shaders, real texture/surface upload, or
+real GX2SetColorBuffer-driven arbitrary render targets -- none of that
+exists yet (see docs/phase1d_import_surface.md's gx2 section for what's
+still missing). This is the foundational "can this project draw
+*anything* to the real screen and keep the app alive" milestone, not a
+claim about rendering the actual game.
