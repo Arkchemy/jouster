@@ -15,6 +15,7 @@
 
 #include "ppc_runtime.h"
 #include "skylanders_figure.h"
+#include "skylanders_nfc.h"
 
 // t1_arithmetic (testdata/arithmetic.c) -- integer arithmetic/calls,
 // stripped-binary heuristic recovery's target in tools/verify.sh (not
@@ -178,6 +179,30 @@ static void runFigureScan(void) {
     }
 }
 
+static void runNfcRead(void) {
+    // Phase 3c (Joy-Con NFC, no portal/dumps needed) -- ***UNVERIFIED***,
+    // see skylanders_nfc.h's own detailed disclaimer. Waits up to ~5s for
+    // a figure; not finding one (no NFC-capable controller connected, or
+    // nothing placed on it in time) is a normal, expected outcome here,
+    // same as the other real-hardware-optional checks above -- doesn't
+    // affect g_pass_count/g_fail_count.
+    checkpoint("checking for a Skylanders figure via Joy-Con NFC (Phase 3c, up to ~5s)...");
+    if (!skylanders_nfc_init()) {
+        checkpoint("[nfc read] no NFC-capable controller found, or NFC service unavailable");
+        return;
+    }
+    SkylandersFigureId id;
+    if (skylanders_nfc_read_figure(&id)) {
+        const char *name = skylanders_figure_name(id.character_id);
+        const char *variant = skylanders_figure_variant_name(id.character_id, id.variant_id);
+        checkpoint("[nfc read] CharacterID=%d VariantID=%d -- %s", id.character_id, id.variant_id,
+                   variant ? variant : (name ? name : "not in this project's table"));
+    } else {
+        checkpoint("[nfc read] no figure detected in time (place one on the controller's NFC point to test this)");
+    }
+    skylanders_nfc_exit();
+}
+
 int main(int argc, char *argv[]) {
     consoleInit(NULL);
 
@@ -218,6 +243,7 @@ int main(int argc, char *argv[]) {
     runRodataTable();
     runFnptr();
     runFigureScan();
+    runNfcRead();
 
     checkpoint("");
     checkpoint("== done: %d passed, %d failed ==", g_pass_count, g_fail_count);
