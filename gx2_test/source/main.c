@@ -272,6 +272,55 @@ static void run_state_selftest(PpcContext *ctx) {
     checkBool("GX2CalcDepthBufferHiZInfo.size", (int)ppc_load_u32(ctx, 0x4000), 0x1000);
     checkBool("GX2CalcDepthBufferHiZInfo.align", (int)ppc_load_u32(ctx, 0x4004), 0x100);
 
+    // GX2SetPixelSampler(sampler@0x2000, index=0) / GX2SetVertexSampler
+    // (sampler@0x5000, index=0) -- real deko3d descriptor push + bind.
+    // The real DkSamplerDescriptor byte encoding is opaque (deko3d's
+    // own internal format, not documented/decodable independently), so
+    // this can't assert specific bytes the way the guest-memory struct
+    // checks above do -- what real hardware *can* confirm is (a) the
+    // real dkMemBlockCreate/dkCmdBufPushData/
+    // dkCmdBufBindSamplerDescriptorSet calls this needs all succeed
+    // without crashing (the real, meaningful risk in this function --
+    // wrong memory flags/alignment/size would show up here), and (b)
+    // the real pixel/vertex namespace separation actually lands two
+    // different real samplers in two different, non-overlapping real
+    // descriptor slots, not the same one. Two deliberately different
+    // GX2Samplers (0x2000: MIRROR/LINEAR from earlier in this test;
+    // 0x5000: freshly WRAP/POINT) at pixel index 0 and vertex index 0
+    // should end up at real byte offsets 0 and
+    // 18*sizeof(DkSamplerDescriptor) in the pool, with different real
+    // encoded bytes (deko3d's own encoding, whatever it is, of two
+    // different real DkSampler configurations should not collide).
+    // GX2Flush+GX2DrawDone (already exercised above) make sure the
+    // real dkCmdBufPushData writes actually land in CPU-visible memory
+    // before reading it back here, since GX2Set*Sampler only records
+    // into the persistent command buffer, same as every other real
+    // GX2Set* state function in this file.
+    {
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; ctx->r[5] = 0; /* GX2InitSampler(sampler@0x5000, WRAP(0), POINT(0)) */
+        ppc_import_gx2_GX2InitSampler(ctx);
+
+        ctx->r[3] = 0x2000; ctx->r[4] = 0; /* GX2SetPixelSampler(sampler@0x2000, index=0) */
+        ppc_import_gx2_GX2SetPixelSampler(ctx);
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetVertexSampler(sampler@0x5000, index=0) */
+        ppc_import_gx2_GX2SetVertexSampler(ctx);
+
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+
+        uint8_t *pool = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+        uint8_t *pixel_slot = pool + 0 * sizeof(DkSamplerDescriptor);
+        uint8_t *vertex_slot = pool + BRAMBLE_GX2_SAMPLER_VERTEX_BASE * sizeof(DkSamplerDescriptor);
+        int slots_differ = memcmp(pixel_slot, vertex_slot, sizeof(DkSamplerDescriptor)) != 0;
+        checkBool("GX2SetPixelSampler/GX2SetVertexSampler write to different real descriptor slots", slots_differ, 1);
+
+        int pixel_slot_nonzero = 0, i;
+        for (i = 0; i < (int)sizeof(DkSamplerDescriptor); i++) {
+            if (pixel_slot[i] != 0) { pixel_slot_nonzero = 1; break; }
+        }
+        checkBool("GX2SetPixelSampler wrote real, non-zero descriptor bytes", pixel_slot_nonzero, 1);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 

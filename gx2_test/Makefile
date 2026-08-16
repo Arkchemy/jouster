@@ -34,7 +34,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -ldeko3d -lnx
+LIBS	:= -ldeko3d -lnx -lm
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
