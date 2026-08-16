@@ -321,6 +321,43 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2SetPixelSampler wrote real, non-zero descriptor bytes", pixel_slot_nonzero, 1);
     }
 
+    // GX2SetPixelSamplerBorderColor(index=0, ...) + GX2InitSamplerBorderType
+    // (VARIABLE(3)) -- real border-color register storage feeding a
+    // real sampler's decode at bind time. Two samplers with otherwise
+    // identical bits (both freshly WRAP/POINT at 0x5000) but different
+    // real border colors and BORDER_COLOR_TYPE=VARIABLE should produce
+    // two different real descriptors at the same pixel slot when bound
+    // one after the other -- same "can't assert specific bytes, can
+    // assert they differ" reasoning as the pixel/vertex check above.
+    {
+        uint8_t before[sizeof(DkSamplerDescriptor)], after[sizeof(DkSamplerDescriptor)];
+        uint8_t *pool, *pixel_slot;
+
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=1,g=0,b=0,a=1) */
+        ctx->f[1] = 1.0; ctx->f[2] = 0.0; ctx->f[3] = 0.0; ctx->f[4] = 1.0;
+        ppc_import_gx2_GX2SetPixelSamplerBorderColor(ctx);
+        ctx->r[3] = 0x5000; ctx->r[4] = 3; /* GX2InitSamplerBorderType(sampler@0x5000, VARIABLE(3)) */
+        ppc_import_gx2_GX2InitSamplerBorderType(ctx);
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSampler(sampler@0x5000, index=0) */
+        ppc_import_gx2_GX2SetPixelSampler(ctx);
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+        pool = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+        pixel_slot = pool + 0 * sizeof(DkSamplerDescriptor);
+        memcpy(before, pixel_slot, sizeof(before));
+
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=0,g=1,b=0,a=1) -- different color */
+        ctx->f[1] = 0.0; ctx->f[2] = 1.0; ctx->f[3] = 0.0; ctx->f[4] = 1.0;
+        ppc_import_gx2_GX2SetPixelSamplerBorderColor(ctx);
+        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSampler(sampler@0x5000, index=0) -- re-bind so the new color takes effect */
+        ppc_import_gx2_GX2SetPixelSampler(ctx);
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+        memcpy(after, pixel_slot, sizeof(after));
+
+        checkBool("GX2SetPixelSamplerBorderColor changes the real bound descriptor", memcmp(before, after, sizeof(before)) != 0, 1);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
