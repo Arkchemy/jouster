@@ -591,6 +591,62 @@ static void run_state_selftest(PpcContext *ctx) {
         checkpoint("[GX2SetPixelTexture/GX2SetVertexTexture] submitted+completed -- PASS (no hang/crash)");
     }
 
+    // GX2CopySurface(src@0xA000, srcLevel=0, srcSlice=0, dst@0xB000,
+    // dstLevel=0, dstSlice=0) -- pure guest-memory-to-guest-memory copy,
+    // no deko3d involved at all, so this can assert exact byte values
+    // (same reasoning as the GX2SetColorBuffer pixel-copy check above).
+    {
+        uint32_t src_addr = 0xA000, src_pixel_addr = 0xA100;
+        uint32_t dst_addr = 0xB000, dst_pixel_addr = 0xB100;
+        uint32_t w = 4, h = 4, x, y;
+
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint8_t v = (uint8_t)(50 + y * w + x);
+                uint32_t p = src_pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, v);
+                ppc_store_u8(ctx, p + 1, (uint8_t)(v + 1));
+                ppc_store_u8(ctx, p + 2, (uint8_t)(v + 2));
+                ppc_store_u8(ctx, p + 3, (uint8_t)(v + 3));
+            }
+        }
+        // Sentinel dst bytes so an unwanted (mismatched-scope) copy would be caught.
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint32_t p = dst_pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, 0xEE); ppc_store_u8(ctx, p + 1, 0xEE);
+                ppc_store_u8(ctx, p + 2, 0xEE); ppc_store_u8(ctx, p + 3, 0xEE);
+            }
+        }
+
+        ppc_store_u32(ctx, src_addr + 0x00, 1); ppc_store_u32(ctx, src_addr + 0x04, w);
+        ppc_store_u32(ctx, src_addr + 0x08, h); ppc_store_u32(ctx, src_addr + 0x10, 1);
+        ppc_store_u32(ctx, src_addr + 0x14, 0x1a); ppc_store_u32(ctx, src_addr + 0x30, 16);
+        ppc_store_u32(ctx, src_addr + 0x3C, w); ppc_store_u32(ctx, src_addr + 0x24, src_pixel_addr);
+
+        ppc_store_u32(ctx, dst_addr + 0x00, 1); ppc_store_u32(ctx, dst_addr + 0x04, w);
+        ppc_store_u32(ctx, dst_addr + 0x08, h); ppc_store_u32(ctx, dst_addr + 0x10, 1);
+        ppc_store_u32(ctx, dst_addr + 0x14, 0x1a); ppc_store_u32(ctx, dst_addr + 0x30, 16);
+        ppc_store_u32(ctx, dst_addr + 0x3C, w); ppc_store_u32(ctx, dst_addr + 0x24, dst_pixel_addr);
+
+        ctx->r[3] = src_addr; ctx->r[4] = 0; ctx->r[5] = 0;
+        ctx->r[6] = dst_addr; ctx->r[7] = 0; ctx->r[8] = 0;
+        ppc_import_gx2_GX2CopySurface(ctx);
+
+        int pixels_match = 1;
+        for (y = 0; y < h && pixels_match; y++) {
+            for (x = 0; x < w && pixels_match; x++) {
+                uint8_t v = (uint8_t)(50 + y * w + x);
+                uint32_t p = dst_pixel_addr + (y * w + x) * 4;
+                if (ppc_load_u8(ctx, p + 0) != v || ppc_load_u8(ctx, p + 1) != (uint8_t)(v + 1) ||
+                    ppc_load_u8(ctx, p + 2) != (uint8_t)(v + 2) || ppc_load_u8(ctx, p + 3) != (uint8_t)(v + 3)) {
+                    pixels_match = 0;
+                }
+            }
+        }
+        checkBool("GX2CopySurface copied real pixel data correctly", pixels_match, 1);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
