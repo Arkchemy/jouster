@@ -325,8 +325,15 @@ int main(int argc, char *argv[]) {
     // this .nro has (see file comment on why there's no on-screen text).
     int selftest_ok = (g_fail_count == 0);
 
+    // Real, fixed number of frames to hold the result color on screen
+    // before exiting on its own -- long enough to be seen/photographed
+    // (~2 seconds at a real 60fps present rate) without needing a
+    // physical + press, since this now runs unattended as part of a
+    // test cycle. + still exits early if held/pressed sooner.
+    #define GX2TEST_AUTO_EXIT_FRAMES 120
+
     int frame = 0;
-    while (appletMainLoop()) {
+    while (appletMainLoop() && frame < GX2TEST_AUTO_EXIT_FRAMES) {
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
         if (kDown & HidNpadButton_Plus) break;
