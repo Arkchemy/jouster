@@ -667,6 +667,50 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2CalcDRCSize(SINGLE, RGBA8).size", (int)ppc_load_u32(ctx, size_addr), 864 * 480 * 4);
     }
 
+    // GX2CopyColorBufferToScanBuffer(colorBuffer@0xD000, scanTarget=0) --
+    // real, recorded dkCmdBufCopyImage into the live swapchain
+    // framebuffer. Unlike GX2SetColorBuffer's own pitch-linear
+    // destination (real, direct CPU-readable bytes), the actual
+    // destination here is a real block-linear swapchain image with no
+    // CPU readback path in this project's design (same real limitation
+    // GX2SetDepthBuffer's own block-linear image already has) -- what
+    // real hardware *can* confirm here: the real
+    // dkMemBlockCreate/dkImageInitialize/dkCmdBufCopyImage calls all
+    // succeed and actually submit+complete without crashing/hanging,
+    // the real, meaningful risk (wrong format/flags/rect bounds would
+    // show up here).
+    {
+        uint32_t addr = 0xD000, pixel_addr = 0xD100;
+        uint32_t w = 4, h = 4, x, y;
+
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint8_t v = (uint8_t)(150 + y * w + x);
+                uint32_t p = pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, v);
+                ppc_store_u8(ctx, p + 1, (uint8_t)(v + 1));
+                ppc_store_u8(ctx, p + 2, (uint8_t)(v + 2));
+                ppc_store_u8(ctx, p + 3, (uint8_t)(v + 3));
+            }
+        }
+
+        ppc_store_u32(ctx, addr + 0x00, 1); ppc_store_u32(ctx, addr + 0x04, w);
+        ppc_store_u32(ctx, addr + 0x08, h); ppc_store_u32(ctx, addr + 0x10, 1);
+        ppc_store_u32(ctx, addr + 0x14, 0x1a); ppc_store_u32(ctx, addr + 0x30, 16);
+        ppc_store_u32(ctx, addr + 0x3C, w); ppc_store_u32(ctx, addr + 0x24, pixel_addr);
+
+        ctx->r[3] = addr; ctx->r[4] = 0; // scanTarget 0 (TV)
+        ppc_import_gx2_GX2CopyColorBufferToScanBuffer(ctx);
+
+        checkBool("GX2CopyColorBufferToScanBuffer real temp source bound", g_bramble_gx2.scan_copy_temp_bound, 1);
+
+        // Real, recorded GPU command from this call needs to actually
+        // submit and complete without hanging/crashing.
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+        checkpoint("[GX2CopyColorBufferToScanBuffer] submitted+completed -- PASS (no hang/crash)");
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
