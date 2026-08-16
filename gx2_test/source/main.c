@@ -333,7 +333,7 @@ static void run_state_selftest(PpcContext *ctx) {
         uint8_t before[sizeof(DkSamplerDescriptor)], after[sizeof(DkSamplerDescriptor)];
         uint8_t *pool, *pixel_slot;
 
-        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=1,g=0,b=0,a=1) */
+        ctx->r[3] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=1,g=0,b=0,a=1) -- real index arg is r3, NOT a sampler pointer */
         ctx->f[1] = 1.0; ctx->f[2] = 0.0; ctx->f[3] = 0.0; ctx->f[4] = 1.0;
         ppc_import_gx2_GX2SetPixelSamplerBorderColor(ctx);
         ctx->r[3] = 0x5000; ctx->r[4] = 3; /* GX2InitSamplerBorderType(sampler@0x5000, VARIABLE(3)) */
@@ -346,7 +346,7 @@ static void run_state_selftest(PpcContext *ctx) {
         pixel_slot = pool + 0 * sizeof(DkSamplerDescriptor);
         memcpy(before, pixel_slot, sizeof(before));
 
-        ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=0,g=1,b=0,a=1) -- different color */
+        ctx->r[3] = 0; /* GX2SetPixelSamplerBorderColor(index=0, r=0,g=1,b=0,a=1) -- different color, real index arg is r3 */
         ctx->f[1] = 0.0; ctx->f[2] = 1.0; ctx->f[3] = 0.0; ctx->f[4] = 1.0;
         ppc_import_gx2_GX2SetPixelSamplerBorderColor(ctx);
         ctx->r[3] = 0x5000; ctx->r[4] = 0; /* GX2SetPixelSampler(sampler@0x5000, index=0) -- re-bind so the new color takes effect */
