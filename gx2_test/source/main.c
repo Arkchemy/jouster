@@ -389,6 +389,68 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2CalcSurfaceSizeAndAlignment(LINEAR_ALIGNED).alignment", (int)ppc_load_u32(ctx, addr + 0x38), 256);
     }
 
+    // GX2SetColorBuffer(colorBuffer@0x7000, target=0) -- real deko3d
+    // image + memory block creation, plus a real guest-memory-to-GPU
+    // pixel copy. A small 4x4 RGBA8 pattern is written into guest
+    // memory first (a distinct byte value per pixel), then read back
+    // from the real, actual CPU-visible DkMemBlock the copy wrote into
+    // -- unlike the sampler descriptor checks above (whose encoding is
+    // opaque), pitch-linear RGBA8 image bytes are real, plain,
+    // directly-readable pixel data, so this can assert exact values,
+    // not just "did something change".
+    {
+        uint32_t addr = 0x7000;
+        uint32_t pixel_addr = 0x7100;
+        uint32_t w = 4, h = 4, x, y;
+        uint32_t dest_stride = (4u * w + 127u) & ~127u; // real deko3d UsageRender pitch-linear formula
+
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint8_t v = (uint8_t)(y * w + x);
+                uint32_t p = pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, v);
+                ppc_store_u8(ctx, p + 1, (uint8_t)(v + 1));
+                ppc_store_u8(ctx, p + 2, (uint8_t)(v + 2));
+                ppc_store_u8(ctx, p + 3, (uint8_t)(v + 3));
+            }
+        }
+
+        ppc_store_u32(ctx, addr + 0x00, 1);      // dim = DIM_2D
+        ppc_store_u32(ctx, addr + 0x04, w);      // width
+        ppc_store_u32(ctx, addr + 0x08, h);      // height
+        ppc_store_u32(ctx, addr + 0x10, 1);      // mipLevels
+        ppc_store_u32(ctx, addr + 0x14, 0x1a);   // format = UNORM_R8_G8_B8_A8
+        ppc_store_u32(ctx, addr + 0x30, 16);     // tileMode = TM_LINEAR_SPECIAL
+        ppc_store_u32(ctx, addr + 0x3C, w);      // pitch (== width, no extra padding for this small test)
+        ppc_store_u32(ctx, addr + 0x24, pixel_addr); // image pointer
+
+        ctx->r[3] = addr; ctx->r[4] = 0; // target 0
+        ppc_import_gx2_GX2SetColorBuffer(ctx);
+
+        checkBool("GX2SetColorBuffer bound target 0", g_bramble_gx2.color_target_bound[0], 1);
+        if (g_bramble_gx2.color_target_bound[0]) {
+            uint8_t *dest = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.color_target_mem_block[0]);
+            int pixels_match = 1;
+            for (y = 0; y < h && pixels_match; y++) {
+                for (x = 0; x < w && pixels_match; x++) {
+                    uint8_t v = (uint8_t)(y * w + x);
+                    uint8_t *px = dest + y * dest_stride + x * 4;
+                    if (px[0] != v || px[1] != (uint8_t)(v + 1) || px[2] != (uint8_t)(v + 2) || px[3] != (uint8_t)(v + 3)) {
+                        pixels_match = 0;
+                    }
+                }
+            }
+            checkBool("GX2SetColorBuffer copied real pixel data correctly", pixels_match, 1);
+        }
+
+        // Re-binding the same target must not leak the previous real
+        // DkMemBlock -- calling it again should still leave exactly
+        // one real, valid, bound resource at this slot.
+        ctx->r[3] = addr; ctx->r[4] = 0;
+        ppc_import_gx2_GX2SetColorBuffer(ctx);
+        checkBool("GX2SetColorBuffer re-bind still bound", g_bramble_gx2.color_target_bound[0], 1);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
