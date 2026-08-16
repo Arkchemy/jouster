@@ -690,5 +690,17 @@ int main(int argc, char *argv[]) {
     checkpoint("exiting after %d frames, %d self-test checks passed, %d failed", frame, g_pass_count, g_fail_count);
     ppc_import_gx2_GX2Shutdown(&ctx);
     if (g_log) { fclose(g_log); g_log = NULL; }
+
+    // Real, standard libnx chain-load (envSetNextLoad) straight back into
+    // Goldleaf's own real USB file-transfer mode after every run, so a
+    // full test cycle (rebuild -> copy .nro over -> run -> pull the log)
+    // doesn't need a manual trip back through hbmenu each time. Real,
+    // honest fallback: envHasNextLoad() is false when this .nro was
+    // launched some other way than through hbloader (e.g. as an
+    // installed title) -- chain-loading isn't supported there, so this
+    // just falls through to a normal exit instead of a hard failure.
+    if (envHasNextLoad()) {
+        envSetNextLoad("sdmc:/switch/Goldleaf/Goldleaf.nro", "Goldleaf.nro");
+    }
     return 0;
 }
