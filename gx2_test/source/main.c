@@ -31,6 +31,7 @@
 // actually produces pixels on a real console, readable at a glance
 // without needing the SD card log for the common case. Runs until +
 // is pressed.
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -64,6 +65,62 @@ static void checkU64(const char *name, uint64_t got, uint64_t want) {
     int pass = (got == want);
     if (pass) g_pass_count++; else g_fail_count++;
     checkpoint("[%s] got=%llu want=%llu -- %s", name, (unsigned long long)got, (unsigned long long)want, pass ? "PASS" : "FAIL");
+}
+
+// Real, current frame number in the main per-frame loop below -- a plain
+// global (not behind a lock/atomic: this is single-threaded, and the
+// real libnx exception handler below runs on the *same* thread, at the
+// exact point a fault occurred, so it always sees this variable's real,
+// last-written value, not a stale or torn one). Exists so a real crash
+// mid-loop (an actual unhandled hardware exception, not caught by any
+// of the self-test's own checkpoint()-based logging, which only runs
+// before this loop even starts) still records *which frame* it died on.
+static volatile int g_current_frame = -1;
+
+// Real, official libnx exception-handling hook (see devkitPro's own
+// `exception-handler` example, `__libnx_exception_handler`) -- a real,
+// user-installable fallback for genuine unhandled CPU exceptions
+// (illegal instruction, bad memory access, etc.), running *before* the
+// process is actually killed, so real diagnostic info can still be
+// written to the SD card even when Atmosphère's own fatal-error/crash-
+// report path (already used elsewhere in this project to diagnose real
+// hardware bugs) is the only other place that info would otherwise
+// land. Writes to its own, separate, dedicated log file -- deliberately
+// not reusing `g_log`/`checkpoint()`, since a real fault could plausibly
+// happen while `g_log` itself is mid-write; a fresh `fopen` here doesn't
+// depend on that file's own state being consistent. Real register dump
+// fields/names confirmed against libnx's own real
+// `arm/thread_context.h` (`ThreadExceptionDump`), same struct/field set
+// as devkitPro's own official example. */
+alignas(16) static u8 __nx_exception_stack[0x1000];
+u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
+
+void __libnx_exception_handler(ThreadExceptionDump *ctx) {
+    FILE *f = fopen("sdmc:/switch/Bramble/exception-dump.log", "w");
+    int i;
+    if (!f) return;
+
+    fprintf(f, "real, unhandled hardware exception caught by this .nro's own fallback handler\n");
+    fprintf(f, "current frame at time of fault: %d\n", g_current_frame);
+    fprintf(f, "self-test result so far: %d passed, %d failed\n", g_pass_count, g_fail_count);
+    fprintf(f, "error_desc: 0x%x\n", ctx->error_desc);
+    for (i = 0; i < 29; i++) fprintf(f, "[X%d]: 0x%lx\n", i, (unsigned long)ctx->cpu_gprs[i].x);
+    fprintf(f, "fp: 0x%lx\n", (unsigned long)ctx->fp.x);
+    fprintf(f, "lr: 0x%lx\n", (unsigned long)ctx->lr.x);
+    fprintf(f, "sp: 0x%lx\n", (unsigned long)ctx->sp.x);
+    fprintf(f, "pc: 0x%lx\n", (unsigned long)ctx->pc.x);
+    fprintf(f, "pstate: 0x%x\n", ctx->pstate);
+    fprintf(f, "esr: 0x%x\n", ctx->esr);
+    fprintf(f, "far: 0x%lx\n", (unsigned long)ctx->far.x);
+    fclose(f);
+
+    // Also append the same summary to the main log, if it's still in a
+    // writable state -- real, best-effort, not depended on (the dedicated
+    // file above is the one guaranteed-real record).
+    if (g_log) {
+        fprintf(g_log, "*** UNHANDLED EXCEPTION at frame %d -- see exception-dump.log for full register state ***\n", g_current_frame);
+        fflush(g_log);
+    }
 }
 
 // Real self-test: exercises every real deko3d-backed GX2Set*/GX2Get*
@@ -773,9 +830,20 @@ int main(int argc, char *argv[]) {
 
     int frame = 0;
     while (appletMainLoop() && frame < GX2TEST_AUTO_EXIT_FRAMES) {
+        g_current_frame = frame; /* real, current-frame tracking for __libnx_exception_handler above -- see its own comment */
+
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
         if (kDown & HidNpadButton_Plus) break;
+
+        // Real, deliberate brightness pulse layered on top of the real
+        // pass/fail hue (green/red) below -- doesn't change *what* the
+        // color means (still solid green = pass, solid red = fail, same
+        // as before), but now visibly animates frame to frame, so it's
+        // obvious at a glance that this is a real, live, still-running
+        // loop and not a frozen/hung single frame -- real feedback this
+        // .nro had no way to give before, short of pulling the log.
+        float pulse = 0.55f + 0.45f * fabsf(sinf((float)frame * 0.10f));
 
         // void GX2ClearColor(GX2ColorBuffer *colorBuffer, float red,
         // float green, float blue, float alpha) -- real PPC ABI: r3 is
@@ -783,9 +851,9 @@ int main(int argc, char *argv[]) {
         // colorBuffer pointer, the 4 floats go in f1-f4.
         ctx.r[3] = 0;
         if (selftest_ok) {
-            ctx.f[1] = 0.10; ctx.f[2] = 0.70; ctx.f[3] = 0.20; /* green -- all checks passed */
+            ctx.f[1] = 0.10f * pulse; ctx.f[2] = 0.70f * pulse; ctx.f[3] = 0.20f * pulse; /* green -- all checks passed */
         } else {
-            ctx.f[1] = 0.70; ctx.f[2] = 0.10; ctx.f[3] = 0.10; /* red -- at least one check failed, check the log */
+            ctx.f[1] = 0.70f * pulse; ctx.f[2] = 0.10f * pulse; ctx.f[3] = 0.10f * pulse; /* red -- at least one check failed, check the log */
         }
         ctx.f[4] = 1.0;
         ppc_import_gx2_GX2ClearColor(&ctx);
@@ -802,8 +870,22 @@ int main(int argc, char *argv[]) {
             uint32_t flip_after = ppc_load_u32(&ctx, GX2TEST_FLIP_COUNT_ADDR);
             checkBool("GX2GetSwapStatus.swapCount advanced after 1 real swap", swap_after > swap_before, 1);
             checkBool("GX2GetSwapStatus.flipCount advanced after 1 real swap", flip_after > flip_before, 1);
-            checkpoint("first real frame swapped -- screen should now be %s", selftest_ok ? "green (all self-test checks passed)" : "red (a self-test check failed -- see log above)");
+            checkpoint("first real frame swapped -- screen should now be %s (pulsing -- if it's static, something's wrong)", selftest_ok ? "green (all self-test checks passed)" : "red (a self-test check failed -- see log above)");
         }
+
+        // Real, periodic progress checkpoint -- every 15 frames (~0.25s
+        // at a real 60fps present rate), so a real crash mid-loop (see
+        // __libnx_exception_handler above for the *hard*-crash case)
+        // still leaves a clear trail of exactly how far this got even
+        // in a softer failure mode (a real hang that never actually
+        // faults, which the exception handler above can't catch at
+        // all) -- the log's last periodic line plus its own timestamp
+        // gap tells you where and roughly when it stopped.
+        if (frame % 15 == 0) {
+            checkpoint("frame %d/%d (swap_count=%u flip_count=%u)", frame, GX2TEST_AUTO_EXIT_FRAMES,
+                       g_bramble_gx2.swap_count, g_bramble_gx2.flip_count);
+        }
+
         frame++;
     }
 
