@@ -358,6 +358,37 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2SetPixelSamplerBorderColor changes the real bound descriptor", memcmp(before, after, sizeof(before)) != 0, 1);
     }
 
+    // GX2CalcSurfaceSizeAndAlignment(surface@0x6000) -- real, bounded
+    // AMD tiling-math port (mip 0, real linear-only tile modes; see
+    // its own file comment for the real scope). Same real hand-traced
+    // values already confirmed on host (docs/phase1d_import_surface.md);
+    // this is their first real on-hardware exercise.
+    {
+        uint32_t addr = 0x6000;
+        // TM_LINEAR_SPECIAL(16), DIM_2D(1), 256x128, RGBA8(0x1a), AA1X --
+        // real hand-traced expected: imageSize=131072, alignment=1, pitch=256.
+        ppc_store_u32(ctx, addr + 0x00, 1);   // dim
+        ppc_store_u32(ctx, addr + 0x04, 256); // width
+        ppc_store_u32(ctx, addr + 0x08, 128); // height
+        ppc_store_u32(ctx, addr + 0x0C, 1);   // depth
+        ppc_store_u32(ctx, addr + 0x10, 1);   // mipLevels
+        ppc_store_u32(ctx, addr + 0x14, 0x1a);// format
+        ppc_store_u32(ctx, addr + 0x18, 0);   // aa
+        ppc_store_u32(ctx, addr + 0x30, 16);  // tileMode = TM_LINEAR_SPECIAL
+        ctx->r[3] = addr;
+        ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(ctx);
+        checkBool("GX2CalcSurfaceSizeAndAlignment(LINEAR_SPECIAL).imageSize", (int)ppc_load_u32(ctx, addr + 0x20), 131072);
+        checkBool("GX2CalcSurfaceSizeAndAlignment(LINEAR_SPECIAL).pitch", (int)ppc_load_u32(ctx, addr + 0x3C), 256);
+
+        // Same surface, TM_LINEAR_ALIGNED(1) explicit -- real hand-traced
+        // expected: imageSize=131072, alignment=256, pitch=256.
+        ppc_store_u32(ctx, addr + 0x30, 1);
+        ctx->r[3] = addr;
+        ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(ctx);
+        checkBool("GX2CalcSurfaceSizeAndAlignment(LINEAR_ALIGNED).imageSize", (int)ppc_load_u32(ctx, addr + 0x20), 131072);
+        checkBool("GX2CalcSurfaceSizeAndAlignment(LINEAR_ALIGNED).alignment", (int)ppc_load_u32(ctx, addr + 0x38), 256);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
