@@ -79,7 +79,7 @@ static void run_state_selftest(PpcContext *ctx) {
     ppc_import_gx2_GX2SetColorControl(ctx);
     checkBool("GX2SetColorControl.logicOp", (int)g_bramble_gx2.color_state.logicOp, (int)DkLogicOp_Set);
     checkBool("GX2SetColorControl.blendEnableMask", (int)g_bramble_gx2.color_state.blendEnableMask, 0x01);
-    checkBool("GX2SetColorControl.writeMask[0]", (int)(g_bramble_gx2.color_write_state.masks & 0xF), (int)DkColorMask_RGBA);
+    checkBool("GX2SetColorControl.write_enable", (int)g_bramble_gx2.color_write_enable, 1);
 
     // GX2SetAlphaTest(alphaTest=TRUE, func=GREATER(4), ref=0.5) -- real
     // shadow-state fix under test: this must NOT reset the logicOp
@@ -91,13 +91,24 @@ static void run_state_selftest(PpcContext *ctx) {
     checkBool("GX2SetAlphaTest preserves prior logicOp", (int)g_bramble_gx2.color_state.logicOp, (int)DkLogicOp_Set);
 
     // GX2SetTargetChannelMasks(mask0=RGBA(15), mask1..7=R(1)) -- real
-    // shadow-state fix under test again: must not reset
-    // GX2SetColorControl's own colorWriteEnable-driven mask.
+    // precedence-fix under test: channel_masks is now a source of truth
+    // independent of GX2SetColorControl's color_write_enable, combined
+    // at bind time by bramble_gx2_rebind_color_write_state instead of
+    // either call overwriting the other's setting outright.
     ctx->r[3] = 15; ctx->r[4] = 1; ctx->r[5] = 1; ctx->r[6] = 1;
     ctx->r[7] = 1; ctx->r[8] = 1; ctx->r[9] = 1; ctx->r[10] = 1;
     ppc_import_gx2_GX2SetTargetChannelMasks(ctx);
-    checkBool("GX2SetTargetChannelMasks[0]", (int)(g_bramble_gx2.color_write_state.masks & 0xF), 15);
-    checkBool("GX2SetTargetChannelMasks[1]", (int)((g_bramble_gx2.color_write_state.masks >> 4) & 0xF), 1);
+    checkBool("GX2SetTargetChannelMasks[0]", (int)(g_bramble_gx2.channel_masks & 0xF), 15);
+    checkBool("GX2SetTargetChannelMasks[1]", (int)((g_bramble_gx2.channel_masks >> 4) & 0xF), 1);
+
+    // Real regression test for the precedence bug the shadow-state
+    // fix addressed: calling GX2SetColorControl again afterward (e.g.
+    // just to toggle blend for an unrelated reason, a real, plausible
+    // per-draw pattern) must NOT reset the narrower per-channel mask
+    // GX2SetTargetChannelMasks just set on target 1.
+    ctx->r[3] = 0xF0; ctx->r[4] = 0x01; ctx->r[5] = 0; ctx->r[6] = 1;
+    ppc_import_gx2_GX2SetColorControl(ctx);
+    checkBool("GX2SetColorControl preserves target 1's channel mask", (int)((g_bramble_gx2.channel_masks >> 4) & 0xF), 1);
 
     // GX2SetPolygonControl(frontFace=CCW(0), cullFront=1, cullBack=0,
     // polyMode=1, polyModeFront=TRIANGLE(2), polyModeBack=TRIANGLE(2),
