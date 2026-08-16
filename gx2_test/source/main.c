@@ -451,6 +451,76 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2SetColorBuffer re-bind still bound", g_bramble_gx2.color_target_bound[0], 1);
     }
 
+    // GX2SetDepthBuffer(depthBuffer@0x8000) -- real block-linear depth
+    // image + real staging buffer + a real, recorded (not yet
+    // submitted) dkCmdBufCopyBufferToImage GPU blit. Unlike
+    // GX2SetColorBuffer's pitch-linear image (whose bytes are plain,
+    // directly-readable pixel data), the real depth image itself is
+    // block-linear (real GPU-swizzled) -- reading it back byte-for-
+    // byte isn't meaningful without implementing the real deswizzle
+    // algorithm, not attempted here. What real hardware *can* confirm:
+    // (a) the real dkMemBlockCreate/dkImageInitialize/
+    // dkCmdBufCopyBufferToImage calls all succeed without crashing
+    // (the real, meaningful risk -- wrong memory flags/format/
+    // alignment would show up here), and (b) the real staging buffer
+    // -- a plain, tightly-packed linear copy target, same reasoning as
+    // GX2SetColorBuffer's own image -- received the exact real guest
+    // pixel bytes written to it.
+    {
+        uint32_t addr = 0x8000;
+        uint32_t pixel_addr = 0x8100;
+        uint32_t w = 4, h = 4, x, y;
+
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint8_t v = (uint8_t)(100 + y * w + x);
+                uint32_t p = pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, v);
+                ppc_store_u8(ctx, p + 1, (uint8_t)(v + 1));
+                ppc_store_u8(ctx, p + 2, (uint8_t)(v + 2));
+                ppc_store_u8(ctx, p + 3, (uint8_t)(v + 3));
+            }
+        }
+
+        ppc_store_u32(ctx, addr + 0x00, 1);      // dim = DIM_2D
+        ppc_store_u32(ctx, addr + 0x04, w);      // width
+        ppc_store_u32(ctx, addr + 0x08, h);      // height
+        ppc_store_u32(ctx, addr + 0x10, 1);      // mipLevels
+        ppc_store_u32(ctx, addr + 0x14, 0x11);   // format = UNORM_R24_X8
+        ppc_store_u32(ctx, addr + 0x30, 16);     // tileMode = TM_LINEAR_SPECIAL
+        ppc_store_u32(ctx, addr + 0x3C, w);      // pitch
+        ppc_store_u32(ctx, addr + 0x24, pixel_addr); // image pointer
+
+        ctx->r[3] = addr;
+        ppc_import_gx2_GX2SetDepthBuffer(ctx);
+
+        checkBool("GX2SetDepthBuffer bound", g_bramble_gx2.depth_target_bound, 1);
+        if (g_bramble_gx2.depth_target_bound) {
+            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+            int pixels_match = 1;
+            for (y = 0; y < h && pixels_match; y++) {
+                for (x = 0; x < w && pixels_match; x++) {
+                    uint8_t v = (uint8_t)(100 + y * w + x);
+                    uint8_t *px = staging + (y * w + x) * 4;
+                    if (px[0] != v || px[1] != (uint8_t)(v + 1) || px[2] != (uint8_t)(v + 2) || px[3] != (uint8_t)(v + 3)) {
+                        pixels_match = 0;
+                    }
+                }
+            }
+            checkBool("GX2SetDepthBuffer staging buffer has correct real pixel data", pixels_match, 1);
+        }
+
+        // Real, recorded (not submitted) GPU commands from this call
+        // (GX2SetColorBuffer's own pixel-copy above plus this
+        // function's dkCmdBufCopyBufferToImage) need to actually
+        // submit and complete without hanging/crashing -- confirmed
+        // via the same real GX2Flush/GX2DrawDone path already
+        // exercised earlier in this test.
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+        checkpoint("[GX2SetDepthBuffer's recorded GPU blit] submitted+completed -- PASS (no hang/crash)");
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
