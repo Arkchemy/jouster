@@ -692,7 +692,7 @@ int main(int argc, char *argv[]) {
     if (g_log) { fclose(g_log); g_log = NULL; }
 
     // Real, standard libnx chain-load (envSetNextLoad) straight back into
-    // Goldleaf's own real USB file-transfer mode after every run, so a
+    // haze's own real USB file-transfer mode after every run, so a
     // full test cycle (rebuild -> copy .nro over -> run -> pull the log)
     // doesn't need a manual trip back through hbmenu each time. Real,
     // honest fallback: envHasNextLoad() is false when this .nro was
@@ -700,7 +700,7 @@ int main(int argc, char *argv[]) {
     // installed title) -- chain-loading isn't supported there, so this
     // just falls through to a normal exit instead of a hard failure.
     if (envHasNextLoad()) {
-        envSetNextLoad("sdmc:/switch/Goldleaf/Goldleaf.nro", "Goldleaf.nro");
+        envSetNextLoad("sdmc:/switch/haze.nro", "haze.nro");
     }
     return 0;
 }
