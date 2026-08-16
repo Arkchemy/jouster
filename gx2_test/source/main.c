@@ -691,16 +691,14 @@ int main(int argc, char *argv[]) {
     ppc_import_gx2_GX2Shutdown(&ctx);
     if (g_log) { fclose(g_log); g_log = NULL; }
 
-    // Real, standard libnx chain-load (envSetNextLoad) straight back into
-    // haze's own real USB file-transfer mode after every run, so a
-    // full test cycle (rebuild -> copy .nro over -> run -> pull the log)
-    // doesn't need a manual trip back through hbmenu each time. Real,
-    // honest fallback: envHasNextLoad() is false when this .nro was
-    // launched some other way than through hbloader (e.g. as an
-    // installed title) -- chain-loading isn't supported there, so this
-    // just falls through to a normal exit instead of a hard failure.
-    if (envHasNextLoad()) {
-        envSetNextLoad("sdmc:/switch/haze.nro", "haze.nro");
-    }
+    // Chain-loading straight into haze (envSetNextLoad) was tried and
+    // reverted: haze crashes with a real null-pointer data abort inside
+    // its own code when launched this way instead of directly from
+    // hbmenu (confirmed via a real Atmosphère crash report, PC inside
+    // haze's own module, not this .nro's) -- and the crash itself was
+    // observed to knock out the SD card's MTP/USB file-transfer session
+    // on the host side, needing a manual reconnect, the opposite of the
+    // "quicker to test" goal this was meant to serve. Plain exit back to
+    // hbmenu instead.
     return 0;
 }
