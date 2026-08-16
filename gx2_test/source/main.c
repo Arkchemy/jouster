@@ -210,6 +210,68 @@ static void run_state_selftest(PpcContext *ctx) {
     ppc_import_gx2_GX2WaitForVsync(ctx);
     checkpoint("[GX2WaitForVsync] returned -- PASS (no hang/crash)");
 
+    // The functions below are all backend-independent (pure guest-memory
+    // writes, no deko3d call, no g_bramble_gx2 shadow state involved) --
+    // unlike everything above, these were only verified analytically on
+    // host before now (see docs/phase1d_import_surface.md); this is
+    // their first real on-hardware exercise, at 0x2000 to avoid the
+    // 0x1000 scratch region already used above.
+
+    // GX2InitSampler(sampler@0x2000, clampMode=MIRROR(1),
+    // filterMode=LINEAR(1)) -- real bit-packed defaults per Cemu's
+    // GX2InitSampler body: CLAMP_X/Y/Z=1, XY_MAG/MIN_FILTER=1,
+    // Z_FILTER/MIP_FILTER=POINT(1), TEX_ARRAY_OVERRIDE=1, WORD1's
+    // MAX_LOD=0x3FF, WORD2's TYPE=1.
+    ctx->r[3] = 0x2000; ctx->r[4] = 1; ctx->r[5] = 1;
+    ppc_import_gx2_GX2InitSampler(ctx);
+    {
+        uint32_t w0 = ppc_load_u32(ctx, 0x2000);
+        uint32_t w1 = ppc_load_u32(ctx, 0x2004);
+        uint32_t w2 = ppc_load_u32(ctx, 0x2008);
+        checkBool("GX2InitSampler.CLAMP_X", (int)(w0 & 0x7), 1);
+        checkBool("GX2InitSampler.XY_MAG_FILTER", (int)((w0 >> 9) & 0x7), 1);
+        checkBool("GX2InitSampler.TEX_ARRAY_OVERRIDE", (int)((w0 >> 25) & 0x1), 1);
+        checkBool("GX2InitSampler.MAX_LOD", (int)((w1 >> 10) & 0x3FF), 0x3FF);
+        checkBool("GX2InitSampler.WORD2_TYPE", (int)((w2 >> 31) & 0x1), 1);
+    }
+
+    // GX2InitSamplerLOD(sampler@0x2000, minLod=2.5, maxLod=12.0,
+    // lodBias=-1.5) -- real fixed-point encoding: floor(value*64),
+    // clamped. Overwrites WORD1 set by GX2InitSampler above (real
+    // behavior -- each Init* function owns whichever fields it touches,
+    // same as GX2SetColorControl/GX2SetAlphaTest's shared-state
+    // pattern, just with no cross-function field sharing here since
+    // GX2InitSamplerLOD fully replaces WORD1 in one write).
+    ctx->r[3] = 0x2000; ctx->f[1] = 2.5; ctx->f[2] = 12.0; ctx->f[3] = -1.5;
+    ppc_import_gx2_GX2InitSamplerLOD(ctx);
+    {
+        uint32_t w1 = ppc_load_u32(ctx, 0x2004);
+        checkBool("GX2InitSamplerLOD.MIN_LOD", (int)(w1 & 0x3FF), (int)(2.5 * 64));
+        checkBool("GX2InitSamplerLOD.MAX_LOD", (int)((w1 >> 10) & 0x3FF), (int)(12.0 * 64));
+    }
+
+    // GX2InitSamplerDepthCompare(sampler@0x2000, GEQUAL(6)) -- raw
+    // field write, no DkCompareOp translation (see its own comment).
+    ctx->r[3] = 0x2000; ctx->r[4] = 6;
+    ppc_import_gx2_GX2InitSamplerDepthCompare(ctx);
+    checkBool("GX2InitSamplerDepthCompare", (int)((ppc_load_u32(ctx, 0x2000) >> 26) & 0x7), 6);
+
+    // GX2SetClearDepthStencil(depthBuffer@0x3000, depth=0.25,
+    // stencil=77) -- real WUT_CHECK_OFFSET-confirmed struct writes at
+    // 0x88/0x8C.
+    ctx->r[3] = 0x3000; ctx->f[1] = 0.25; ctx->r[4] = 77;
+    ppc_import_gx2_GX2SetClearDepthStencil(ctx);
+    checkBool("GX2SetClearDepthStencil.depthClear", ppc_load_f32(ctx, 0x3000 + 0x88) == 0.25f, 1);
+    checkBool("GX2SetClearDepthStencil.stencilClear", (int)ppc_load_u32(ctx, 0x3000 + 0x8C), 77);
+
+    // GX2CalcDepthBufferHiZInfo(depthBuffer@0x3000, sizeOut@0x4000,
+    // alignOut@0x4004) -- real Cemu HLE behavior is fixed 0x1000/0x100
+    // constants, matched exactly (see its own comment).
+    ctx->r[3] = 0x3000; ctx->r[4] = 0x4000; ctx->r[5] = 0x4004;
+    ppc_import_gx2_GX2CalcDepthBufferHiZInfo(ctx);
+    checkBool("GX2CalcDepthBufferHiZInfo.size", (int)ppc_load_u32(ctx, 0x4000), 0x1000);
+    checkBool("GX2CalcDepthBufferHiZInfo.align", (int)ppc_load_u32(ctx, 0x4004), 0x100);
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
