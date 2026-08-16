@@ -1,0 +1,87 @@
+Bramble @ commit dd1674e (2026-08-16), switch/gx2_test/BrambleGx2Test.nro,
+run on real modded Switch hardware. Raw SD-card log
+(sdmc:/switch/Bramble/gx2-test-results.log) reproduced below verbatim.
+
+Screen showed RED -- 42/43 self-test checks passed, 1 real failure:
+[GX2SetPixelSamplerBorderColor changes the real bound descriptor]
+got=0 want=1 -- FAIL.
+
+Real root cause (fixed in commit 70f03a7, immediately after this run):
+a bug in the self-test itself, not the shim. GX2SetPixelSamplerBorderColor's
+real signature takes its index argument in r3, but the test had
+r3=0x5000 (copy-pasted from the adjacent GX2SetPixelSampler/
+GX2InitSamplerBorderType calls, which DO take a sampler pointer there)
+instead of r3=0, the real index. Since 0x5000 is far outside the real,
+bounded sampler-slot range (0-17), the shim's own real bounds check
+correctly and safely no-op'd both border-color-set calls in the test --
+meaning the real shim behaved exactly as designed (rejecting a bogus
+out-of-range index) and this test bug never actually exercised the
+real border-color decode logic at all. That logic was already verified
+separately, correctly, by a standalone host test written when
+GX2SetPixelSamplerBorderColor was first implemented.
+
+This is a real, valuable finding from actually running on hardware --
+exactly the kind of self-test authoring mistake that's easy to miss
+reading the code but immediately visible as a real, unambiguous FAIL
+on a real device. Confirms the self-test's own red/green signal and
+FAIL reporting work correctly end to end, not just the happy path.
+
+All other 42 checks passed, including the real, newly-added
+GX2CalcSurfaceSizeAndAlignment hardware checks (LINEAR_SPECIAL and
+LINEAR_ALIGNED cases, both exact matches). GX2SetColorBuffer's own
+checks aren't in this run -- they were added in a later commit
+(f82b17a), after this test build.
+
+=== raw log ===
+
+GX2Init done
+=== GX2 state-setter self-test ===
+[GX2SetColorControl.logicOp] got=15 want=15 -- PASS
+[GX2SetColorControl.blendEnableMask] got=1 want=1 -- PASS
+[GX2SetColorControl.write_enable] got=1 want=1 -- PASS
+[GX2SetAlphaTest.alphaCompareOp] got=5 want=5 -- PASS
+[GX2SetAlphaTest preserves prior logicOp] got=15 want=15 -- PASS
+[GX2SetTargetChannelMasks[0]] got=15 want=15 -- PASS
+[GX2SetTargetChannelMasks[1]] got=1 want=1 -- PASS
+[GX2SetColorControl preserves target 1's channel mask] got=1 want=1 -- PASS
+[GX2SetPolygonControl.cullMode] got=1 want=1 -- PASS
+[GX2SetPolygonControl.polygonModeFront] got=2 want=2 -- PASS
+[GX2SetRasterizerClipControl.depthClampEnable] got=1 want=1 -- PASS
+[GX2SetRasterizerClipControl preserves prior cullMode] got=1 want=1 -- PASS
+[GX2SetAlphaToMask.alphaToCoverageEnable] got=1 want=1 -- PASS
+[GX2SetAlphaToMask.alphaToCoverageDither] got=1 want=1 -- PASS
+[GX2SetDepthStencilControl.depthCompareOp] got=2 want=2 -- PASS
+[GX2SetDepthStencilControl.stencilTestEnable] got=1 want=1 -- PASS
+[GX2SetDepthOnlyControl.depthCompareOp] got=8 want=8 -- PASS
+[GX2SetDepthOnlyControl preserves prior stencilTestEnable] got=1 want=1 -- PASS
+[GX2GetDisplayListWriteStatus] got=0 want=0 -- PASS
+[GX2Flush advances submitted_timestamp] got=1 want=1 -- PASS
+[GX2GetLastSubmittedTimeStamp matches shadow state] got=1786878411152881092 want=1786878411152881092 -- PASS
+[GX2DrawDone returns TRUE] got=1 want=1 -- PASS
+[GX2GetRetiredTimeStamp caught up after GX2DrawDone] got=1786878411159104452 want=1786878411159104452 -- PASS
+[GX2WaitTimeStamp(already-retired) returns TRUE] got=1 want=1 -- PASS
+[GX2WaitForVsync] returned -- PASS (no hang/crash)
+[GX2InitSampler.CLAMP_X] got=1 want=1 -- PASS
+[GX2InitSampler.XY_MAG_FILTER] got=1 want=1 -- PASS
+[GX2InitSampler.TEX_ARRAY_OVERRIDE] got=1 want=1 -- PASS
+[GX2InitSampler.MAX_LOD] got=1023 want=1023 -- PASS
+[GX2InitSampler.WORD2_TYPE] got=1 want=1 -- PASS
+[GX2InitSamplerLOD.MIN_LOD] got=160 want=160 -- PASS
+[GX2InitSamplerLOD.MAX_LOD] got=768 want=768 -- PASS
+[GX2InitSamplerDepthCompare] got=6 want=6 -- PASS
+[GX2SetClearDepthStencil.depthClear] got=1 want=1 -- PASS
+[GX2SetClearDepthStencil.stencilClear] got=77 want=77 -- PASS
+[GX2CalcDepthBufferHiZInfo.size] got=4096 want=4096 -- PASS
+[GX2CalcDepthBufferHiZInfo.align] got=256 want=256 -- PASS
+[GX2SetPixelSampler/GX2SetVertexSampler write to different real descriptor slots] got=1 want=1 -- PASS
+[GX2SetPixelSampler wrote real, non-zero descriptor bytes] got=1 want=1 -- PASS
+[GX2SetPixelSamplerBorderColor changes the real bound descriptor] got=0 want=1 -- FAIL
+[GX2CalcSurfaceSizeAndAlignment(LINEAR_SPECIAL).imageSize] got=131072 want=131072 -- PASS
+[GX2CalcSurfaceSizeAndAlignment(LINEAR_SPECIAL).pitch] got=256 want=256 -- PASS
+[GX2CalcSurfaceSizeAndAlignment(LINEAR_ALIGNED).imageSize] got=131072 want=131072 -- PASS
+[GX2CalcSurfaceSizeAndAlignment(LINEAR_ALIGNED).alignment] got=256 want=256 -- PASS
+=== self-test done: 42 passed, 1 failed ===
+[GX2GetSwapStatus.swapCount advanced after 1 real swap] got=1 want=1 -- PASS
+[GX2GetSwapStatus.flipCount advanced after 1 real swap] got=1 want=1 -- PASS
+first real frame swapped -- screen should now be red (a self-test check failed -- see log above)
+exiting after 120 frames, 44 self-test checks passed, 1 failed
