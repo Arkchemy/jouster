@@ -24,10 +24,13 @@
 // to GX2 state instead of recompiled arithmetic results.
 //
 // After the state-setter self-test, the original visual clear-color
-// loop still runs: if this works, the real Switch screen clears to a
-// solid color and updates every frame until + is pressed, real,
-// visible, on-hardware confirmation that the GX2->deko3d bridge this
-// project built actually produces pixels on a real console.
+// loop still runs, now reporting the self-test's own result: solid
+// GREEN means every check passed, solid RED means at least one
+// failed (check the log for which) -- real, visible, on-hardware
+// confirmation that the GX2->deko3d bridge this project built
+// actually produces pixels on a real console, readable at a glance
+// without needing the SD card log for the common case. Runs until +
+// is pressed.
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -253,6 +256,13 @@ int main(int argc, char *argv[]) {
         flip_before = ppc_load_u32(&ctx, GX2TEST_FLIP_COUNT_ADDR);
     }
 
+    // The self-test result is now visible from across the room, not just
+    // in the log file: green means every check passed, red means at
+    // least one failed -- a real, at-a-glance readout of the same
+    // g_fail_count the log already reports, using the one real output
+    // this .nro has (see file comment on why there's no on-screen text).
+    int selftest_ok = (g_fail_count == 0);
+
     int frame = 0;
     while (appletMainLoop()) {
         padUpdate(&pad);
@@ -262,13 +272,13 @@ int main(int argc, char *argv[]) {
         // void GX2ClearColor(GX2ColorBuffer *colorBuffer, float red,
         // float green, float blue, float alpha) -- real PPC ABI: r3 is
         // the (currently-ignored, see the shim's own comment)
-        // colorBuffer pointer, the 4 floats go in f1-f4. A distinctive
-        // blue -- not black/white -- so success is unambiguous on a
-        // real screen.
+        // colorBuffer pointer, the 4 floats go in f1-f4.
         ctx.r[3] = 0;
-        ctx.f[1] = 0.10;
-        ctx.f[2] = 0.40;
-        ctx.f[3] = 0.70;
+        if (selftest_ok) {
+            ctx.f[1] = 0.10; ctx.f[2] = 0.70; ctx.f[3] = 0.20; /* green -- all checks passed */
+        } else {
+            ctx.f[1] = 0.70; ctx.f[2] = 0.10; ctx.f[3] = 0.10; /* red -- at least one check failed, check the log */
+        }
         ctx.f[4] = 1.0;
         ppc_import_gx2_GX2ClearColor(&ctx);
 
@@ -284,7 +294,7 @@ int main(int argc, char *argv[]) {
             uint32_t flip_after = ppc_load_u32(&ctx, GX2TEST_FLIP_COUNT_ADDR);
             checkBool("GX2GetSwapStatus.swapCount advanced after 1 real swap", swap_after > swap_before, 1);
             checkBool("GX2GetSwapStatus.flipCount advanced after 1 real swap", flip_after > flip_before, 1);
-            checkpoint("first real frame swapped -- screen should now be blue");
+            checkpoint("first real frame swapped -- screen should now be %s", selftest_ok ? "green (all self-test checks passed)" : "red (a self-test check failed -- see log above)");
         }
         frame++;
     }
