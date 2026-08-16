@@ -521,6 +521,76 @@ static void run_state_selftest(PpcContext *ctx) {
         checkpoint("[GX2SetDepthBuffer's recorded GPU blit] submitted+completed -- PASS (no hang/crash)");
     }
 
+    // GX2SetPixelTexture(texture@0x9000, unit=0) / GX2SetVertexTexture
+    // (texture@0x9000, unit=0) -- real block-linear texture image +
+    // staging buffer bridge (same real design/verification reasoning
+    // as GX2SetDepthBuffer above, not GX2SetColorBuffer's pitch-linear
+    // one -- see bramble_gx2_set_texture's own comment), plus a real
+    // image descriptor push + dkMakeTextureHandle + dkCmdBufBindTextures.
+    // GX2Texture's own `surface` member sits at the same offset 0 as
+    // GX2ColorBuffer/GX2DepthBuffer's, so this reuses the identical
+    // field layout already used above.
+    {
+        uint32_t addr = 0x9000;
+        uint32_t pixel_addr = 0x9100;
+        uint32_t w = 4, h = 4, x, y;
+
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                uint8_t v = (uint8_t)(200 + y * w + x);
+                uint32_t p = pixel_addr + (y * w + x) * 4;
+                ppc_store_u8(ctx, p + 0, v);
+                ppc_store_u8(ctx, p + 1, (uint8_t)(v + 1));
+                ppc_store_u8(ctx, p + 2, (uint8_t)(v + 2));
+                ppc_store_u8(ctx, p + 3, (uint8_t)(v + 3));
+            }
+        }
+
+        ppc_store_u32(ctx, addr + 0x00, 1);      // dim = DIM_2D
+        ppc_store_u32(ctx, addr + 0x04, w);      // width
+        ppc_store_u32(ctx, addr + 0x08, h);      // height
+        ppc_store_u32(ctx, addr + 0x10, 1);      // mipLevels
+        ppc_store_u32(ctx, addr + 0x14, 0x1a);   // format = UNORM_R8_G8_B8_A8
+        ppc_store_u32(ctx, addr + 0x30, 16);     // tileMode = TM_LINEAR_SPECIAL
+        ppc_store_u32(ctx, addr + 0x3C, w);      // pitch
+        ppc_store_u32(ctx, addr + 0x24, pixel_addr); // image pointer
+
+        ctx->r[3] = addr; ctx->r[4] = 0; // unit 0
+        ppc_import_gx2_GX2SetPixelTexture(ctx);
+
+        checkBool("GX2SetPixelTexture bound unit 0", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0], 1);
+        if (g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0]) {
+            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.texture_staging_mem_block[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0]);
+            int pixels_match = 1;
+            for (y = 0; y < h && pixels_match; y++) {
+                for (x = 0; x < w && pixels_match; x++) {
+                    uint8_t v = (uint8_t)(200 + y * w + x);
+                    uint8_t *px = staging + (y * w + x) * 4;
+                    if (px[0] != v || px[1] != (uint8_t)(v + 1) || px[2] != (uint8_t)(v + 2) || px[3] != (uint8_t)(v + 3)) {
+                        pixels_match = 0;
+                    }
+                }
+            }
+            checkBool("GX2SetPixelTexture staging buffer has correct real pixel data", pixels_match, 1);
+        }
+
+        // GX2SetVertexTexture uses a distinct, non-overlapping real
+        // slot range (BRAMBLE_GX2_SAMPLER_VERTEX_BASE) -- confirm
+        // binding unit 0 here doesn't disturb the pixel-stage binding
+        // made just above.
+        ctx->r[3] = addr; ctx->r[4] = 0; // unit 0
+        ppc_import_gx2_GX2SetVertexTexture(ctx);
+        checkBool("GX2SetVertexTexture bound unit 0 (distinct slot)", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_VERTEX_BASE + 0], 1);
+        checkBool("GX2SetPixelTexture's own slot still bound after GX2SetVertexTexture", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0], 1);
+
+        // Real, recorded GPU commands from both calls above (staging
+        // copy + image descriptor push + texture bind) need to
+        // actually submit and complete without hanging/crashing.
+        ppc_import_gx2_GX2Flush(ctx);
+        ppc_import_gx2_GX2DrawDone(ctx);
+        checkpoint("[GX2SetPixelTexture/GX2SetVertexTexture] submitted+completed -- PASS (no hang/crash)");
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
