@@ -1,0 +1,66 @@
+Bramble @ commit 7b70731 (2026-08-16), switch/gx2_test/BrambleGx2Test.nro,
+run on real modded Switch hardware. Raw SD-card log
+(sdmc:/switch/Bramble/gx2-test-results.log) reproduced below verbatim.
+
+First real hardware confirmation of every function added in this
+session's overnight continuation, on top of everything the prior
+session's 25/25 run already confirmed: GX2InitSampler,
+GX2InitSamplerLOD, GX2InitSamplerDepthCompare (bit-exact GX2Sampler
+register packing, verified against Cemu's real HLE source),
+GX2SetClearDepthStencil (real GX2DepthBuffer struct writes at their
+real WUT_CHECK_OFFSET-confirmed offsets), and GX2CalcDepthBufferHiZInfo
+(matching Cemu's own real fixed-constant behavior). All of these were
+previously verified only analytically on host (no deko3d call exists
+in any of them) -- this is their first genuine on-hardware exercise.
+
+36/36 checks PASS, 0 failures. Real swap-status tracking
+(GX2GetSwapStatus.swapCount/flipCount) also confirmed advancing after
+a real frame swap. Screen confirmed green (this project's established
+all-pass indicator, red on any failure) -- visually confirmed by the
+user, matching the log's own result.
+
+=== raw log ===
+
+GX2Init done
+=== GX2 state-setter self-test ===
+[GX2SetColorControl.logicOp] got=15 want=15 -- PASS
+[GX2SetColorControl.blendEnableMask] got=1 want=1 -- PASS
+[GX2SetColorControl.write_enable] got=1 want=1 -- PASS
+[GX2SetAlphaTest.alphaCompareOp] got=5 want=5 -- PASS
+[GX2SetAlphaTest preserves prior logicOp] got=15 want=15 -- PASS
+[GX2SetTargetChannelMasks[0]] got=15 want=15 -- PASS
+[GX2SetTargetChannelMasks[1]] got=1 want=1 -- PASS
+[GX2SetColorControl preserves target 1's channel mask] got=1 want=1 -- PASS
+[GX2SetPolygonControl.cullMode] got=1 want=1 -- PASS
+[GX2SetPolygonControl.polygonModeFront] got=2 want=2 -- PASS
+[GX2SetRasterizerClipControl.depthClampEnable] got=1 want=1 -- PASS
+[GX2SetRasterizerClipControl preserves prior cullMode] got=1 want=1 -- PASS
+[GX2SetAlphaToMask.alphaToCoverageEnable] got=1 want=1 -- PASS
+[GX2SetAlphaToMask.alphaToCoverageDither] got=1 want=1 -- PASS
+[GX2SetDepthStencilControl.depthCompareOp] got=2 want=2 -- PASS
+[GX2SetDepthStencilControl.stencilTestEnable] got=1 want=1 -- PASS
+[GX2SetDepthOnlyControl.depthCompareOp] got=8 want=8 -- PASS
+[GX2SetDepthOnlyControl preserves prior stencilTestEnable] got=1 want=1 -- PASS
+[GX2GetDisplayListWriteStatus] got=0 want=0 -- PASS
+[GX2Flush advances submitted_timestamp] got=1 want=1 -- PASS
+[GX2GetLastSubmittedTimeStamp matches shadow state] got=1786873600163606508 want=1786873600163606508 -- PASS
+[GX2DrawDone returns TRUE] got=1 want=1 -- PASS
+[GX2GetRetiredTimeStamp caught up after GX2DrawDone] got=1786873600169858728 want=1786873600169858728 -- PASS
+[GX2WaitTimeStamp(already-retired) returns TRUE] got=1 want=1 -- PASS
+[GX2WaitForVsync] returned -- PASS (no hang/crash)
+[GX2InitSampler.CLAMP_X] got=1 want=1 -- PASS
+[GX2InitSampler.XY_MAG_FILTER] got=1 want=1 -- PASS
+[GX2InitSampler.TEX_ARRAY_OVERRIDE] got=1 want=1 -- PASS
+[GX2InitSampler.MAX_LOD] got=1023 want=1023 -- PASS
+[GX2InitSampler.WORD2_TYPE] got=1 want=1 -- PASS
+[GX2InitSamplerLOD.MIN_LOD] got=160 want=160 -- PASS
+[GX2InitSamplerLOD.MAX_LOD] got=768 want=768 -- PASS
+[GX2InitSamplerDepthCompare] got=6 want=6 -- PASS
+[GX2SetClearDepthStencil.depthClear] got=1 want=1 -- PASS
+[GX2SetClearDepthStencil.stencilClear] got=77 want=77 -- PASS
+[GX2CalcDepthBufferHiZInfo.size] got=4096 want=4096 -- PASS
+[GX2CalcDepthBufferHiZInfo.align] got=256 want=256 -- PASS
+=== self-test done: 36 passed, 0 failed ===
+[GX2GetSwapStatus.swapCount advanced after 1 real swap] got=1 want=1 -- PASS
+[GX2GetSwapStatus.flipCount advanced after 1 real swap] got=1 want=1 -- PASS
+first real frame swapped -- screen should now be green (all self-test checks passed)
