@@ -647,6 +647,26 @@ static void run_state_selftest(PpcContext *ctx) {
         checkBool("GX2CopySurface copied real pixel data correctly", pixels_match, 1);
     }
 
+    // GX2CalcTVSize/GX2CalcDRCSize -- pure calculation + guest-memory
+    // writes, no deko3d involved, so real, exact expected values can be
+    // hand-computed and asserted directly (same reasoning as
+    // GX2CalcSurfaceSizeAndAlignment's own checks above).
+    {
+        uint32_t size_addr = 0xC000, unk_addr = 0xC004;
+
+        // WIDE_720P(3), UNORM_R8_G8_B8_A8(0x1a), DOUBLE(2) buffering:
+        // 1280*720*4*2 = 7372800.
+        ctx->r[3] = 3; ctx->r[4] = 0x1a; ctx->r[5] = 2; ctx->r[6] = size_addr; ctx->r[7] = unk_addr;
+        ppc_import_gx2_GX2CalcTVSize(ctx);
+        checkBool("GX2CalcTVSize(WIDE_720P, RGBA8, DOUBLE).size", (int)ppc_load_u32(ctx, size_addr), 1280 * 720 * 4 * 2);
+        checkBool("GX2CalcTVSize.unkOut", (int)ppc_load_u32(ctx, unk_addr), 0);
+
+        // SINGLE(1) DRC buffering: 864*480*4*1 = 1658880.
+        ctx->r[3] = 1; ctx->r[4] = 0x1a; ctx->r[5] = 1; ctx->r[6] = size_addr; ctx->r[7] = unk_addr;
+        ppc_import_gx2_GX2CalcDRCSize(ctx);
+        checkBool("GX2CalcDRCSize(SINGLE, RGBA8).size", (int)ppc_load_u32(ctx, size_addr), 864 * 480 * 4);
+    }
+
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
