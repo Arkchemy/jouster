@@ -96,6 +96,19 @@ static void fs_open_log_sink(const char *guest_path, const char *real_path, int 
     checkpoint("[FSOpenFile] %s -> %s (%s)", guest_path, real_path, found ? "found" : "NOT FOUND");
 }
 
+/* Real, ad hoc debug watchpoint sink -- see ppc_runtime.h's own comment
+ * on ppc_debug_watch(). Currently watching a real, specific value: the
+ * "entry count" Core::igArchive::loadArchiveTableOfContents reads
+ * straight out of its just-read file buffer (real address 0x2169e34,
+ * `lwz r0, 0x3c(r31)`) -- confirming whether that buffer actually holds
+ * real file data (a small, sane count) or was never filled in (leaving
+ * whatever garbage was already in guest memory, likely a huge or
+ * otherwise implausible count) is the real, direct way to settle
+ * whether the sustained malloc/realloc spin traces back to this. */
+static void debug_watch_sink(uint32_t pc, uint32_t value) {
+    checkpoint("[DEBUG WATCH] pc=0x%x value=%u (0x%x)", pc, value, value);
+}
+
 /* Real hook into cafeos_coreinit_mem.h's own allocation-failure logging
  * -- see that header's own comment. Answers a real, specific question
  * about the malloc/realloc spin loop found via g_ppc_current_pc: is the
@@ -179,6 +192,7 @@ int main(int argc, char *argv[]) {
     ppc_set_unhandled_log(unhandled_log_sink);
     ppc_fs_set_open_log(fs_open_log_sink);
     ppc_mem_set_alloc_fail_log(mem_alloc_fail_log_sink);
+    ppc_set_debug_watch(debug_watch_sink);
 
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
