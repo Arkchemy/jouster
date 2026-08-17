@@ -102,18 +102,26 @@ static void fs_open_log_sink(const char *guest_path, const char *real_path, int 
  * real game's own memory-pool code genuinely out of real (shim-provided)
  * heap space, or something else entirely. */
 static void mem_alloc_fail_log_sink(const char *what, uint32_t requested, uint32_t heap_base, uint32_t heap_size, uint32_t heap_used) {
-    // Throttled: if this really is a real retry-loop-on-OOM (the leading
-    // theory), it could fire billions of times same as the malloc calls
-    // themselves -- logging all of them would flood the SD card instead
-    // of answering the question. First 20 is enough to confirm the
-    // pattern; a fixed count (not e.g. "one per second") also survives a
-    // real burst that happens entirely within one log interval.
+    // Throttled: if a real allocation failure really is a real retry-
+    // loop-on-OOM, it could fire billions of times same as the malloc
+    // calls themselves -- logging all of them would flood the SD card
+    // instead of answering the question. Real heap-creation events are
+    // naturally rare (a handful total) and always logged regardless, so
+    // 40 total comfortably covers "every real heap-setup event, plus a
+    // healthy number of any real allocation failures" without risking a
+    // flood if the latter turns out to still be a spin.
     static int count = 0;
-    if (count >= 20) return;
+    if (count >= 40) return;
     count++;
-    checkpoint("[MEM ALLOC FAIL #%d] %s requested=%u heap_base=0x%x heap_size=%u heap_used=%u",
-               count, what, requested, heap_base, heap_size, heap_used);
-    if (count == 20) checkpoint("[MEM ALLOC FAIL] further failures suppressed");
+    // g_ppc_current_pc/g_ppc_fn_call_count are updated at the entry of
+    // every real recompiled function (see ppc_runtime.h's own comment) --
+    // reading them right here, inside this shim call itself, captures
+    // exactly which real function *called into* this event, for free, no
+    // extra plumbing needed.
+    checkpoint("[MEM EVENT #%d] %s requested=%u heap_base=0x%x heap_size=%u heap_used=%u -- called from last_pc=0x%x calls=%llu",
+               count, what, requested, heap_base, heap_size, heap_used,
+               g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count);
+    if (count == 40) checkpoint("[MEM EVENT] further events suppressed");
 }
 
 alignas(16) static u8 __nx_exception_stack[0x1000];
