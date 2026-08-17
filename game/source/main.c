@@ -34,6 +34,7 @@
 
 #include "ppc_runtime.h"
 #include "cafeos_gx2.h"
+#include "cafeos_coreinit_fs.h"
 
 // Real, deliberate architecture: the actual, complete recompiled game
 // (8.5M+ lines from one real recomp run against tfbGame_cafe.rpx) lives
@@ -82,6 +83,16 @@ static void checkpoint(const char *fmt, ...) {
 // it's visible in the log, not a mystery.
 static void unhandled_log_sink(const char *what) {
     checkpoint("[ppc_unhandled_stub] %s", what);
+}
+
+/* Real hook into cafeos_coreinit_fs.h's own FSOpenFile logging -- see
+ * that header's comment. Every real file the game's actual entry point
+ * tries to open, and whether it was actually found on the SD card,
+ * lands here -- the real, concrete answer to "what does the game
+ * actually do during its first 10 real minutes" that the FS path
+ * translation fix alone doesn't surface on its own. */
+static void fs_open_log_sink(const char *guest_path, const char *real_path, int found) {
+    checkpoint("[FSOpenFile] %s -> %s (%s)", guest_path, real_path, found ? "found" : "NOT FOUND");
 }
 
 alignas(16) static u8 __nx_exception_stack[0x1000];
@@ -137,6 +148,7 @@ int main(int argc, char *argv[]) {
     mkdir("sdmc:/switch/Bramble", 0777);
     g_log = fopen("sdmc:/switch/Bramble/game-results.log", "w");
     ppc_set_unhandled_log(unhandled_log_sink);
+    ppc_fs_set_open_log(fs_open_log_sink);
 
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
