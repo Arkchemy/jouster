@@ -37,7 +37,20 @@ trap 'rm -rf "$WORK"' EXIT
 rm -f "$OUT_SOURCE"/generated_*.c "$OUT_INCLUDE"/generated_decls.h
 
 echo "running recomp against $RPX (this takes a while, ~8.5M lines of output)..."
+# recomp exits 2 (not 0) when it hits real, known-unhandled instructions --
+# that's the expected, normal case for this specific real game binary (see
+# ppc_unhandled_stub's own comment in ppc_runtime.h), not a real failure:
+# it still writes the complete file before returning that code, and the
+# very next step below patches exactly those sites. Only a genuinely
+# different, unexpected exit code should actually stop this script.
+set +e
 "$RECOMP" --entry-alias bramble_game_entry "$RPX" -o "$WORK/full.c"
+recomp_status=$?
+set -e
+if [ "$recomp_status" -ne 0 ] && [ "$recomp_status" -ne 2 ]; then
+    echo "recomp failed with unexpected exit code $recomp_status" >&2
+    exit "$recomp_status"
+fi
 
 echo "patching remaining real #error sites into honest, logged ppc_unhandled_stub calls..."
 python3 - "$WORK/full.c" << 'PYEOF'

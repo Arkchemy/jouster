@@ -215,8 +215,9 @@ int main(int argc, char *argv[]) {
         ppc_import_gx2_GX2SwapScanBuffers(&g_ctx);
 
         if (frame % 60 == 0) {
-            checkpoint("main frame %d/%d -- game thread started=%d done=%d",
-                       frame, GAME_TEST_AUTO_EXIT_FRAMES, g_game_thread_started, g_game_thread_done);
+            checkpoint("main frame %d/%d -- game thread started=%d done=%d -- last_pc=0x%x calls=%llu",
+                       frame, GAME_TEST_AUTO_EXIT_FRAMES, g_game_thread_started, g_game_thread_done,
+                       g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count);
         }
 
         if (g_game_thread_done) {
