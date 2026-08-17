@@ -250,9 +250,18 @@ int main(int argc, char *argv[]) {
         ppc_import_gx2_GX2SwapScanBuffers(&g_ctx);
 
         if (frame % 60 == 0) {
-            checkpoint("main frame %d/%d -- game thread started=%d done=%d -- last_pc=0x%x calls=%llu",
+            // Real, best-effort (racy, same as reading g_ppc_current_pc
+            // itself) snapshot of the currently-executing function's own
+            // real PowerPC integer argument registers -- not correctness-
+            // critical, just diagnostic: if the game thread really is
+            // making real (if pointless/looping) progress, these values
+            // should visibly change between samples; if it's a genuine
+            // stuck infinite loop with no real state change, they'll stay
+            // identical every time.
+            checkpoint("main frame %d/%d -- game thread started=%d done=%d -- last_pc=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_game_thread_started, g_game_thread_done,
-                       g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count);
+                       g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count,
+                       g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6]);
         }
 
         if (g_game_thread_done) {
