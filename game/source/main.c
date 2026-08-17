@@ -229,5 +229,27 @@ int main(int argc, char *argv[]) {
     }
 
     if (g_log) { fclose(g_log); g_log = NULL; }
+
+    // Real bug found and fixed here, via a real on-hardware report (an
+    // "error occurred"-style abnormal-exit screen, not a crash inside
+    // the recompiled game logic itself -- the log above showed a
+    // clean, complete run right up to this exact point every time).
+    // Real cause: a plain `return 0` here runs libnx's own normal,
+    // *orderly* per-thread/service shutdown sequence -- correct when
+    // every thread has already stopped, but a real race when the game
+    // thread is still actively running recompiled code (reading/
+    // writing real shared runtime state, possibly mid real service
+    // call) at the exact moment that teardown starts out from under
+    // it. Real, deliberate fix: when the game thread never finished on
+    // its own, skip the normal C runtime exit path entirely and call
+    // the real, raw `svcExitProcess` kernel syscall instead -- this
+    // terminates the *entire real process*, every thread included,
+    // atomically, at the kernel level, with no per-thread unwind for
+    // anything to race against. The normal, orderly `return 0` path is
+    // still used whenever the game thread genuinely finished on its
+    // own (the common, non-racy case).
+    if (!g_game_thread_done) {
+        svcExitProcess();
+    }
     return 0;
 }
