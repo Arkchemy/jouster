@@ -155,6 +155,19 @@ int main(int argc, char *argv[]) {
     padInitializeDefault(&pad);
 
     g_ctx.shared = &g_shared;
+    // Real, severe bug found and fixed here: this was never set before --
+    // every other real consumer of a PpcContext that calls into actual
+    // recompiled code (tools/gen_harness*.c, switch/native/source/main.c)
+    // sets r[1] (the real PowerPC stack pointer) before its first call,
+    // since real hardware's own loader would have done this before ever
+    // jumping to a real entry point. Left at its zero-initialized BSS
+    // default, the real game entry's very first real `stwu` (stack-frame
+    // push) instruction computed a huge, wrapped/masked guest address and
+    // started corrupting unrelated real memory (globals, heap state)
+    // before the real game's own code had done anything meaningful --
+    // see ppc_runtime.h's own PPC_MEM_SIZE comment for the matching real
+    // guest-address-space bug this was compounding.
+    g_ctx.r[1] = PPC_MEM_SIZE - 256;
 
     checkpoint("Bramble game smoke test starting");
 
