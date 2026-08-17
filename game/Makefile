@@ -1,7 +1,18 @@
 #---------------------------------------------------------------------------------
-# Adapted from switch/native/Makefile (itself adapted from devkitPro's
-# switch-examples/templates/application Makefile). Needs devkitA64 +
-# libnx + deko3d (i.e. `sudo pacman -S switch-dev deko3d`).
+# Bramble's first full-game build: the real, complete recompiled
+# Skylanders: Spyro's Adventure C output (switch/game/source/generated_*.c,
+# 213 files -- split from one real recomp run against the real
+# tfbGame_cafe.rpx, since a single ~308MB/8.5M-line translation unit was
+# too heavy to compile safely in one shot) linked against every real
+# cafeos_*.h CafeOS runtime shim header, plus this project's own
+# main.c (real entry point call + a real, independent progress
+# indicator -- see main.c's own comment for why it doesn't depend on
+# the recompiled game's own, still largely no-op, draw calls).
+#
+# -O0 deliberately for this first real build: fast, low-memory compiles
+# across 213+ files are the real priority right now (does it link and
+# run at all), not runtime speed -- a real, separate optimization pass
+# once this actually boots.
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 
@@ -12,19 +23,19 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET		:=	BrambleGx2Test
+TARGET		:=	BrambleGame
 BUILD		:=	build
 SOURCES		:=	source ../../recomp/include
 DATA		:=	data
 INCLUDES	:=	include ../../recomp/include
 
-APP_TITLE	:=	Bramble GX2 Test
+APP_TITLE	:=	Bramble
 APP_AUTHOR	:=	Bramble project
 
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
+CFLAGS	:=	-g -Wall -O0 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
