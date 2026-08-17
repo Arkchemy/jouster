@@ -25,6 +25,27 @@ Real logs land on the SD card at `sdmc:/switch/Bramble/game-results.log`
 unhandled hardware exception -- full register dump + which frame the
 main thread was on).
 
+## Putting your own game dump on the SD card
+
+The game's own `FSOpenFile`/`FSOpenDir` calls (see
+`recomp/include/cafeos_coreinit_fs.h`'s `ppc_fs_translate_path()`) now
+resolve real Wii U content-mount paths onto real folders on the SD
+card instead of failing every open outright:
+
+- `/vol/content/...`, `content:/...`, and bare relative paths ->
+  `sdmc:/switch/Bramble/content/...`
+- `/vol/save/...`, `save:/...` -> `sdmc:/switch/Bramble/save/...`
+
+Copy your own, legally-dumped copy of the game's `content` folder
+(from your own Wii U dump -- not provided by this project, see the
+repo's own `LICENSE` section 6) onto the SD card at
+`sdmc:/switch/Bramble/content/` before running this `.nro`, and create
+an empty `sdmc:/switch/Bramble/save/` folder for the game's own save
+writes. **Do this by hand on your computer, not by transferring files
+onto the Switch's SD card over USB while the console is mounted for
+MTP file transfer** -- doing that from this side has previously broken
+the host MTP session and required a manual USB reconnect.
+
 ## Building
 
 Needs the real, legally-dumped `tfbGame_cafe.rpx` this project
