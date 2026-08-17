@@ -35,6 +35,7 @@
 #include "ppc_runtime.h"
 #include "cafeos_gx2.h"
 #include "cafeos_coreinit_fs.h"
+#include "cafeos_coreinit_mem.h"
 
 // Real, deliberate architecture: the actual, complete recompiled game
 // (8.5M+ lines from one real recomp run against tfbGame_cafe.rpx) lives
@@ -95,6 +96,26 @@ static void fs_open_log_sink(const char *guest_path, const char *real_path, int 
     checkpoint("[FSOpenFile] %s -> %s (%s)", guest_path, real_path, found ? "found" : "NOT FOUND");
 }
 
+/* Real hook into cafeos_coreinit_mem.h's own allocation-failure logging
+ * -- see that header's own comment. Answers a real, specific question
+ * about the malloc/realloc spin loop found via g_ppc_current_pc: is the
+ * real game's own memory-pool code genuinely out of real (shim-provided)
+ * heap space, or something else entirely. */
+static void mem_alloc_fail_log_sink(const char *what, uint32_t requested, uint32_t heap_base, uint32_t heap_size, uint32_t heap_used) {
+    // Throttled: if this really is a real retry-loop-on-OOM (the leading
+    // theory), it could fire billions of times same as the malloc calls
+    // themselves -- logging all of them would flood the SD card instead
+    // of answering the question. First 20 is enough to confirm the
+    // pattern; a fixed count (not e.g. "one per second") also survives a
+    // real burst that happens entirely within one log interval.
+    static int count = 0;
+    if (count >= 20) return;
+    count++;
+    checkpoint("[MEM ALLOC FAIL #%d] %s requested=%u heap_base=0x%x heap_size=%u heap_used=%u",
+               count, what, requested, heap_base, heap_size, heap_used);
+    if (count == 20) checkpoint("[MEM ALLOC FAIL] further failures suppressed");
+}
+
 alignas(16) static u8 __nx_exception_stack[0x1000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
@@ -149,6 +170,7 @@ int main(int argc, char *argv[]) {
     g_log = fopen("sdmc:/switch/Bramble/game-results.log", "w");
     ppc_set_unhandled_log(unhandled_log_sink);
     ppc_fs_set_open_log(fs_open_log_sink);
+    ppc_mem_set_alloc_fail_log(mem_alloc_fail_log_sink);
 
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
