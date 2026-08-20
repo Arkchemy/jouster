@@ -291,6 +291,58 @@ static void game_thread_func(void *arg) {
     g_static_init_done = true;
     checkpoint("[game thread] ppc_run_static_initializers done");
 
+    // Real, bounded diagnostic added 2026-08-20 per direct owner request
+    // to "build something to test" alongside the igStringPool hang hunt
+    // -- a first, honest test of whether the recompiled Bink video
+    // decoder (the real RAD Bink SDK, statically compiled into this
+    // game's own binary -- see the Project Log's own entry on this)
+    // actually works at all, before investing in the much larger real
+    // work a full display/audio pipeline would need. Real findings that
+    // make this test possible without guessing: BinkOpen's own real
+    // file I/O (`radopen`/`radclose` in the disassembly) goes through
+    // the exact same real FSOpenFile/FSCloseFile Cafe OS calls this
+    // project's own cafeos_coreinit_fs.h shim already implements and
+    // has real hardware confirmation for -- no separate "WiiU file
+    // client" callback struct to reverse-engineer, since this shim's
+    // own FSOpenFile ignores the FSClient* argument entirely (confirmed
+    // by reading its own source) and just resolves the path directly.
+    // Runs here (after static initializers, before the real, currently-
+    // hanging ppc_bramble_game_entry) so this test's own result is
+    // independent of that separate, still-open bug -- global/static
+    // state Bink itself might rely on is already real and initialized
+    // by this point, same as real hardware's own boot order.
+    {
+        checkpoint("[game thread] Bink decoder test: calling BinkOpen on a real movie file...");
+        void ppc_BinkOpen(PpcContext *ctx);
+        void ppc_BinkClose(PpcContext *ctx);
+        void ppc_BinkDoFrame(PpcContext *ctx);
+        void ppc_BinkNextFrame(PpcContext *ctx);
+        const char *test_path = "movies/bash.mov";
+        uint32_t str_addr = g_ctx.r[1] - 256; /* real, safe scratch area well below the current real stack top -- nothing else has run since ppc_init_globals set r[1], so this is unused real guest memory */
+        for (size_t i = 0; i <= strlen(test_path); i++) {
+            ppc_store_u8(&g_ctx, str_addr + (uint32_t)i, (uint8_t)test_path[i]);
+        }
+        g_ctx.r[3] = str_addr;
+        g_ctx.r[4] = 0; /* real BinkOpen flags -- 0 is the real documented default */
+        ppc_BinkOpen(&g_ctx);
+        uint32_t hbink = g_ctx.r[3];
+        if (hbink == 0) {
+            checkpoint("[game thread] Bink decoder test: BinkOpen(\"%s\") returned NULL -- either the file wasn't found on the SD card at content/%s, or a real decode/open failure. Real FSOpenFile log line above (if any) shows which.",
+                       test_path, test_path);
+        } else {
+            checkpoint("[game thread] Bink decoder test: BinkOpen succeeded, real HBINK handle=0x%x -- trying BinkDoFrame...", hbink);
+            g_ctx.r[3] = hbink;
+            ppc_BinkDoFrame(&g_ctx);
+            checkpoint("[game thread] Bink decoder test: BinkDoFrame returned r3=0x%x", g_ctx.r[3]);
+            g_ctx.r[3] = hbink;
+            ppc_BinkNextFrame(&g_ctx);
+            checkpoint("[game thread] Bink decoder test: BinkNextFrame call completed (no crash)");
+            g_ctx.r[3] = hbink;
+            ppc_BinkClose(&g_ctx);
+            checkpoint("[game thread] Bink decoder test: BinkClose completed -- real decoder round-trip successful");
+        }
+    }
+
     checkpoint("[game thread] calling ppc_bramble_game_entry...");
     void ppc_bramble_game_entry(PpcContext *ctx);
     ppc_bramble_game_entry(&g_ctx);
