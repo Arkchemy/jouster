@@ -26,14 +26,12 @@
 // exception handler as a fallback for an actual unhandled hardware
 // exception (writes a full register dump plus which frame the main
 // thread was on), and a pulsing screen color instead of a static one.
-#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <switch.h>
 
 #include "ppc_runtime.h"
-#include "cafeos_gx2.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
 
@@ -52,9 +50,10 @@
 // linkage, with the one, real, shared definition of each now living in
 // recomp/include/cafeos_state.c (compiled and linked into this project
 // once, alongside every one of those 213 files -- see that file's own
-// comment for the full real reasoning). This file only needs
-// cafeos_gx2.h directly, for its own independent progress-indicator
-// pulse below -- it calls into the real, complete recompiled game via
+// comment for the full real reasoning). This file itself doesn't call
+// into any cafeos_*.h shim directly (its own status display uses
+// libnx's console instead, see checkpoint()'s and main()'s own
+// comments) -- it calls into the real, complete recompiled game via
 // ppc_bramble_game_entry, forward-declared where it's used, same as
 // any other externally-linked function.
 
@@ -74,10 +73,21 @@ static volatile bool g_globals_init_done = false;
 static volatile bool g_static_init_done = false;
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
-// as switch/gx2_test's own checkpoint().
+// as switch/gx2_test's own checkpoint(). Also printed live to the
+// on-screen libnx console (see main()'s own consoleInit) -- added
+// 2026-08-20 per direct owner request: a pulsing color alone gives no
+// way to tell "alive and doing something specific" from "alive but
+// stuck," and closing the app to pull the SD-card log is the only way
+// to see what actually happened. This makes every real checkpoint --
+// phase transitions, FSOpenFile results, mem events, the periodic
+// register-watch line -- visible immediately, live, on the real screen.
 static void checkpoint(const char *fmt, ...) {
-    if (!g_log) return;
     va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    printf("\n");
+    if (!g_log) return;
     va_start(ap, fmt);
     vfprintf(g_log, fmt, ap);
     va_end(ap);
@@ -274,17 +284,32 @@ int main(int argc, char *argv[]) {
     // guest-address-space bug this was compounding.
     g_ctx.r[1] = PPC_MEM_SIZE - 256;
 
-    checkpoint("Bramble game smoke test starting");
+    // Real, deliberate choice made 2026-08-20 alongside the switch to a
+    // live on-screen console (see checkpoint()'s own comment): this
+    // file used to call the real GX2Init/GX2ClearColor/GX2SwapScanBuffers
+    // shim (deko3d-backed) purely to pulse a solid color as a "still
+    // alive" indicator. deko3d's swapchain framebuffers are GPU-tiled,
+    // hardware-compressed image memory (DkImageFlags_HwCompression,
+    // DkMemBlockFlags_GpuCached -- see cafeos_gx2.h's own
+    // bramble_gx2_create_framebuffers) -- not CPU-writable, so real text
+    // can't be blitted into them without a full shader/vertex pipeline
+    // this project doesn't have yet. libnx's own console is a complete,
+    // separate, CPU-side text renderer that needs none of that, so this
+    // file now uses it instead and no longer touches GX2Init/deko3d at
+    // all -- one less thing sharing nwindowGetDefault() with whatever
+    // the recompiled game's own (currently still invisible, since
+    // shader translation doesn't exist yet) GX2 calls do later.
+    consoleInit(NULL);
+    printf("\x1b[32m");
+    printf("   ___                     _     _\n");
+    printf("  | _ ) _ _  __ _  _ __   | |__ | | ___\n");
+    printf("  | _ \\| '_|/ _` || '  \\  | '_ \\| |/ -_)\n");
+    printf("  |___/|_|  \\__,_||_|_|_| |_.__/|_|\\___|\n");
+    printf("\x1b[0m");
+    printf("  static recompilation engine -- Skylanders: Spyro's Adventure\n\n");
+    consoleUpdate(NULL);
 
-    // void GX2Init(uint32_t *attributes) -- real init, same call every
-    // other Bramble test .nro already makes. Only used here for this
-    // file's own real, independent pulse indicator below -- not
-    // assuming the recompiled game's own GX2 calls (which it will also
-    // make, redundantly but harmlessly, since GX2Init is real,
-    // idempotent state setup) do anything visible yet.
-    g_ctx.r[3] = 0;
-    ppc_import_gx2_GX2Init(&g_ctx);
-    checkpoint("GX2Init done");
+    checkpoint("Bramble game smoke test starting");
 
     Thread game_thread;
     Result rc = threadCreate(&game_thread, game_thread_func, NULL, NULL, GAME_THREAD_STACK_SIZE, 0x2C, -2);
@@ -344,31 +369,27 @@ int main(int argc, char *argv[]) {
         u64 kDown = padGetButtonsDown(&pad);
         if (kDown & HidNpadButton_Plus) break;
 
-        // Real, independent "still alive" indicator -- this file's own
-        // pulse (see switch/gx2_test's own comment for the same real
-        // reasoning), not the recompiled game's. Five distinct phase
-        // colors as of 2026-08-20 (previously just blue/green) -- added
-        // after a real report that a totally black, unresponsive-looking
-        // screen during ppc_run_static_initializers (114 real, completely
-        // untested C++ constructors) was impossible to tell apart from a
-        // genuinely frozen app without pulling the SD-card log mid-run.
-        // Amber while waiting on ppc_init_globals, purple during the 114
-        // static initializers, blue once the real entry point is
-        // running, green once it's returned.
-        float pulse = 0.55f + 0.45f * fabsf(sinf((float)frame * 0.10f));
-        g_ctx.r[3] = 0;
-        if (g_game_thread_done) {
-            g_ctx.f[1] = 0.10f * pulse; g_ctx.f[2] = 0.70f * pulse; g_ctx.f[3] = 0.20f * pulse; /* green */
-        } else if (g_static_init_done) {
-            g_ctx.f[1] = 0.10f * pulse; g_ctx.f[2] = 0.30f * pulse; g_ctx.f[3] = 0.80f * pulse; /* blue */
-        } else if (g_globals_init_done) {
-            g_ctx.f[1] = 0.55f * pulse; g_ctx.f[2] = 0.15f * pulse; g_ctx.f[3] = 0.75f * pulse; /* purple */
-        } else {
-            g_ctx.f[1] = 0.85f * pulse; g_ctx.f[2] = 0.55f * pulse; g_ctx.f[3] = 0.05f * pulse; /* amber */
+        // Real, independent "still alive" indicator, replacing the old
+        // pulsing GX2 color (see this file's top-of-main comment for
+        // why a color alone wasn't enough): a one-word phase tag
+        // printed on every real phase *transition* (not every frame --
+        // scrolling text every single frame at 60fps would flood the
+        // console faster than it's readable), plus consoleUpdate(NULL)
+        // every frame so the screen visibly refreshes continuously even
+        // between checkpoint lines, rather than looking frozen between
+        // them the same way the old pulse color visibly animated.
+        static bool globals_announced = false, static_announced = false, done_announced = false;
+        if (g_game_thread_done && !done_announced) {
+            done_announced = true;
+            printf("\x1b[32m  == phase: GREEN (game entry returned) ==\x1b[0m\n");
+        } else if (g_static_init_done && !static_announced) {
+            static_announced = true;
+            printf("\x1b[34m  == phase: BLUE (running real game entry point) ==\x1b[0m\n");
+        } else if (g_globals_init_done && !globals_announced) {
+            globals_announced = true;
+            printf("\x1b[35m  == phase: PURPLE (114 real static initializers) ==\x1b[0m\n");
         }
-        g_ctx.f[4] = 1.0;
-        ppc_import_gx2_GX2ClearColor(&g_ctx);
-        ppc_import_gx2_GX2SwapScanBuffers(&g_ctx);
+        consoleUpdate(NULL);
 
         if (frame % 60 == 0) {
             // Real, best-effort (racy, same as reading g_ppc_current_pc
