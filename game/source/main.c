@@ -35,6 +35,7 @@
 #include "ppc_runtime.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
+#include "cafeos_vpad.h"
 
 // Real, deliberate architecture: the actual, complete recompiled game
 // (8.5M+ lines from one real recomp run against tfbGame_cafe.rpx) lives
@@ -425,6 +426,16 @@ int main(int argc, char *argv[]) {
         }
 
         padUpdate(&pad);
+        // Real Switch controller input now wired into the recompiled
+        // game's own VPADRead calls (see cafeos_vpad.h's own comment) --
+        // added 2026-08-20 after the owner asked how they'd know when to
+        // press A: they wouldn't have, since VPADRead previously always
+        // reported "no samples" regardless of real input, same as the
+        // Portal of Power's own nsyshid detection still honestly does
+        // (no real USB HID backend exists yet for that one). This call
+        // keeps the shim's own real button/stick state current every
+        // frame, same rate as this file's own padUpdate() above.
+        bramble_vpad_update(&pad);
         u64 kDown = padGetButtonsDown(&pad);
         if (kDown & HidNpadButton_Plus) break;
 
