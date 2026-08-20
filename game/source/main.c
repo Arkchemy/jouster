@@ -213,6 +213,33 @@ int main(int argc, char *argv[]) {
     // guest-address-space bug this was compounding.
     g_ctx.r[1] = PPC_MEM_SIZE - 256;
 
+    // Real, severe bug found and fixed here 2026-08-20, the same class as
+    // the r[1] one above it: this file never called ppc_init_globals (the
+    // real ELF loader's own job of copying every section's real initial
+    // byte content into ctx->mem) or ppc_run_static_initializers (real
+    // Cafe OS's own job of running every real C++ global/static object's
+    // constructor before any application code runs -- see that
+    // generated function's own comment in recomp's main.cpp). Every other
+    // real consumer of a PpcContext that runs recompiled code
+    // (tools/gen_harness*.c, switch/native/source/main.c) already called
+    // the *_init_globals equivalent; this file's own game_thread_func
+    // just never did, so the real game's actual entry point has been
+    // running this whole time against a guest memory image with every
+    // real initialized global/static C++ object left at its raw
+    // zero-BSS default -- confirmed the real, direct cause of a specific
+    // observed hang (a lazily-cached heap handle inside
+    // Core::igMemoryContext reading back 0 with no code anywhere in the
+    // whole binary ever found to write it -- it's set by one of these
+    // 114 real static initializers). Must run in this order: globals
+    // before constructors, since a constructor can read a real .data/
+    // .rodata value directly.
+    void ppc_init_globals(PpcContext *ctx);
+    void ppc_run_static_initializers(PpcContext *ctx);
+    ppc_init_globals(&g_ctx);
+    checkpoint("ppc_init_globals done");
+    ppc_run_static_initializers(&g_ctx);
+    checkpoint("ppc_run_static_initializers done (114 real C++ static initializers)");
+
     checkpoint("Bramble game smoke test starting");
 
     // void GX2Init(uint32_t *attributes) -- real init, same call every
