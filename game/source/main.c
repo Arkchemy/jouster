@@ -298,9 +298,36 @@ int main(int argc, char *argv[]) {
     // finishes. + still exits early if held/pressed sooner.
     #define GAME_TEST_AUTO_EXIT_FRAMES (600 * 60)
 
+    // Real, added 2026-08-20 per direct owner request: every real hang
+    // found so far shows the exact same real signature -- g_ppc_fn_call_count
+    // (updated on every real recompiled function's entry, see
+    // ppc_runtime.h) frozen completely solid, not just slow, for the
+    // entire rest of a real run. Waiting out the full 10-minute cap to
+    // *confirm* that on every single real test run wastes real owner
+    // time for no real diagnostic benefit once it's been frozen for a
+    // few real seconds. STALL_TIMEOUT_FRAMES is deliberately short --
+    // real, if bursty, forward progress should never actually go this
+    // long completely flat, since this runtime has no real async I/O
+    // yet for a legitimate wait to hide behind.
+    #define STALL_TIMEOUT_FRAMES (3 * 60)
+    uint64_t last_progress_calls = 0;
+    int last_progress_frame = 0;
+
     int frame = 0;
     while (appletMainLoop() && frame < GAME_TEST_AUTO_EXIT_FRAMES) {
         g_current_frame = frame;
+
+        if (g_ppc_fn_call_count != last_progress_calls) {
+            last_progress_calls = g_ppc_fn_call_count;
+            last_progress_frame = frame;
+        } else if (g_game_thread_started && !g_game_thread_done &&
+                   frame - last_progress_frame >= STALL_TIMEOUT_FRAMES) {
+            checkpoint("no forward progress (g_ppc_fn_call_count frozen at %llu, last_pc=0x%x) for %d frames "
+                       "(~%d sec) -- auto-exiting early instead of waiting the full %d-frame cap",
+                       (unsigned long long)g_ppc_fn_call_count, g_ppc_current_pc, frame - last_progress_frame,
+                       STALL_TIMEOUT_FRAMES / 60, GAME_TEST_AUTO_EXIT_FRAMES);
+            break;
+        }
 
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
