@@ -329,10 +329,10 @@ int main(int argc, char *argv[]) {
             // above (g_ppc_current_pc updates on every real recompiled
             // function's entry, including inside static initializers and
             // whatever they call), not just inside the entry point.
-            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
-                       g_ppc_static_init_index, g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count,
+                       g_ppc_static_init_index, g_ppc_current_pc, g_ppc_last_caller_lr, (unsigned long long)g_ppc_fn_call_count,
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6]);
         }
 
