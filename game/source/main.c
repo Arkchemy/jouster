@@ -81,12 +81,26 @@ static volatile bool g_static_init_done = false;
 // to see what actually happened. This makes every real checkpoint --
 // phase transitions, FSOpenFile results, mem events, the periodic
 // register-watch line -- visible immediately, live, on the real screen.
+//
+// Real bug found and fixed the same day this was added: checkpoint()
+// is called from both this file's own main thread *and* the separate
+// game thread (see game_thread_func and the various log-sink
+// callbacks above) -- unlike stdio FILE* writes (glibc locks those
+// internally, safe to interleave), libnx's console has no such
+// built-in locking of its own. Two threads calling printf()/
+// consoleUpdate() concurrently raced on the same shared console state
+// and hung the very first real run of this build solid before even
+// ppc_init_globals finished -- no crash, no exception dump, just a
+// silent deadlock, exactly consoleMutex below now prevents.
+static Mutex g_console_mutex;
 static void checkpoint(const char *fmt, ...) {
     va_list ap;
+    mutexLock(&g_console_mutex);
     va_start(ap, fmt);
     vprintf(fmt, ap);
     va_end(ap);
     printf("\n");
+    mutexUnlock(&g_console_mutex);
     if (!g_log) return;
     va_start(ap, fmt);
     vfprintf(g_log, fmt, ap);
@@ -299,6 +313,7 @@ int main(int argc, char *argv[]) {
     // all -- one less thing sharing nwindowGetDefault() with whatever
     // the recompiled game's own (currently still invisible, since
     // shader translation doesn't exist yet) GX2 calls do later.
+    mutexInit(&g_console_mutex);
     consoleInit(NULL);
     printf("\x1b[32m");
     printf("   ___                     _     _\n");
@@ -379,6 +394,7 @@ int main(int argc, char *argv[]) {
         // between checkpoint lines, rather than looking frozen between
         // them the same way the old pulse color visibly animated.
         static bool globals_announced = false, static_announced = false, done_announced = false;
+        mutexLock(&g_console_mutex);
         if (g_game_thread_done && !done_announced) {
             done_announced = true;
             printf("\x1b[32m  == phase: GREEN (game entry returned) ==\x1b[0m\n");
@@ -390,6 +406,7 @@ int main(int argc, char *argv[]) {
             printf("\x1b[35m  == phase: PURPLE (114 real static initializers) ==\x1b[0m\n");
         }
         consoleUpdate(NULL);
+        mutexUnlock(&g_console_mutex);
 
         if (frame % 60 == 0) {
             // Real, best-effort (racy, same as reading g_ppc_current_pc
