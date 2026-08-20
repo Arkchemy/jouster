@@ -62,6 +62,16 @@ static FILE *g_log;
 static volatile int g_current_frame = -1;
 static volatile bool g_game_thread_done = false;
 static volatile bool g_game_thread_started = false;
+// Real, distinct phase flags for the main thread's own pulse color below --
+// added 2026-08-20 alongside the fix that made game_thread_func actually
+// call ppc_init_globals/ppc_run_static_initializers (114 real C++ static
+// initializers, completely untested code paths, running for the first
+// time ever): these are exactly the kind of "might genuinely hang" real
+// code this whole file's own architecture exists to isolate from the
+// main thread, same as the entry point itself -- so they need their own
+// visible phase, not just a binary "started/done".
+static volatile bool g_globals_init_done = false;
+static volatile bool g_static_init_done = false;
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint().
@@ -146,7 +156,8 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
     if (!f) return;
     fprintf(f, "real, unhandled hardware exception caught by this .nro's own fallback handler\n");
     fprintf(f, "main-thread frame at time of fault: %d\n", g_current_frame);
-    fprintf(f, "game thread started: %d, done: %d\n", g_game_thread_started, g_game_thread_done);
+    fprintf(f, "game thread started: %d, globals_init: %d, static_init: %d, done: %d\n",
+            g_game_thread_started, g_globals_init_done, g_static_init_done, g_game_thread_done);
     fprintf(f, "error_desc: 0x%x\n", ctx->error_desc);
     for (i = 0; i < 29; i++) fprintf(f, "[X%d]: 0x%lx\n", i, (unsigned long)ctx->cpu_gprs[i].x);
     fprintf(f, "fp: 0x%lx\n", (unsigned long)ctx->fp.x);
@@ -158,8 +169,8 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
     fprintf(f, "far: 0x%lx\n", (unsigned long)ctx->far.x);
     fclose(f);
     if (g_log) {
-        fprintf(g_log, "*** UNHANDLED EXCEPTION at main frame %d (game thread started=%d done=%d) -- see game-exception-dump.log ***\n",
-                g_current_frame, g_game_thread_started, g_game_thread_done);
+        fprintf(g_log, "*** UNHANDLED EXCEPTION at main frame %d (game thread started=%d globals_init=%d static_init=%d done=%d) -- see game-exception-dump.log ***\n",
+                g_current_frame, g_game_thread_started, g_globals_init_done, g_static_init_done, g_game_thread_done);
         fflush(g_log);
     }
 }
@@ -173,6 +184,30 @@ static PpcSharedMemory g_shared;
 static void game_thread_func(void *arg) {
     (void)arg;
     g_game_thread_started = true;
+
+    // Real, severe bug found and fixed 2026-08-20, then found again in a
+    // different form the same day: these two calls used to not run at
+    // all (see git history), then got added but wrongly placed in
+    // main() itself, *before* GX2Init and the thread spawn below --
+    // blocking the main thread's own pulse-and-log loop (this file's
+    // whole reason for existing, see the top comment) behind up to 114
+    // completely untested real C++ constructors, which is exactly the
+    // "looks totally frozen, no way to tell if it's alive" failure mode
+    // this architecture exists to prevent. Belongs here instead, same as
+    // ppc_bramble_game_entry below it -- untested real code that might
+    // genuinely hang, isolated from the main thread like everything
+    // else in this function.
+    void ppc_init_globals(PpcContext *ctx);
+    void ppc_run_static_initializers(PpcContext *ctx);
+    checkpoint("[game thread] calling ppc_init_globals...");
+    ppc_init_globals(&g_ctx);
+    g_globals_init_done = true;
+    checkpoint("[game thread] ppc_init_globals done");
+    checkpoint("[game thread] calling ppc_run_static_initializers (114 real C++ static initializers)...");
+    ppc_run_static_initializers(&g_ctx);
+    g_static_init_done = true;
+    checkpoint("[game thread] ppc_run_static_initializers done");
+
     checkpoint("[game thread] calling ppc_bramble_game_entry...");
     void ppc_bramble_game_entry(PpcContext *ctx);
     ppc_bramble_game_entry(&g_ctx);
@@ -212,33 +247,6 @@ int main(int argc, char *argv[]) {
     // see ppc_runtime.h's own PPC_MEM_SIZE comment for the matching real
     // guest-address-space bug this was compounding.
     g_ctx.r[1] = PPC_MEM_SIZE - 256;
-
-    // Real, severe bug found and fixed here 2026-08-20, the same class as
-    // the r[1] one above it: this file never called ppc_init_globals (the
-    // real ELF loader's own job of copying every section's real initial
-    // byte content into ctx->mem) or ppc_run_static_initializers (real
-    // Cafe OS's own job of running every real C++ global/static object's
-    // constructor before any application code runs -- see that
-    // generated function's own comment in recomp's main.cpp). Every other
-    // real consumer of a PpcContext that runs recompiled code
-    // (tools/gen_harness*.c, switch/native/source/main.c) already called
-    // the *_init_globals equivalent; this file's own game_thread_func
-    // just never did, so the real game's actual entry point has been
-    // running this whole time against a guest memory image with every
-    // real initialized global/static C++ object left at its raw
-    // zero-BSS default -- confirmed the real, direct cause of a specific
-    // observed hang (a lazily-cached heap handle inside
-    // Core::igMemoryContext reading back 0 with no code anywhere in the
-    // whole binary ever found to write it -- it's set by one of these
-    // 114 real static initializers). Must run in this order: globals
-    // before constructors, since a constructor can read a real .data/
-    // .rodata value directly.
-    void ppc_init_globals(PpcContext *ctx);
-    void ppc_run_static_initializers(PpcContext *ctx);
-    ppc_init_globals(&g_ctx);
-    checkpoint("ppc_init_globals done");
-    ppc_run_static_initializers(&g_ctx);
-    checkpoint("ppc_run_static_initializers done (114 real C++ static initializers)");
 
     checkpoint("Bramble game smoke test starting");
 
@@ -285,14 +293,25 @@ int main(int argc, char *argv[]) {
 
         // Real, independent "still alive" indicator -- this file's own
         // pulse (see switch/gx2_test's own comment for the same real
-        // reasoning), not the recompiled game's. Blue while the game
-        // thread is still running, green once it's finished cleanly.
+        // reasoning), not the recompiled game's. Five distinct phase
+        // colors as of 2026-08-20 (previously just blue/green) -- added
+        // after a real report that a totally black, unresponsive-looking
+        // screen during ppc_run_static_initializers (114 real, completely
+        // untested C++ constructors) was impossible to tell apart from a
+        // genuinely frozen app without pulling the SD-card log mid-run.
+        // Amber while waiting on ppc_init_globals, purple during the 114
+        // static initializers, blue once the real entry point is
+        // running, green once it's returned.
         float pulse = 0.55f + 0.45f * fabsf(sinf((float)frame * 0.10f));
         g_ctx.r[3] = 0;
         if (g_game_thread_done) {
             g_ctx.f[1] = 0.10f * pulse; g_ctx.f[2] = 0.70f * pulse; g_ctx.f[3] = 0.20f * pulse; /* green */
-        } else {
+        } else if (g_static_init_done) {
             g_ctx.f[1] = 0.10f * pulse; g_ctx.f[2] = 0.30f * pulse; g_ctx.f[3] = 0.80f * pulse; /* blue */
+        } else if (g_globals_init_done) {
+            g_ctx.f[1] = 0.55f * pulse; g_ctx.f[2] = 0.15f * pulse; g_ctx.f[3] = 0.75f * pulse; /* purple */
+        } else {
+            g_ctx.f[1] = 0.85f * pulse; g_ctx.f[2] = 0.55f * pulse; g_ctx.f[3] = 0.05f * pulse; /* amber */
         }
         g_ctx.f[4] = 1.0;
         ppc_import_gx2_GX2ClearColor(&g_ctx);
@@ -306,9 +325,13 @@ int main(int argc, char *argv[]) {
             // making real (if pointless/looping) progress, these values
             // should visibly change between samples; if it's a genuine
             // stuck infinite loop with no real state change, they'll stay
-            // identical every time.
-            checkpoint("main frame %d/%d -- game thread started=%d done=%d -- last_pc=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
-                       frame, GAME_TEST_AUTO_EXIT_FRAMES, g_game_thread_started, g_game_thread_done,
+            // identical every time. Also true now for the two new phases
+            // above (g_ppc_current_pc updates on every real recompiled
+            // function's entry, including inside static initializers and
+            // whatever they call), not just inside the entry point.
+            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- last_pc=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+                       frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
+                       g_game_thread_started, g_game_thread_done,
                        g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count,
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6]);
         }
