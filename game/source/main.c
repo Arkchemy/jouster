@@ -257,24 +257,31 @@ static void game_thread_func(void *arg) {
     // is a register-only spin (see g_ppc_watch_pc below), not a bad
     // store this mechanism would catch.
     //
-    // Current real hang: frozen inside Core::igStringPool::remove
-    // (0x21a55cc) with g_ppc_fn_call_count completely flat -- that
-    // function's own bucket-walk loop (`r11 = *(r11+8)` chasing a
-    // linked list, comparing against the target item) has no NULL/
-    // end-of-list check in the real shipped code, by design: real GHS
-    // source trusts its caller to only ever remove an item that is
-    // actually present in the bucket its own recomputed hash names.
-    // Static analysis of the real disassembly (both this function and
-    // its insertion counterpart, Core::igStringPool::findAndSetString)
-    // confirms insertion and removal use the identical hash computation
-    // with no rehashing in between, so both *should* agree -- meaning
-    // if they don't on a real run, something upstream (memory
-    // corruption, a still-missing struct-layout/relocation bug) is the
-    // real cause, not this function's own logic. g_ppc_watch_pc dumps
-    // r3(this)/r4(item)/r5(bucket index) the instant this function is
-    // entered so the next real run can show the actual values instead
-    // of guessing further.
-    g_ppc_watch_pc = 0x21a55ccu;
+    // Real hang, first actually caught 2026-08-20 once real Switch
+    // controller input started reaching the game (see cafeos_vpad.h):
+    // Core::igStringPool::remove (0x21a55cc) entered with r3 (`this`,
+    // the igStringPool singleton) equal to 0x0 -- a NULL pointer, not
+    // the bucket-walk/hash-mismatch theory this watch was originally
+    // added to test (that theory's now moot; the real problem is one
+    // level up). Static analysis of the real disassembly traced this
+    // to two specific real functions: `Core::igStringPool::getDefault`
+    // (0x21aa838, an accessor that just returns a real static pointer
+    // at &.data+5460) and `Core::igStringPool::bootstrapInitialize`
+    // (0x21aa564, the real constructor that's supposed to *write* that
+    // same pointer) -- both are real, unconditionally reached from
+    // `Core::igArkCore::initBootstrap` (0x214726c), in the correct
+    // order (bootstrapInitialize before getDefault) in the disassembly.
+    // If that's genuinely true on a real run, the pointer should never
+    // be NULL by the time anything calls getDefault() -- so this
+    // widens the single watch to 4 slots (see ppc_runtime.h's own
+    // BRAMBLE_WATCH_SLOTS comment) to catch all four real call sites in
+    // one real run and settle whether initBootstrap/bootstrapInitialize
+    // ever actually ran before the NULL reached remove(), or something
+    // else entirely is overwriting that pointer back to NULL later.
+    g_ppc_watch[0].pc = 0x214726cu; /* igArkCore::initBootstrap entry */
+    g_ppc_watch[1].pc = 0x21aa564u; /* igStringPool::bootstrapInitialize entry */
+    g_ppc_watch[2].pc = 0x21aa838u; /* igStringPool::getDefault entry (r3 return value not visible here, only args -- getDefault takes none, so this just confirms it's called at all) */
+    g_ppc_watch[3].pc = 0x21a55ccu; /* igStringPool::remove entry (the hang itself) */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -490,12 +497,20 @@ int main(int argc, char *argv[]) {
             // above (g_ppc_current_pc updates on every real recompiled
             // function's entry, including inside static initializers and
             // whatever they call), not just inside the entry point.
-            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x -- watch(igStringPool::remove entry) r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
+                       " -- w0(initBootstrap) hits=%u@%llu r3=0x%x r4=0x%x"
+                       " -- w1(bootstrapInitialize) hits=%u@%llu r3=0x%x"
+                       " -- w2(getDefault) hits=%u@%llu"
+                       " -- w3(remove) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
                        g_ppc_static_init_index, g_ppc_current_pc, g_ppc_last_caller_lr, (unsigned long long)g_ppc_fn_call_count,
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
-                       g_ppc_watch_r3, g_ppc_watch_r4, g_ppc_watch_r5, g_ppc_watch_r6);
+                       g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4,
+                       g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3,
+                       g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count,
+                       g_ppc_watch[3].hit_count, (unsigned long long)g_ppc_watch[3].last_hit_call_count,
+                       g_ppc_watch[3].r3, g_ppc_watch[3].r4, g_ppc_watch[3].r5, g_ppc_watch[3].r6);
         }
 
         if (g_game_thread_done) {
