@@ -199,6 +199,13 @@ static void game_thread_func(void *arg) {
     // else in this function.
     void ppc_init_globals(PpcContext *ctx);
     void ppc_run_static_initializers(PpcContext *ctx);
+    // Real, ad hoc, one-off watch (see ppc_runtime.h's own comment on
+    // g_ppc_watch_store_addr) -- 0xde20 is the real address of the
+    // malloc free-list head field (Core's real heap-control struct,
+    // offset 0x10) that a real hardware run showed reading back
+    // 0xFFFFFFFF instead of a real pointer, causing a real infinite loop.
+    // Set before anything else runs so no write to it is missed.
+    g_ppc_watch_store_addr = 0xde20u;
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
