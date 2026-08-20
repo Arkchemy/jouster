@@ -28,6 +28,7 @@
 // thread was on), and a pulsing screen color instead of a static one.
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <switch.h>
 
@@ -92,20 +93,44 @@ static volatile bool g_static_init_done = false;
 // and hung the very first real run of this build solid before even
 // ppc_init_globals finished -- no crash, no exception dump, just a
 // silent deadlock, exactly consoleMutex below now prevents.
+// Real, deliberate choice made 2026-08-20 alongside a more stylised
+// console (see main()'s own banner): each real category of checkpoint
+// line (a memory event, a file lookup, a debug watch hit, a phase's
+// own periodic status line, ...) gets its own real color on screen, so
+// the kind of line scrolling past is visible at a glance without
+// reading every word. The *file* copy stays plain text, deliberately
+// -- these ANSI escape codes are for a real terminal-like console, not
+// something a plain-text log viewer should have to strip back out.
+static const char *checkpoint_color(const char *msg) {
+    if (strncmp(msg, "[MEM EVENT", 10) == 0) return "\x1b[33m";           /* gold */
+    if (strncmp(msg, "[FSOpenFile]", 12) == 0) return "\x1b[36m";        /* cyan */
+    if (strncmp(msg, "[DEBUG WATCH]", 13) == 0) return "\x1b[35m";       /* magenta */
+    if (strncmp(msg, "[ppc_unhandled_stub]", 21) == 0) return "\x1b[31m"; /* red */
+    if (strncmp(msg, "[game thread]", 13) == 0) return "\x1b[34m";       /* blue */
+    if (strncmp(msg, "main frame", 10) == 0) return "\x1b[90m";          /* dim gray */
+    return "\x1b[37m";                                                  /* plain white */
+}
+
 static Mutex g_console_mutex;
 static void checkpoint(const char *fmt, ...) {
+    char buf[512];
     va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    // "\r\x1b[K" first: cleanly overwrites whatever the continuously-
+    // animated status spinner (see main()'s own loop) left on the
+    // current row, same real reasoning as a normal terminal's own
+    // "clear line before printing a fresh one" convention -- without
+    // it, a checkpoint line landing mid-spin would visibly concatenate
+    // onto the spinner's leftover text instead of starting clean.
     mutexLock(&g_console_mutex);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
-    printf("\n");
+    printf("\r\x1b[K%s%s\x1b[0m\n", checkpoint_color(buf), buf);
     mutexUnlock(&g_console_mutex);
+
     if (!g_log) return;
-    va_start(ap, fmt);
-    vfprintf(g_log, fmt, ap);
-    va_end(ap);
-    fprintf(g_log, "\n");
+    fprintf(g_log, "%s\n", buf);
     fflush(g_log);
 }
 
@@ -313,15 +338,34 @@ int main(int argc, char *argv[]) {
     // all -- one less thing sharing nwindowGetDefault() with whatever
     // the recompiled game's own (currently still invisible, since
     // shader translation doesn't exist yet) GX2 calls do later.
+    // Bigger, more detailed banner as of 2026-08-20 per direct owner
+    // request -- a hand-built 5x7 dot-matrix "BRAMBLE" wordmark (each
+    // letter's own bit pattern above, rendered with '#') instead of the
+    // previous smaller stylized-font version, framed with a thorny-
+    // vine-style rule to match the project's own branding (see
+    // branding/NewBrambleTextLogo.svg). Deliberately plain ASCII, not
+    // the Unicode block-drawing glyphs (U+2588 etc) an earlier draft of
+    // this used -- libnx's default console font is a fixed 256-glyph
+    // single-byte table (see libnx's own ConsoleFont/console.h), not a
+    // real Unicode font, so a multi-byte UTF-8 sequence would render as
+    // several wrong/garbled glyphs (one per raw byte) instead of one
+    // real block character. Plain ASCII is guaranteed correct on any
+    // font that table could plausibly be. Still just 7 text rows tall
+    // so it doesn't eat the whole screen.
     mutexInit(&g_console_mutex);
     consoleInit(NULL);
-    printf("\x1b[32m");
-    printf("   ___                     _     _\n");
-    printf("  | _ ) _ _  __ _  _ __   | |__ | | ___\n");
-    printf("  | _ \\| '_|/ _` || '  \\  | '_ \\| |/ -_)\n");
-    printf("  |___/|_|  \\__,_||_|_|_| |_.__/|_|\\___|\n");
+    printf("\x1b[32m  ~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~\x1b[0m\n\n");
+    printf("\x1b[1;32m");
+    printf("  ####  ####   ###  #   # ####  #     #####\n");
+    printf("  #   # #   # #   # ## ## #   # #     #    \n");
+    printf("  #   # #   # #   # # # # #   # #     #    \n");
+    printf("  ####  ####  ##### # # # ####  #     #### \n");
+    printf("  #   # # #   #   # #   # #   # #     #    \n");
+    printf("  #   # #  #  #   # #   # #   # #     #    \n");
+    printf("  ####  #   # #   # #   # ####  ##### #####\n");
     printf("\x1b[0m");
-    printf("  static recompilation engine -- Skylanders: Spyro's Adventure\n\n");
+    printf("\x1b[32m  ~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~\x1b[0m\n");
+    printf("\x1b[2m  static recompilation engine -- Skylanders: Spyro's Adventure\x1b[0m\n\n");
     consoleUpdate(NULL);
 
     checkpoint("Bramble game smoke test starting");
@@ -386,25 +430,40 @@ int main(int argc, char *argv[]) {
 
         // Real, independent "still alive" indicator, replacing the old
         // pulsing GX2 color (see this file's top-of-main comment for
-        // why a color alone wasn't enough): a one-word phase tag
-        // printed on every real phase *transition* (not every frame --
-        // scrolling text every single frame at 60fps would flood the
-        // console faster than it's readable), plus consoleUpdate(NULL)
-        // every frame so the screen visibly refreshes continuously even
-        // between checkpoint lines, rather than looking frozen between
-        // them the same way the old pulse color visibly animated.
+        // why a color alone wasn't enough). Two parts: a one-time,
+        // checkpoint()-logged line on every real phase *transition*
+        // (permanent in scrollback and the SD-card log, same as any
+        // other real event), plus a continuously-animated spinner line
+        // below that, updated every single frame via a bare "\r" (no
+        // newline -- overwrites in place rather than scrolling, so a
+        // real 60fps update rate stays readable instead of flooding the
+        // console) showing the spinner glyph, current phase, frame
+        // count, and live call count all moving in real time -- a much
+        // more direct "still alive, not stuck" signal than a pulsing
+        // color ever was.
         static bool globals_announced = false, static_announced = false, done_announced = false;
-        mutexLock(&g_console_mutex);
         if (g_game_thread_done && !done_announced) {
             done_announced = true;
-            printf("\x1b[32m  == phase: GREEN (game entry returned) ==\x1b[0m\n");
+            checkpoint("\x1b[32m== phase: GREEN (game entry returned) ==\x1b[0m");
         } else if (g_static_init_done && !static_announced) {
             static_announced = true;
-            printf("\x1b[34m  == phase: BLUE (running real game entry point) ==\x1b[0m\n");
+            checkpoint("\x1b[34m== phase: BLUE (running real game entry point) ==\x1b[0m");
         } else if (g_globals_init_done && !globals_announced) {
             globals_announced = true;
-            printf("\x1b[35m  == phase: PURPLE (114 real static initializers) ==\x1b[0m\n");
+            checkpoint("\x1b[35m== phase: PURPLE (114 real static initializers) ==\x1b[0m");
         }
+
+        // Plain ASCII spinner ('|/-\'), not a Unicode braille-dot one --
+        // same real font-table reasoning as the banner above.
+        static const char spinner_frames[] = { '|', '/', '-', '\\' };
+        const char *phase_color = g_game_thread_done ? "\x1b[32m" : g_static_init_done ? "\x1b[34m"
+                                 : g_globals_init_done ? "\x1b[35m" : "\x1b[33m";
+        const char *phase_name = g_game_thread_done ? "GREEN" : g_static_init_done ? "BLUE"
+                                : g_globals_init_done ? "PURPLE" : "AMBER";
+        mutexLock(&g_console_mutex);
+        printf("\r\x1b[K%s%c\x1b[0m  phase=%-6s frame=%d/%d  calls=%llu",
+               phase_color, spinner_frames[(frame / 4) % 4], phase_name, frame, GAME_TEST_AUTO_EXIT_FRAMES,
+               (unsigned long long)g_ppc_fn_call_count);
         consoleUpdate(NULL);
         mutexUnlock(&g_console_mutex);
 
