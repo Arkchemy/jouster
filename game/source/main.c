@@ -200,20 +200,31 @@ static void game_thread_func(void *arg) {
     void ppc_init_globals(PpcContext *ctx);
     void ppc_run_static_initializers(PpcContext *ctx);
     // Real, ad hoc, one-off watch (see ppc_runtime.h's own comment on
-    // g_ppc_watch_store_addr) -- 0xde20 is the real address of the
-    // malloc free-list head field (Core's real heap-control struct,
-    // offset 0x10) that a real hardware run showed reading back
-    // 0xFFFFFFFF instead of a real pointer, causing a real infinite loop.
-    // Set before anything else runs so no write to it is missed.
-    // Address recomputed 2026-08-20 after fixing the real DataReloc
-    // symbol-collision bug: __mallocInfo's free-list head field (offset
-    // 0x10 within the struct) now correctly resolves to a different
-    // synthetic address than before (0xde20 was the pre-fix, collided
-    // value -- see git history). Re-watching the *new* address since the
-    // exact same hang symptom reappeared even after that fix, meaning
-    // either a different remaining collision or a different corruption
-    // source is still hitting this same real struct.
-    g_ppc_watch_store_addr = 0x16078u;
+    // g_ppc_watch_store_addr) -- the malloc free-list hang this used to
+    // track (0x16078, __mallocInfo's free-list head field) is resolved;
+    // the game now reaches its real entry point ("blue" phase). Left at
+    // the sentinel (never matches a real store) since the current hang
+    // is a register-only spin (see g_ppc_watch_pc below), not a bad
+    // store this mechanism would catch.
+    //
+    // Current real hang: frozen inside Core::igStringPool::remove
+    // (0x21a55cc) with g_ppc_fn_call_count completely flat -- that
+    // function's own bucket-walk loop (`r11 = *(r11+8)` chasing a
+    // linked list, comparing against the target item) has no NULL/
+    // end-of-list check in the real shipped code, by design: real GHS
+    // source trusts its caller to only ever remove an item that is
+    // actually present in the bucket its own recomputed hash names.
+    // Static analysis of the real disassembly (both this function and
+    // its insertion counterpart, Core::igStringPool::findAndSetString)
+    // confirms insertion and removal use the identical hash computation
+    // with no rehashing in between, so both *should* agree -- meaning
+    // if they don't on a real run, something upstream (memory
+    // corruption, a still-missing struct-layout/relocation bug) is the
+    // real cause, not this function's own logic. g_ppc_watch_pc dumps
+    // r3(this)/r4(item)/r5(bucket index) the instant this function is
+    // entered so the next real run can show the actual values instead
+    // of guessing further.
+    g_ppc_watch_pc = 0x21a55ccu;
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -371,11 +382,12 @@ int main(int argc, char *argv[]) {
             // above (g_ppc_current_pc updates on every real recompiled
             // function's entry, including inside static initializers and
             // whatever they call), not just inside the entry point.
-            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+            checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x -- watch(igStringPool::remove entry) r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
                        g_ppc_static_init_index, g_ppc_current_pc, g_ppc_last_caller_lr, (unsigned long long)g_ppc_fn_call_count,
-                       g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6]);
+                       g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
+                       g_ppc_watch_r3, g_ppc_watch_r4, g_ppc_watch_r5, g_ppc_watch_r6);
         }
 
         if (g_game_thread_done) {
