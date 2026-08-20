@@ -205,7 +205,15 @@ static void game_thread_func(void *arg) {
     // offset 0x10) that a real hardware run showed reading back
     // 0xFFFFFFFF instead of a real pointer, causing a real infinite loop.
     // Set before anything else runs so no write to it is missed.
-    g_ppc_watch_store_addr = 0xde20u;
+    // Address recomputed 2026-08-20 after fixing the real DataReloc
+    // symbol-collision bug: __mallocInfo's free-list head field (offset
+    // 0x10 within the struct) now correctly resolves to a different
+    // synthetic address than before (0xde20 was the pre-fix, collided
+    // value -- see git history). Re-watching the *new* address since the
+    // exact same hang symptom reappeared even after that fix, meaning
+    // either a different remaining collision or a different corruption
+    // source is still hitting this same real struct.
+    g_ppc_watch_store_addr = 0x16078u;
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
