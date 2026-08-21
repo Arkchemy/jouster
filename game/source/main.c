@@ -263,6 +263,47 @@ static BrambleDebugWatchSlot g_debug_watch_slots[] = {
     {0x21643bcu, "setCount_zerofill_iters", 0xFFFFFFFFu, 0, 0},
     {0x21643d0u, "setCount_zerofill_backedge", 0xFFFFFFFFu, 0, 0},
     {0x2164251u, "setCount_real_caller_lr", 0xFFFFFFFFu, 0, 0},
+    /* New lead, 2026-08-21: traced setCount's real caller
+     * (Core::igMemoryPoolFrameManager::initDefault) and confirmed it
+     * asks for a completely sane newCount=128 -- the caller isn't the
+     * bug. It calls setCount on *(frame+8), a separate pointer field
+     * inside the real igMemoryPoolFrame object, not part of that
+     * object's own calloc'd (and confirmed-real-memset'd, so correctly
+     * zeroed) memory. This watches that pointer field directly: is it
+     * still NULL (nothing ever set it, and Bramble's flat-memory model
+     * silently reads garbage from address 8 instead of faulting like
+     * real hardware would), or a real, plausible pointer (meaning
+     * whatever it points to has its own, separate, incomplete
+     * construction)? */
+    {0x217ea4cu, "frame_plus8_pointer", 0xFFFFFFFFu, 0, 0},
+    {0x217ea30u, "frame_real_address", 0xFFFFFFFFu, 0, 0},
+    /* New lead, 2026-08-21 (cont.): ruled out tfbGame::configureMemoryFrame
+     * (real vaddr 0x2004edc) as a missing dependency -- confirmed via
+     * static disassembly of ppc_main's own real call order that
+     * Core::igRefAlchemy (which leads to initDefault) runs BEFORE
+     * configureMemoryFrame does, on real hardware too, so initDefault
+     * can't legitimately depend on it. Back to checking
+     * Core::igMetaObject::constructInstance's own two real
+     * callocUntracked call sites directly -- this is the real
+     * allocation that ultimately backs igMemoryPoolFrame::
+     * instantiateFromPool, confirmed returning NULL via
+     * frame_real_address above. */
+    {0x215bdb3u, "constructInstance_pool", 0xFFFFFFFFu, 0, 0},
+    {0x215bdb4u, "constructInstance_calloc1_args", 0xFFFFFFFFu, 0, 0},
+    {0x215bdb5u, "constructInstance_calloc1_result", 0xFFFFFFFFu, 0, 0},
+    {0x215bdd4u, "constructInstance_calloc2_args", 0xFFFFFFFFu, 0, 0},
+    {0x215bdd5u, "constructInstance_calloc2_result", 0xFFFFFFFFu, 0, 0},
+    /* New lead, 2026-08-21 (cont.): confirmed reallocCommon's NULL
+     * result is real, faithful behavior (realloc(NULL,0) -> NULL by
+     * real compiled design, not a Bramble bug) -- the real question is
+     * why the requested size was 0 in the first place. That comes from
+     * the class's own metaobject (real reflection data, offset+0x32 =
+     * "instance size"). igMemoryPoolFrame is known to have real fields
+     * (frame+8 was read as a pointer field earlier), so a real size of
+     * 0 here would be wrong -- these two watches check the metaobject
+     * pointer and its own reported size directly. */
+    {0x215bd97u, "constructInstance_metaobject_ptr", 0xFFFFFFFFu, 0, 0},
+    {0x215bd98u, "constructInstance_metaobject_size", 0xFFFFFFFFu, 0, 0},
     {0x21a4f9cu, "r25@top", 0xFFFFFFFFu, 0, 0},
     {0x21a4f9du, "field18", 0xFFFFFFFFu, 0, 0},
     {0x21a4fc4u, "nextptr", 0xFFFFFFFFu, 0, 0},
@@ -331,7 +372,7 @@ alignas(16) static u8 __nx_exception_stack[0x1000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx) {
-    FILE *f = fopen("sdmc:/switch/Bramble/game-exception-dump.log", "w");
+    FILE *f = fopen("sdmc:/switch/Jouster/game-exception-dump.log", "w");
     int i;
     if (!f) return;
     fprintf(f, "real, unhandled hardware exception caught by this .nro's own fallback handler\n");
@@ -570,7 +611,7 @@ static void game_thread_func(void *arg) {
 }
 
 #define GAME_THREAD_STACK_SIZE (4 * 1024 * 1024)
-// Used when sdmc:/switch/Bramble/test-seconds.txt is missing/invalid --
+// Used when sdmc:/switch/Jouster/test-seconds.txt is missing/invalid --
 // see main()'s own comment on that file for why short is the safer
 // default. 45s is enough for every watch/loopwatch counter this project
 // has needed so far to show real, stable data (all of them settle within
@@ -582,8 +623,8 @@ int main(int argc, char *argv[]) {
     (void)argv;
 
     mkdir("sdmc:/switch", 0777);
-    mkdir("sdmc:/switch/Bramble", 0777);
-    g_log = fopen("sdmc:/switch/Bramble/game-results.log", "w");
+    mkdir("sdmc:/switch/Jouster", 0777);
+    g_log = fopen("sdmc:/switch/Jouster/game-results.log", "w");
     ppc_set_unhandled_log(unhandled_log_sink);
     ppc_fs_set_open_log(fs_open_log_sink);
     ppc_mem_set_alloc_fail_log(mem_alloc_fail_log_sink);
@@ -624,36 +665,40 @@ int main(int argc, char *argv[]) {
     // the recompiled game's own (currently still invisible, since
     // shader translation doesn't exist yet) GX2 calls do later.
     // Bigger, more detailed banner as of 2026-08-20 per direct owner
-    // request -- a hand-built 5x7 dot-matrix "BRAMBLE" wordmark (each
-    // letter's own bit pattern above, rendered with '#') instead of the
-    // previous smaller stylized-font version, framed with a thorny-
-    // vine-style rule to match the project's own branding (see
-    // branding/NewBrambleTextLogo.svg). Deliberately plain ASCII, not
-    // the Unicode block-drawing glyphs (U+2588 etc) an earlier draft of
-    // this used -- libnx's default console font is a fixed 256-glyph
-    // single-byte table (see libnx's own ConsoleFont/console.h), not a
-    // real Unicode font, so a multi-byte UTF-8 sequence would render as
-    // several wrong/garbled glyphs (one per raw byte) instead of one
-    // real block character. Plain ASCII is guaranteed correct on any
-    // font that table could plausibly be. Still just 7 text rows tall
-    // so it doesn't eat the whole screen.
+    // request -- a hand-built 5x7 dot-matrix wordmark (each letter's own
+    // bit pattern above, rendered with '#') instead of a smaller
+    // stylized-font version. Deliberately plain ASCII, not the Unicode
+    // block-drawing glyphs (U+2588 etc) an earlier draft of this used --
+    // libnx's default console font is a fixed 256-glyph single-byte
+    // table (see libnx's own ConsoleFont/console.h), not a real Unicode
+    // font, so a multi-byte UTF-8 sequence would render as several
+    // wrong/garbled glyphs (one per raw byte) instead of one real block
+    // character. Plain ASCII is guaranteed correct on any font that
+    // table could plausibly be. Still just 7 text rows tall so it
+    // doesn't eat the whole screen.
+    //
+    // Rebranded 2026-08-21: this project (formerly "Bramble") is now
+    // "Arkchemy" -- see CODENAMES.md and the project's own rename memo
+    // for the full story. This specific repo/binary is "Jouster" (the
+    // Switch runtime piece), named as its own subtitle below the main
+    // wordmark, same as the other Arkchemy repos (conquertron, blaster).
     mutexInit(&g_console_mutex);
     consoleInit(NULL);
-    printf("\x1b[32m  ~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~\x1b[0m\n\n");
+    printf("\x1b[32m  =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~\x1b[0m\n\n");
     printf("\x1b[1;32m");
-    printf("  ####  ####   ###  #   # ####  #     #####\n");
-    printf("  #   # #   # #   # ## ## #   # #     #    \n");
-    printf("  #   # #   # #   # # # # #   # #     #    \n");
-    printf("  ####  ####  ##### # # # ####  #     #### \n");
-    printf("  #   # # #   #   # #   # #   # #     #    \n");
-    printf("  #   # #  #  #   # #   # #   # #     #    \n");
-    printf("  ####  #   # #   # #   # ####  ##### #####\n");
+    printf("   ###  ####  #   #  #### #   # ##### #   # #   #\n");
+    printf("  #   # #   # #  #  #     #   # #     ## ## #   #\n");
+    printf("  #   # #   # # #   #     #   # #     # # #  # # \n");
+    printf("  ##### ####  ##    #     ##### ####  # # #   #  \n");
+    printf("  #   # # #   # #   #     #   # #     #   #   #  \n");
+    printf("  #   # #  #  #  #  #     #   # #     #   #   #  \n");
+    printf("  #   # #   # #   #  #### #   # ##### #   #   #  \n");
     printf("\x1b[0m");
-    printf("\x1b[32m  ~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~=<[ THORNS ]>=~*~\x1b[0m\n");
-    printf("\x1b[2m  static recompilation engine -- Skylanders: Spyro's Adventure\x1b[0m\n\n");
+    printf("\x1b[32m  =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~\x1b[0m\n");
+    printf("\x1b[2m  Jouster -- static recompilation engine -- Skylanders: Spyro's Adventure\x1b[0m\n\n");
     consoleUpdate(NULL);
 
-    checkpoint("Bramble game smoke test starting");
+    checkpoint("Arkchemy (Jouster) game smoke test starting");
 
     Thread game_thread;
     Result rc = threadCreate(&game_thread, game_thread_func, NULL, NULL, GAME_THREAD_STACK_SIZE, 0x2C, -2);
@@ -689,7 +734,7 @@ int main(int argc, char *argv[]) {
     // "have to explicitly ask for a long run".
     int test_seconds = GAME_TEST_DEFAULT_SECONDS;
     {
-        FILE *cfg = fopen("sdmc:/switch/Bramble/test-seconds.txt", "r");
+        FILE *cfg = fopen("sdmc:/switch/Jouster/test-seconds.txt", "r");
         if (cfg) {
             int parsed = 0;
             if (fscanf(cfg, "%d", &parsed) == 1 && parsed > 0) test_seconds = parsed;
@@ -697,7 +742,7 @@ int main(int argc, char *argv[]) {
         }
     }
     const int GAME_TEST_AUTO_EXIT_FRAMES = test_seconds * 60;
-    checkpoint("test duration: %d second(s) (%d frames) -- edit sdmc:/switch/Bramble/test-seconds.txt to change",
+    checkpoint("test duration: %d second(s) (%d frames) -- edit sdmc:/switch/Jouster/test-seconds.txt to change",
                test_seconds, GAME_TEST_AUTO_EXIT_FRAMES);
 
     // Real, added 2026-08-20 per direct owner request: every real hang
@@ -856,7 +901,16 @@ int main(int argc, char *argv[]) {
             // above (g_ppc_current_pc updates on every real recompiled
             // function's entry, including inside static initializers and
             // whatever they call), not just inside the entry point.
-            char loopwatch_buf[1024];
+            // Was 1024 -- real, confirmed truncation found 2026-08-21,
+            // same class of bug as checkpoint()'s own buffer fix above:
+            // this session alone added a dozen new debug watches while
+            // chasing the setCount investigation, and the very last one
+            // registered (setCount_real_caller_lr) silently never
+            // appeared in the SD-card log at all, the line just cutting
+            // off mid-entry instead. 3072 leaves real headroom below
+            // checkpoint()'s own 4096-byte buffer for the "main frame
+            // ..." prefix this gets appended to.
+            char loopwatch_buf[3072];
             size_t loopwatch_len = 0;
             for (size_t i = 0; i < BRAMBLE_DEBUG_WATCH_SLOT_COUNT && loopwatch_len < sizeof(loopwatch_buf); i++) {
                 int n = snprintf(loopwatch_buf + loopwatch_len, sizeof(loopwatch_buf) - loopwatch_len,
