@@ -114,7 +114,15 @@ static const char *checkpoint_color(const char *msg) {
 
 static Mutex g_console_mutex;
 static void checkpoint(const char *fmt, ...) {
-    char buf[512];
+    // Was 512 -- real, confirmed truncation found 2026-08-20: the main
+    // periodic status line has grown one field at a time all session
+    // (mem counters, four watch slots, two loopwatch entries) until it
+    // silently overran 512 bytes, vsnprintf truncating it mid-field
+    // right before this exact watchpoint's own distinct/last values --
+    // which looked exactly like a real "only 6 hits" finding until this
+    // was checked. 4096 is comfortably past anything this one line is
+    // likely to grow to next.
+    char buf[4096];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -152,21 +160,126 @@ static void unhandled_log_sink(const char *what) {
  * lands here -- the real, concrete answer to "what does the game
  * actually do during its first 10 real minutes" that the FS path
  * translation fix alone doesn't surface on its own. */
-static void fs_open_log_sink(const char *guest_path, const char *real_path, int found) {
-    checkpoint("[FSOpenFile] %s -> %s (%s)", guest_path, real_path, found ? "found" : "NOT FOUND");
+static void fs_open_log_sink(const char *guest_path, const char *real_path, const char *mode, int found,
+                              uint32_t handle, uint32_t handles_in_use) {
+    checkpoint("[FSOpenFile] %s -> %s mode=\"%s\" (%s) handle=%u in_use=%u/%d", guest_path, real_path, mode,
+               found ? "found" : "NOT FOUND", handle, handles_in_use, BRAMBLE_FS_MAX_HANDLES);
 }
 
 /* Real, ad hoc debug watchpoint sink -- see ppc_runtime.h's own comment
- * on ppc_debug_watch(). Currently watching a real, specific value: the
- * "entry count" Core::igArchive::loadArchiveTableOfContents reads
- * straight out of its just-read file buffer (real address 0x2169e34,
- * `lwz r0, 0x3c(r31)`) -- confirming whether that buffer actually holds
- * real file data (a small, sane count) or was never filled in (leaving
- * whatever garbage was already in guest memory, likely a huge or
- * otherwise implausible count) is the real, direct way to settle
- * whether the sustained malloc/realloc spin traces back to this. */
+ * on ppc_debug_watch(). Currently hand-inserted (see regenerate.sh's own
+ * note that generated_*.c is gitignored and safe to hand-edit for one
+ * debugging session) at Core::igStringPoolContainer::mallocString's own
+ * internal retry-loop top (real address 0x21a4f9c, right after the
+ * `L_21a4f9c:` label), reporting r25 -- the pool-list cursor the loop
+ * re-reads every single iteration. w2/w3's own hits=1 already proved
+ * mallocString is stuck inside one single, never-returning call (not
+ * being retried via fresh `bl`s), spinning via its own internal `goto`;
+ * this is the only way to see what that cursor is actually doing across
+ * the billion-plus iterations a plain function-entry watch can't see at
+ * all. NOT logged on every hit -- at this call frequency that would be
+ * a pure firehose -- just tracked as a running last-value/distinct-value
+ * count, printed periodically alongside everything else. */
+/* Generic small tag->slot table, one entry per hand-inserted
+ * ppc_debug_watch() call site currently live in generated_0161.c's
+ * mallocString:
+ *   0x21a4f9c -- r25, the pool-list cursor, at the loop top
+ *   0x21a4f9d -- that cursor's own field-0x18 value (the loop's branch key)
+ *   0x21a4fc4 -- "next pool" pointer read from the current cursor
+ *   0x21a4ff0 -- raw return value of malloc(28) for a new pool struct
+ *   0x21a5024 -- raw return value of malloc() for that new pool's own buffer
+ * "changed" counts transitions from the immediately preceding hit, not
+ * true distinct-value cardinality -- real, confirmed lesson from this
+ * exact investigation: r25's changed count climbed in lockstep with its
+ * hit count, which looked like "hundreds of millions of unique pool
+ * pointers" until cross-checking every periodic sample's own "last="
+ * value showed only three ever appeared (0x0, 0xf, and the initial
+ * 0xffffffff sentinel) -- it was oscillating between two fixed values
+ * every single call, not visiting new memory. */
+/* New lead, 2026-08-21: traced mallocString's own "this" (the
+ * igStringPoolContainer* read from igStringPool+0x14) to its one real
+ * setter, Core::igStringPool::activate() (0x21aa608) -- confirmed
+ * called for real, directly and unconditionally, from
+ * Core::igArkCore::initBootstrap (which real hardware confirms DOES
+ * fire, hits=1@~21790). activate()'s own real body only writes the new
+ * container pointer into +0x14 (at 0x21aa68c) if a preceding
+ * malloc(28) for that container (real call at 0x21aa644, result
+ * checked at 0x21aa648) succeeds -- if that malloc returns NULL, real
+ * code branches straight past the write, leaving +0x14 permanently
+ * NULL. This watch tags that exact check (0x21aa648, tracking r31, the
+ * malloc's real return value) to settle on real hardware whether this
+ * specific small allocation is what's actually failing, independent of
+ * the much larger MEMAllocFromExpHeapEx failures already seen
+ * elsewhere in this same run (those are for much bigger 131072-byte
+ * requests -- a different size class, not proof this one also fails). */
+typedef struct { uint32_t tag; const char *label; uint32_t last_value; uint64_t hit_count; uint32_t changed_count; } BrambleDebugWatchSlot;
+static BrambleDebugWatchSlot g_debug_watch_slots[] = {
+    {0x21aa648u, "sp_container_alloc", 0xFFFFFFFFu, 0, 0},
+    {0xFFFFFFFEu, "dispatch_userInstantiate", 0xFFFFFFFFu, 0, 0},
+    {0x215bf24u, "singleton_needs_ctx_flag", 0xFFFFFFFFu, 0, 0},
+    /* New lead, 2026-08-21: initBootstrap makes a real virtual call
+     * through the freshly-constructed igMemoryContext's own vtable
+     * (offset 0x34) before calling bootstrapInitialize/activate() --
+     * confirmed via dispatch_userInstantiate (hits=0 every run) that
+     * this isn't userInstantiate, but never checked what it *is*. Discord
+     * research turned up general confirmation that igArkCore-family
+     * objects are reached through a real singleton pointer set up very
+     * early, which this virtual call is a real candidate for. */
+    {0x21472a8u, "vtable_dispatch_target", 0xFFFFFFFFu, 0, 0},
+    /* New lead, 2026-08-21 (cont.): vtable_dispatch_target above came
+     * back 0x0 -- traced this to igMemoryContext's own real constructor
+     * (0x2178438), which has a REAL bail-out path (L_21785a0) that
+     * returns "this" unchanged (still NULL, since initBootstrap passes
+     * r3=0) if its own object allocation fails. The constructor picks
+     * between two real allocators based on a flag byte at .data+5148:
+     * igObject's own pool-based operator new, or a raw
+     * MEMAllocFromExpHeapEx against a specific "bootstrap heap" handle
+     * read from .bss+306320. These four watches nail down exactly which
+     * path runs and whether it succeeds -- confirmed real static rodata
+     * shows the correct real vtable (containing a real, valid pointer to
+     * userInstantiate at +0x34) exists at the address this constructor
+     * *should* be writing into the object, so a construction failure
+     * here would fully explain everything traced so far. */
+    {0x2178460u, "ctor_alloc_path_flag", 0xFFFFFFFFu, 0, 0},
+    {0x2178470u, "ctor_igobject_alloc_result", 0xFFFFFFFFu, 0, 0},
+    {0x2178484u, "ctor_bootstrap_heap_handle", 0xFFFFFFFFu, 0, 0},
+    {0x2178490u, "ctor_bootstrap_heap_alloc_result", 0xFFFFFFFFu, 0, 0},
+    {0x2164260u, "setCount_old_count", 0xFFFFFFFFu, 0, 0},
+    {0x2164288u, "setCount_loop_iters", 0xFFFFFFFFu, 0, 0},
+    /* Answers a real, specific question: does this loop actually run to
+     * completion (hits approaches the real initial 0x1fff0 iteration
+     * count, last value ends near 0) before the "no forward progress"
+     * detector gives up, or does it genuinely never advance? The
+     * detector only tracks *function calls*, and this loop's own
+     * unrolled body only calls decrementRefCount when a checked list
+     * slot is non-null -- if every slot here is null (plausible if this
+     * whole list was never populated, matching the real corrupted-
+     * looking old-count value), the entire loop could run without a
+     * single new function call, making it invisible to that detector
+     * even while genuinely progressing (or genuinely stuck). */
+    {0x21642a0u, "setCount_loop_backedge", 0xFFFFFFFFu, 0, 0},
+    {0x2164268u, "setCount_newcount_at_decision", 0xFFFFFFFFu, 0, 0},
+    {0x216436cu, "setCount_remainder_reached", 0xFFFFFFFFu, 0, 0},
+    {0x21643bcu, "setCount_zerofill_iters", 0xFFFFFFFFu, 0, 0},
+    {0x21643d0u, "setCount_zerofill_backedge", 0xFFFFFFFFu, 0, 0},
+    {0x2164251u, "setCount_real_caller_lr", 0xFFFFFFFFu, 0, 0},
+    {0x21a4f9cu, "r25@top", 0xFFFFFFFFu, 0, 0},
+    {0x21a4f9du, "field18", 0xFFFFFFFFu, 0, 0},
+    {0x21a4fc4u, "nextptr", 0xFFFFFFFFu, 0, 0},
+    {0x21a4ff0u, "structmalloc", 0xFFFFFFFFu, 0, 0},
+    {0x21a5024u, "bufmalloc", 0xFFFFFFFFu, 0, 0},
+};
+#define BRAMBLE_DEBUG_WATCH_SLOT_COUNT (sizeof(g_debug_watch_slots) / sizeof(g_debug_watch_slots[0]))
 static void debug_watch_sink(uint32_t pc, uint32_t value) {
-    checkpoint("[DEBUG WATCH] pc=0x%x value=%u (0x%x)", pc, value, value);
+    for (size_t i = 0; i < BRAMBLE_DEBUG_WATCH_SLOT_COUNT; i++) {
+        if (g_debug_watch_slots[i].tag != pc) continue;
+        g_debug_watch_slots[i].hit_count++;
+        if (value != g_debug_watch_slots[i].last_value) {
+            g_debug_watch_slots[i].changed_count++;
+            g_debug_watch_slots[i].last_value = value;
+        }
+        return;
+    }
 }
 
 /* Real hook into cafeos_coreinit_mem.h's own allocation-failure logging
@@ -183,18 +296,35 @@ static void mem_alloc_fail_log_sink(const char *what, uint32_t requested, uint32
     // 40 total comfortably covers "every real heap-setup event, plus a
     // healthy number of any real allocation failures" without risking a
     // flood if the latter turns out to still be a spin.
-    static int count = 0;
-    if (count >= 40) return;
-    count++;
+    //
+    // Split into a per-"what"-category budget as of 2026-08-21: doubling
+    // MEM1's real size didn't fix the boot spin (it just failed again at
+    // the same real fill ratio), which pointed at the two new real event
+    // types cafeos_coreinit_mem.h now also logs -- large (64KB+) single
+    // allocations, and MEMGetAllocatableSizeForExpHeapEx queries -- since
+    // those answer *who* is consuming the heap, not just *that* it ran
+    // out. Those events happen earlier, during the real fill-up, so a
+    // single shared counter risked the (far more frequent) OOM-failure
+    // spam using up the whole budget before any of them got logged.
+    static int fail_count = 0;
+    static int large_count = 0;
+    static int query_count = 0;
+    static int other_count = 0;
+    int *counter = &other_count;
+    if (strstr(what, "out of space") != NULL) counter = &fail_count;
+    else if (strstr(what, "large alloc") != NULL) counter = &large_count;
+    else if (strstr(what, "query") != NULL) counter = &query_count;
+    if (*counter >= 40) return;
+    (*counter)++;
     // g_ppc_current_pc/g_ppc_fn_call_count are updated at the entry of
     // every real recompiled function (see ppc_runtime.h's own comment) --
     // reading them right here, inside this shim call itself, captures
     // exactly which real function *called into* this event, for free, no
     // extra plumbing needed.
     checkpoint("[MEM EVENT #%d] %s requested=%u heap_base=0x%x heap_size=%u heap_used=%u -- called from last_pc=0x%x calls=%llu",
-               count, what, requested, heap_base, heap_size, heap_used,
+               *counter, what, requested, heap_base, heap_size, heap_used,
                g_ppc_current_pc, (unsigned long long)g_ppc_fn_call_count);
-    if (count == 40) checkpoint("[MEM EVENT] further events suppressed");
+    if (*counter == 40) checkpoint("[MEM EVENT] further '%s'-type events suppressed", what);
 }
 
 alignas(16) static u8 __nx_exception_stack[0x1000];
@@ -279,9 +409,80 @@ static void game_thread_func(void *arg) {
     // ever actually ran before the NULL reached remove(), or something
     // else entirely is overwriting that pointer back to NULL later.
     g_ppc_watch[0].pc = 0x214726cu; /* igArkCore::initBootstrap entry */
-    g_ppc_watch[1].pc = 0x21aa564u; /* igStringPool::bootstrapInitialize entry */
-    g_ppc_watch[2].pc = 0x21aa838u; /* igStringPool::getDefault entry (r3 return value not visible here, only args -- getDefault takes none, so this just confirms it's called at all) */
-    g_ppc_watch[3].pc = 0x21a55ccu; /* igStringPool::remove entry (the hang itself) */
+    // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
+    // its story (hits=1@21795, r3=1, stable every run since). Traced the
+    // NULL "current memory context" global back to its real setter,
+    // Core::igMemoryContext::userInstantiate(bool) at 0x217b820 -- its
+    // only reference anywhere in the whole ~19,600-function binary
+    // besides its own definition is inside the indirect-call dispatch
+    // table, meaning it is only ever reachable through a vtable slot,
+    // not a direct bl a static grep can follow. Checked several plausible
+    // real callers (the igMemoryContext ctor, systemActivate, the start
+    // of igArkCore::init) by hand; none call it directly. Watching its
+    // own real entry point settles empirically, on real hardware, both
+    // whether it ever fires at all before the stall sets in, and -- if it
+    // does -- whether that happens before or after mallocString's own
+    // single real call (hits=1@21872 every run so far).
+    // Slot 1 repurposed 2026-08-21: userInstantiate had told its own real
+    // story (hits=0 across a whole real 45-second run, and a new
+    // dispatch_userInstantiate watch confirmed ppc_dispatch is never even
+    // asked for its real address -- so the bug is upstream of the vtable
+    // dispatch itself). Traced the real generic consumer of the same
+    // "current memory context" global instead:
+    // Core::igSingleton::createSingletonInstance (0x215bf04) reads it
+    // conditionally, only when the class's own memory pool has a real
+    // flag byte set (checked via getPool() then a byte load at its own
+    // pool object's offset 0) -- most singletons apparently build via a
+    // default/global pool that never touches this global at all. Watching
+    // this function's own real entry settles, on real hardware, whether
+    // it's even reached near the real stall window, and with what
+    // meta-object (r4, the real argument here).
+    // Slot 1 repurposed again 2026-08-21: the boot-time igStringPool spin
+    // is fixed (real root cause: a missing "bootstrap heap" -- see
+    // cafeos_coreinit_mem.h's own BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR
+    // comment). Real hardware now gets much further, into a NEW stall
+    // inside Core::igObjectList::setCount (0x2164250), which shrinks a
+    // list by decrementRefCount-ing (oldCount-newCount)>>3 groups of 8
+    // real elements. If the real "old count" it reads back from the
+    // list object's own +8 field is corrupted/huge, that loop could run
+    // an enormous (not truly infinite, but effectively so) number of
+    // real iterations -- this watch captures the real entry args
+    // (r3=this, r4=newCount) to cross-check against the two new
+    // ppc_debug_watch calls hand-inserted directly in the function body
+    // (real old count at 0x2164260, real computed loop count at
+    // 0x2164288).
+    g_ppc_watch[1].pc = 0x2164250u; /* igObjectList::setCount entry -- r3=this r4=newCount */
+    // Slots 2/3 repurposed 2026-08-20: getDefault/remove had gone stable
+    // and uninformative (same 3/0 hit counts every single run since the
+    // widened watch went in), while a real, newly-found billion-call
+    // stall turned out to be Core::igStringPoolContainer::mallocString
+    // looping forever because Core::igStringPoolContainer::reserveMemory
+    // (its own internal per-pool free-list search, layered on top of and
+    // separate from the ExpHeap allocator this runtime already fixed a
+    // real leak in) never succeeds. Manually re-deriving that internal
+    // allocator's byte-level correctness from static disassembly alone
+    // proved slow and error-prone (same real lesson this project's own
+    // memory already has on Cemu ground-truth-over-guessing) -- watching
+    // both real call sites' own real arguments directly answers the
+    // actual open question (are requested sizes growing without bound,
+    // or is this a pure logic bug against a fixed size) with real
+    // hardware data instead of more speculation.
+    // Slot 2 repurposed again 2026-08-20: reserveMemory had already told
+    // us everything it could (hits=1, never called again -- the stall is
+    // inside mallocString's own internal loop, not a retry-via-call
+    // pattern). The loopwatch data traced the actual failure to
+    // Core::igMemoryPool::malloc's real return value being NULL on every
+    // one of 260M+ real attempts, without ever reaching this runtime's
+    // own ExpHeap shim -- meaning the failure is inside
+    // Core::igObject::getMemoryPool -> Core::igMemoryContext::
+    // getMemoryPoolByIndex, resolving a *global* "current memory
+    // context" pointer, not anything tied to the specific object being
+    // allocated for. Watching this function's own real entry args
+    // directly (called billions of times, unlike reserveMemory) answers
+    // the obvious next question for free: is that global context NULL/
+    // uninitialized, or a real pointer with some other problem.
+    g_ppc_watch[2].pc = 0x217b058u; /* igMemoryContext::getMemoryPoolByIndex entry -- r3=context r4=index */
+    g_ppc_watch[3].pc = 0x21a4f68u; /* igStringPoolContainer::mallocString entry -- r3=container "this" r4=requested string length */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -290,6 +491,24 @@ static void game_thread_func(void *arg) {
     ppc_run_static_initializers(&g_ctx);
     g_static_init_done = true;
     checkpoint("[game thread] ppc_run_static_initializers done");
+    // Real, targeted fix added 2026-08-21 after a full real hardware trace
+    // (see cafeos_coreinit_mem.h's own BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR
+    // comment for the complete explanation) found the true root cause of
+    // the boot-time igStringPool spin: a real dedicated "bootstrap heap"
+    // that Core::igMemoryContext's own constructor needs to allocate
+    // itself is never created anywhere in this project's currently
+    // recompiled output, so that constructor silently fails and returns
+    // an unconstructed object, cascading into every symptom traced this
+    // session. Real, confirmed-necessary ordering fix: this must run
+    // *after* ppc_run_static_initializers, not before -- an earlier
+    // attempt placed it before and the handle still read back as 0x0 at
+    // the real constructor's own read site, meaning one of the real 114
+    // static initializers legitimately zero-constructs the global struct
+    // this handle field lives in, clobbering an earlier write. Running
+    // last, right before the real game entry point, avoids that.
+    checkpoint("[game thread] calling bramble_mem_bootstrap_heap_init...");
+    bramble_mem_bootstrap_heap_init(&g_ctx);
+    checkpoint("[game thread] bramble_mem_bootstrap_heap_init done");
 
     // Real, bounded diagnostic added 2026-08-20 per direct owner request
     // to "build something to test" alongside the igStringPool hang hunt
@@ -351,6 +570,12 @@ static void game_thread_func(void *arg) {
 }
 
 #define GAME_THREAD_STACK_SIZE (4 * 1024 * 1024)
+// Used when sdmc:/switch/Bramble/test-seconds.txt is missing/invalid --
+// see main()'s own comment on that file for why short is the safer
+// default. 45s is enough for every watch/loopwatch counter this project
+// has needed so far to show real, stable data (all of them settle within
+// the first couple of real seconds once the game thread gets going).
+#define GAME_TEST_DEFAULT_SECONDS 45
 
 int main(int argc, char *argv[]) {
     (void)argc;
@@ -443,28 +668,81 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Real, fixed cap on how long this smoke test runs before exiting
-    // on its own -- this is a first real run of the actual, complete
-    // game entry point; there's no way to know in advance whether it
+    // Real cap on how long this smoke test runs before exiting on its
+    // own -- this is a first real run of the actual, complete game
+    // entry point; there's no way to know in advance whether it
     // finishes, loops forever (the real, expected shape of a real game
     // main loop), or hangs on something this runtime doesn't support
-    // yet. 10 real minutes at 60fps -- generous, but bounded, so this
-    // doesn't run forever unattended even if the game thread never
-    // finishes. + still exits early if held/pressed sooner.
-    #define GAME_TEST_AUTO_EXIT_FRAMES (600 * 60)
+    // yet. Still exits early if held/pressed sooner.
+    //
+    // Runtime-configurable as of 2026-08-21, per direct owner request --
+    // most real debugging sessions this project runs are short, targeted
+    // checks (does this specific counter move in the first few seconds),
+    // not genuine ten-minute soaks, and STALL_TIMEOUT_FRAMES below can't
+    // help there since a real infinite spin loop (this runtime's most
+    // common real failure shape all session) keeps g_ppc_fn_call_count
+    // climbing forever, never triggering it. Reading a plain integer
+    // (seconds) from a real SD-card text file means the owner can change
+    // how long the NEXT run lasts without a rebuild -- just edit the
+    // file. Missing/invalid file falls back to a short default, since
+    // "make it hang for ten minutes by accident" is a worse default than
+    // "have to explicitly ask for a long run".
+    int test_seconds = GAME_TEST_DEFAULT_SECONDS;
+    {
+        FILE *cfg = fopen("sdmc:/switch/Bramble/test-seconds.txt", "r");
+        if (cfg) {
+            int parsed = 0;
+            if (fscanf(cfg, "%d", &parsed) == 1 && parsed > 0) test_seconds = parsed;
+            fclose(cfg);
+        }
+    }
+    const int GAME_TEST_AUTO_EXIT_FRAMES = test_seconds * 60;
+    checkpoint("test duration: %d second(s) (%d frames) -- edit sdmc:/switch/Bramble/test-seconds.txt to change",
+               test_seconds, GAME_TEST_AUTO_EXIT_FRAMES);
 
     // Real, added 2026-08-20 per direct owner request: every real hang
-    // found so far shows the exact same real signature -- g_ppc_fn_call_count
-    // (updated on every real recompiled function's entry, see
-    // ppc_runtime.h) frozen completely solid, not just slow, for the
-    // entire rest of a real run. Waiting out the full 10-minute cap to
-    // *confirm* that on every single real test run wastes real owner
-    // time for no real diagnostic benefit once it's been frozen for a
-    // few real seconds. STALL_TIMEOUT_FRAMES is deliberately short --
-    // real, if bursty, forward progress should never actually go this
-    // long completely flat, since this runtime has no real async I/O
-    // yet for a legitimate wait to hide behind.
-    #define STALL_TIMEOUT_FRAMES (3 * 60)
+    // found at the time showed the exact same real signature --
+    // g_ppc_fn_call_count (updated on every real recompiled function's
+    // entry, see ppc_runtime.h) frozen completely solid, not just slow,
+    // for the entire rest of a real run. Waiting out the full 10-minute
+    // cap to *confirm* that on every single real test run wastes real
+    // owner time for no real diagnostic benefit once it's been frozen
+    // for a few real seconds.
+    //
+    // Real, confirmed false positive found 2026-08-21: this assumption
+    // doesn't hold for every real stretch of code, only for genuine
+    // hangs. Core::igObjectList::setCount's own real cleanup loop
+    // processes a large (real, if implausible-looking -- a separate,
+    // still-open question) element count entirely via null-slot checks,
+    // never once calling Core::igObject::decrementRefCount because every
+    // slot was null -- real hand-inserted instrumentation confirmed the
+    // loop's own back-edge hit count landed exactly on the real expected
+    // total (131056) and had already stopped changing between two
+    // consecutive status lines a full second apart, meaning it
+    // genuinely finished and returned, not stuck -- while
+    // g_ppc_fn_call_count stayed completely frozen the entire time
+    // regardless, since nothing in that stretch calls a newly-entered
+    // function at all. The old 3-second threshold was too tight for
+    // real, legitimate call-free stretches like this one and killed a
+    // run that was still making real progress. Widened with real
+    // headroom under the 45-second default full-run cap above -- still
+    // short enough to catch a genuinely infinite spin well before that
+    // cap, per the same real reasoning as before, just no longer this
+    // aggressive about it.
+    //
+    // Made proportional to the configured test duration as of 2026-08-21,
+    // instead of a second independent hardcoded constant: a real,
+    // legitimate call-free stretch (like the one above) doesn't have a
+    // knowable fixed real duration -- widening this value alone would
+    // just mean picking a new arbitrary number to eventually widen
+    // again. Tying it to test_seconds means bumping the existing
+    // test-seconds.txt override (already real, already documented right
+    // above, no rebuild needed) gives a real, longer window to any run
+    // that turns out to need one, with a fixed 5-second margin so the
+    // stall message still fires with a moment to spare before the hard
+    // GAME_TEST_AUTO_EXIT_FRAMES cutoff, rather than the two limits
+    // racing each other.
+    const int STALL_TIMEOUT_FRAMES = GAME_TEST_AUTO_EXIT_FRAMES > 300 ? GAME_TEST_AUTO_EXIT_FRAMES - 300 : GAME_TEST_AUTO_EXIT_FRAMES;
     uint64_t last_progress_calls = 0;
     int last_progress_frame = 0;
 
@@ -495,6 +773,28 @@ int main(int argc, char *argv[]) {
         // keeps the shim's own real button/stick state current every
         // frame, same rate as this file's own padUpdate() above.
         bramble_vpad_update(&pad);
+
+        // Auto-press A, simulating the owner's own manual "press A
+        // repeatedly, semi-randomly" testing session that originally
+        // triggered the real igStringPool::remove NULL-this crash --
+        // unattended smoke-test runs otherwise never advance past the
+        // "press A to start" screen at all (confirmed 2026-08-20: three-
+        // plus clean 10-minute runs in a row with w3(remove) hits=0 and
+        // last_pc just cycling between a handful of addresses billions
+        // of times, a tight idle spin, not real forward progress), so
+        // there was no real chance of ever reproducing it without this.
+        // ORs onto whatever the real controller already reports (does
+        // not clobber genuine manual input) -- 6 held frames (~0.1s at
+        // 60fps) out of every 180 (~3s) is long enough for VPADRead's
+        // trigger/release edge detection above to see a clean
+        // press-then-release, not just a single-frame blip a real human
+        // thumb could never actually produce. Gated on static_init_done
+        // so it can't interfere with anything during the earlier real
+        // init phases, which never read VPAD anyway.
+        if (g_static_init_done && (frame % 180) < 6) {
+            g_bramble_vpad.held |= 0x8000u; /* VPAD_BUTTON_A */
+        }
+
         u64 kDown = padGetButtonsDown(&pad);
         if (kDown & HidNpadButton_Plus) break;
 
@@ -511,16 +811,23 @@ int main(int argc, char *argv[]) {
         // count, and live call count all moving in real time -- a much
         // more direct "still alive, not stuck" signal than a pulsing
         // color ever was.
+        // Boot phases named after Spyro's Adventure's own roster as of
+        // 2026-08-21, one per element matching the phase's existing real
+        // ANSI color, per direct owner request: Trigger Happy (Tech,
+        // amber/yellow), Spyro (Magic, purple -- fitting, since he's this
+        // game's own protagonist), Gill Grunt (Water, blue), Stealth Elf
+        // (Life, green). Same real phase boundaries as before, just
+        // named after the roster instead of bare color words.
         static bool globals_announced = false, static_announced = false, done_announced = false;
         if (g_game_thread_done && !done_announced) {
             done_announced = true;
-            checkpoint("\x1b[32m== phase: GREEN (game entry returned) ==\x1b[0m");
+            checkpoint("\x1b[32m== phase: STEALTH ELF (game entry returned) ==\x1b[0m");
         } else if (g_static_init_done && !static_announced) {
             static_announced = true;
-            checkpoint("\x1b[34m== phase: BLUE (running real game entry point) ==\x1b[0m");
+            checkpoint("\x1b[34m== phase: GILL GRUNT (running real game entry point) ==\x1b[0m");
         } else if (g_globals_init_done && !globals_announced) {
             globals_announced = true;
-            checkpoint("\x1b[35m== phase: PURPLE (114 real static initializers) ==\x1b[0m");
+            checkpoint("\x1b[35m== phase: SPYRO (114 real static initializers) ==\x1b[0m");
         }
 
         // Plain ASCII spinner ('|/-\'), not a Unicode braille-dot one --
@@ -528,10 +835,10 @@ int main(int argc, char *argv[]) {
         static const char spinner_frames[] = { '|', '/', '-', '\\' };
         const char *phase_color = g_game_thread_done ? "\x1b[32m" : g_static_init_done ? "\x1b[34m"
                                  : g_globals_init_done ? "\x1b[35m" : "\x1b[33m";
-        const char *phase_name = g_game_thread_done ? "GREEN" : g_static_init_done ? "BLUE"
-                                : g_globals_init_done ? "PURPLE" : "AMBER";
+        const char *phase_name = g_game_thread_done ? "STEALTH ELF" : g_static_init_done ? "GILL GRUNT"
+                                : g_globals_init_done ? "SPYRO" : "TRIGGER HAPPY";
         mutexLock(&g_console_mutex);
-        printf("\r\x1b[K%s%c\x1b[0m  phase=%-6s frame=%d/%d  calls=%llu",
+        printf("\r\x1b[K%s%c\x1b[0m  phase=%-13s frame=%d/%d  calls=%llu",
                phase_color, spinner_frames[(frame / 4) % 4], phase_name, frame, GAME_TEST_AUTO_EXIT_FRAMES,
                (unsigned long long)g_ppc_fn_call_count);
         consoleUpdate(NULL);
@@ -549,20 +856,33 @@ int main(int argc, char *argv[]) {
             // above (g_ppc_current_pc updates on every real recompiled
             // function's entry, including inside static initializers and
             // whatever they call), not just inside the entry point.
+            char loopwatch_buf[1024];
+            size_t loopwatch_len = 0;
+            for (size_t i = 0; i < BRAMBLE_DEBUG_WATCH_SLOT_COUNT && loopwatch_len < sizeof(loopwatch_buf); i++) {
+                int n = snprintf(loopwatch_buf + loopwatch_len, sizeof(loopwatch_buf) - loopwatch_len,
+                                  " -- loopwatch(%s) hits=%llu changed=%u last=0x%x", g_debug_watch_slots[i].label,
+                                  (unsigned long long)g_debug_watch_slots[i].hit_count, g_debug_watch_slots[i].changed_count,
+                                  g_debug_watch_slots[i].last_value);
+                if (n > 0) loopwatch_len += (size_t)n;
+            }
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
+                       " -- mem: fail=%llu free=%llu reuse=%llu"
                        " -- w0(initBootstrap) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w1(bootstrapInitialize) hits=%u@%llu r3=0x%x"
-                       " -- w2(getDefault) hits=%u@%llu"
-                       " -- w3(remove) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+                       " -- w1(createSingletonInstance) hits=%u@%llu metaObject=0x%x"
+                       " -- w2(getMemoryPoolByIndex) hits=%u@%llu context=0x%x index=0x%x"
+                       " -- w3(mallocString) hits=%u@%llu this=0x%x reqlen=0x%x"
+                       "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
                        g_ppc_static_init_index, g_ppc_current_pc, g_ppc_last_caller_lr, (unsigned long long)g_ppc_fn_call_count,
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
+                       (unsigned long long)g_bramble_mem_alloc_fail_total, (unsigned long long)g_bramble_mem_free_total,
+                       (unsigned long long)g_bramble_mem_reuse_total,
                        g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4,
                        g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3,
-                       g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count,
-                       g_ppc_watch[3].hit_count, (unsigned long long)g_ppc_watch[3].last_hit_call_count,
-                       g_ppc_watch[3].r3, g_ppc_watch[3].r4, g_ppc_watch[3].r5, g_ppc_watch[3].r6);
+                       g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count, g_ppc_watch[2].r3, g_ppc_watch[2].r4,
+                       g_ppc_watch[3].hit_count, (unsigned long long)g_ppc_watch[3].last_hit_call_count, g_ppc_watch[3].r3, g_ppc_watch[3].r4,
+                       loopwatch_buf);
         }
 
         if (g_game_thread_done) {
