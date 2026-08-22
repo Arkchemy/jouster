@@ -1,4 +1,4 @@
-# Bramble's first full-game build
+# Arkchemy's first full-game build
 
 The real, complete recompiled Skylanders: Spyro's Adventure -- not a
 test program, the actual game -- built into one real Switch `.nro` for
@@ -7,7 +7,7 @@ the first time.
 ## What this is (and isn't) yet
 
 Calls the game's real, complete entry point
-(`ppc_bramble_game_entry`, see `recomp`'s own `--entry-alias`) on a
+(`ppc_arkchemy_game_entry`, see `recomp`'s own `--entry-alias`) on a
 real background thread, while `main.c`'s own main thread shows a real,
 independent progress indicator (pulsing screen color + periodic
 SD-card log checkpoints) -- deliberately *not* relying on the
@@ -19,9 +19,9 @@ without crashing/hanging, now that every real GX2 import has a shim
 and the 10 remaining genuinely-unhandled real instructions (see git
 history) are honestly stubbed rather than blocking the build.
 
-Real logs land on the SD card at `sdmc:/switch/Bramble/game-results.log`
+Real logs land on the SD card at `sdmc:/switch/Jouster/game-results.log`
 (periodic checkpoints, `ppc_unhandled_stub` hits) and
-`sdmc:/switch/Bramble/game-exception-dump.log` (only written on a real,
+`sdmc:/switch/Jouster/game-exception-dump.log` (only written on a real,
 unhandled hardware exception -- full register dump + which frame the
 main thread was on).
 
@@ -33,14 +33,14 @@ resolve real Wii U content-mount paths onto real folders on the SD
 card instead of failing every open outright:
 
 - `/vol/content/...`, `content:/...`, and bare relative paths ->
-  `sdmc:/switch/Bramble/content/...`
-- `/vol/save/...`, `save:/...` -> `sdmc:/switch/Bramble/save/...`
+  `sdmc:/switch/Jouster/content/...`
+- `/vol/save/...`, `save:/...` -> `sdmc:/switch/Jouster/save/...`
 
 Copy your own, legally-dumped copy of the game's `content` folder
 (from your own Wii U dump -- not provided by this project, see the
 repo's own `LICENSE` section 6) onto the SD card at
-`sdmc:/switch/Bramble/content/` before running this `.nro`, and create
-an empty `sdmc:/switch/Bramble/save/` folder for the game's own save
+`sdmc:/switch/Jouster/content/` before running this `.nro`, and create
+an empty `sdmc:/switch/Jouster/save/` folder for the game's own save
 writes. **Do this by hand on your computer, not by transferring files
 onto the Switch's SD card over USB while the console is mounted for
 MTP file transfer** -- doing that from this side has previously broken
@@ -72,7 +72,7 @@ make
 
 ## Why the shim headers gained a `cafeos_state.c`
 
-Every `cafeos_*.h` shim header's own persistent state (`g_bramble_gx2`
+Every `cafeos_*.h` shim header's own persistent state (`g_arkchemy_gx2`
 and similar) used to be `static` -- correct for a header-only library
 included by exactly one translation unit (which is all
 `switch/native/` and `switch/gx2_test/` ever needed), but wrong once

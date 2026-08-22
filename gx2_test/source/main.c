@@ -13,7 +13,7 @@
 // This calls the real ppc_import_gx2_* shim functions through the same
 // PpcContext-based calling convention real recompiled code would use
 // (not a shortcut/bypass), then -- for the state-setting functions --
-// inspects `g_bramble_gx2`'s own shadow-state fields directly (visible
+// inspects `g_arkchemy_gx2`'s own shadow-state fields directly (visible
 // here since this .c file is the one real translation unit that
 // #includes cafeos_gx2.h, and its `static` file-scope globals are
 // therefore this app's actual live instance, not an opaque copy) to
@@ -96,7 +96,7 @@ alignas(16) static u8 __nx_exception_stack[0x1000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx) {
-    FILE *f = fopen("sdmc:/switch/Bramble/exception-dump.log", "w");
+    FILE *f = fopen("sdmc:/switch/Jouster/exception-dump.log", "w");
     int i;
     if (!f) return;
 
@@ -134,12 +134,12 @@ static void run_state_selftest(PpcContext *ctx) {
     // GX2SetColorControl(rop3=SET(0xF0), targetBlendEnable=0x01,
     // multiWriteEnable=0, colorWriteEnable=1) -- real GX2LogicOp SET
     // (raw 0xF0, index 15) maps to DkLogicOp_Set (15) per
-    // bramble_gx2_logic_op_to_dk's own table.
+    // arkchemy_gx2_logic_op_to_dk's own table.
     ctx->r[3] = 0xF0; ctx->r[4] = 0x01; ctx->r[5] = 0; ctx->r[6] = 1;
     ppc_import_gx2_GX2SetColorControl(ctx);
-    checkBool("GX2SetColorControl.logicOp", (int)g_bramble_gx2.color_state.logicOp, (int)DkLogicOp_Set);
-    checkBool("GX2SetColorControl.blendEnableMask", (int)g_bramble_gx2.color_state.blendEnableMask, 0x01);
-    checkBool("GX2SetColorControl.write_enable", (int)g_bramble_gx2.color_write_enable, 1);
+    checkBool("GX2SetColorControl.logicOp", (int)g_arkchemy_gx2.color_state.logicOp, (int)DkLogicOp_Set);
+    checkBool("GX2SetColorControl.blendEnableMask", (int)g_arkchemy_gx2.color_state.blendEnableMask, 0x01);
+    checkBool("GX2SetColorControl.write_enable", (int)g_arkchemy_gx2.color_write_enable, 1);
 
     // GX2SetAlphaTest(alphaTest=TRUE, func=GREATER(4), ref=0.5) -- real
     // shadow-state fix under test: this must NOT reset the logicOp
@@ -147,19 +147,19 @@ static void run_state_selftest(PpcContext *ctx) {
     // shared shadow-state refactor fixed).
     ctx->r[3] = 1; ctx->r[4] = 4; ctx->f[1] = 0.5;
     ppc_import_gx2_GX2SetAlphaTest(ctx);
-    checkBool("GX2SetAlphaTest.alphaCompareOp", (int)g_bramble_gx2.color_state.alphaCompareOp, (int)DkCompareOp_Greater);
-    checkBool("GX2SetAlphaTest preserves prior logicOp", (int)g_bramble_gx2.color_state.logicOp, (int)DkLogicOp_Set);
+    checkBool("GX2SetAlphaTest.alphaCompareOp", (int)g_arkchemy_gx2.color_state.alphaCompareOp, (int)DkCompareOp_Greater);
+    checkBool("GX2SetAlphaTest preserves prior logicOp", (int)g_arkchemy_gx2.color_state.logicOp, (int)DkLogicOp_Set);
 
     // GX2SetTargetChannelMasks(mask0=RGBA(15), mask1..7=R(1)) -- real
     // precedence-fix under test: channel_masks is now a source of truth
     // independent of GX2SetColorControl's color_write_enable, combined
-    // at bind time by bramble_gx2_rebind_color_write_state instead of
+    // at bind time by arkchemy_gx2_rebind_color_write_state instead of
     // either call overwriting the other's setting outright.
     ctx->r[3] = 15; ctx->r[4] = 1; ctx->r[5] = 1; ctx->r[6] = 1;
     ctx->r[7] = 1; ctx->r[8] = 1; ctx->r[9] = 1; ctx->r[10] = 1;
     ppc_import_gx2_GX2SetTargetChannelMasks(ctx);
-    checkBool("GX2SetTargetChannelMasks[0]", (int)(g_bramble_gx2.channel_masks & 0xF), 15);
-    checkBool("GX2SetTargetChannelMasks[1]", (int)((g_bramble_gx2.channel_masks >> 4) & 0xF), 1);
+    checkBool("GX2SetTargetChannelMasks[0]", (int)(g_arkchemy_gx2.channel_masks & 0xF), 15);
+    checkBool("GX2SetTargetChannelMasks[1]", (int)((g_arkchemy_gx2.channel_masks >> 4) & 0xF), 1);
 
     // Real regression test for the precedence bug the shadow-state
     // fix addressed: calling GX2SetColorControl again afterward (e.g.
@@ -168,7 +168,7 @@ static void run_state_selftest(PpcContext *ctx) {
     // GX2SetTargetChannelMasks just set on target 1.
     ctx->r[3] = 0xF0; ctx->r[4] = 0x01; ctx->r[5] = 0; ctx->r[6] = 1;
     ppc_import_gx2_GX2SetColorControl(ctx);
-    checkBool("GX2SetColorControl preserves target 1's channel mask", (int)((g_bramble_gx2.channel_masks >> 4) & 0xF), 1);
+    checkBool("GX2SetColorControl preserves target 1's channel mask", (int)((g_arkchemy_gx2.channel_masks >> 4) & 0xF), 1);
 
     // GX2SetPolygonControl(frontFace=CCW(0), cullFront=1, cullBack=0,
     // polyMode=1, polyModeFront=TRIANGLE(2), polyModeBack=TRIANGLE(2),
@@ -186,8 +186,8 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[7] = 2; ctx->r[8] = 2; ctx->r[9] = 0; ctx->r[10] = 0;
         ppc_import_gx2_GX2SetPolygonControl(ctx);
     }
-    checkBool("GX2SetPolygonControl.cullMode", (int)g_bramble_gx2.rasterizer_state.cullMode, (int)DkFace_Front);
-    checkBool("GX2SetPolygonControl.polygonModeFront", (int)g_bramble_gx2.rasterizer_state.polygonModeFront, (int)DkPolygonMode_Fill);
+    checkBool("GX2SetPolygonControl.cullMode", (int)g_arkchemy_gx2.rasterizer_state.cullMode, (int)DkFace_Front);
+    checkBool("GX2SetPolygonControl.polygonModeFront", (int)g_arkchemy_gx2.rasterizer_state.polygonModeFront, (int)DkPolygonMode_Fill);
 
     // GX2SetRasterizerClipControl(rasterizer=1, zclipEnable=0) -- real
     // shadow-state fix under test: must not reset the cullMode
@@ -195,15 +195,15 @@ static void run_state_selftest(PpcContext *ctx) {
     // depthClampEnable=1 (the documented inverse mapping).
     ctx->r[3] = 1; ctx->r[4] = 0;
     ppc_import_gx2_GX2SetRasterizerClipControl(ctx);
-    checkBool("GX2SetRasterizerClipControl.depthClampEnable", (int)g_bramble_gx2.rasterizer_state.depthClampEnable, 1);
-    checkBool("GX2SetRasterizerClipControl preserves prior cullMode", (int)g_bramble_gx2.rasterizer_state.cullMode, (int)DkFace_Front);
+    checkBool("GX2SetRasterizerClipControl.depthClampEnable", (int)g_arkchemy_gx2.rasterizer_state.depthClampEnable, 1);
+    checkBool("GX2SetRasterizerClipControl preserves prior cullMode", (int)g_arkchemy_gx2.rasterizer_state.cullMode, (int)DkFace_Front);
 
     // GX2SetAlphaToMask(alphaToMask=1, mode=DITHER_90(2)) -- any
     // nonzero mode maps to dither=1 per the documented collapse.
     ctx->r[3] = 1; ctx->r[4] = 2;
     ppc_import_gx2_GX2SetAlphaToMask(ctx);
-    checkBool("GX2SetAlphaToMask.alphaToCoverageEnable", (int)g_bramble_gx2.multisample_state.alphaToCoverageEnable, 1);
-    checkBool("GX2SetAlphaToMask.alphaToCoverageDither", (int)g_bramble_gx2.multisample_state.alphaToCoverageDither, 1);
+    checkBool("GX2SetAlphaToMask.alphaToCoverageEnable", (int)g_arkchemy_gx2.multisample_state.alphaToCoverageEnable, 1);
+    checkBool("GX2SetAlphaToMask.alphaToCoverageDither", (int)g_arkchemy_gx2.multisample_state.alphaToCoverageDither, 1);
 
     // GX2SetDepthStencilControl(depthTest=1, depthWrite=1,
     // depthCompare=LESS(1), stencilTest=1, backfaceStencil=0,
@@ -222,8 +222,8 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[7] = 0; ctx->r[8] = 7; ctx->r[9] = 0; ctx->r[10] = 0;
         ppc_import_gx2_GX2SetDepthStencilControl(ctx);
     }
-    checkBool("GX2SetDepthStencilControl.depthCompareOp", (int)g_bramble_gx2.depth_stencil_state.depthCompareOp, (int)DkCompareOp_Less);
-    checkBool("GX2SetDepthStencilControl.stencilTestEnable", (int)g_bramble_gx2.depth_stencil_state.stencilTestEnable, 1);
+    checkBool("GX2SetDepthStencilControl.depthCompareOp", (int)g_arkchemy_gx2.depth_stencil_state.depthCompareOp, (int)DkCompareOp_Less);
+    checkBool("GX2SetDepthStencilControl.stencilTestEnable", (int)g_arkchemy_gx2.depth_stencil_state.stencilTestEnable, 1);
 
     // GX2SetDepthOnlyControl(depthTest=0, depthWrite=0,
     // depthCompare=ALWAYS(7)) -- real bugfix under test: must NOT
@@ -231,8 +231,8 @@ static void run_state_selftest(PpcContext *ctx) {
     // just set above.
     ctx->r[3] = 0; ctx->r[4] = 0; ctx->r[5] = 7;
     ppc_import_gx2_GX2SetDepthOnlyControl(ctx);
-    checkBool("GX2SetDepthOnlyControl.depthCompareOp", (int)g_bramble_gx2.depth_stencil_state.depthCompareOp, (int)DkCompareOp_Always);
-    checkBool("GX2SetDepthOnlyControl preserves prior stencilTestEnable", (int)g_bramble_gx2.depth_stencil_state.stencilTestEnable, 1);
+    checkBool("GX2SetDepthOnlyControl.depthCompareOp", (int)g_arkchemy_gx2.depth_stencil_state.depthCompareOp, (int)DkCompareOp_Always);
+    checkBool("GX2SetDepthOnlyControl preserves prior stencilTestEnable", (int)g_arkchemy_gx2.depth_stencil_state.stencilTestEnable, 1);
 
     // GX2GetDisplayListWriteStatus() -- always FALSE, honestly (no
     // display-list recording implemented yet).
@@ -242,21 +242,21 @@ static void run_state_selftest(PpcContext *ctx) {
     // GX2Flush()/GX2GetLastSubmittedTimeStamp()/GX2DrawDone(): a real
     // submit must advance submitted_timestamp, and GX2DrawDone must
     // return TRUE and catch retired_timestamp up to it.
-    uint64_t before = g_bramble_gx2.submitted_timestamp;
+    uint64_t before = g_arkchemy_gx2.submitted_timestamp;
     ppc_import_gx2_GX2Flush(ctx);
-    checkBool("GX2Flush advances submitted_timestamp", g_bramble_gx2.submitted_timestamp > before, 1);
+    checkBool("GX2Flush advances submitted_timestamp", g_arkchemy_gx2.submitted_timestamp > before, 1);
     ppc_import_gx2_GX2GetLastSubmittedTimeStamp(ctx);
     uint64_t last_submitted = ((uint64_t)ctx->r[3] << 32) | (uint64_t)ctx->r[4];
-    checkU64("GX2GetLastSubmittedTimeStamp matches shadow state", last_submitted, g_bramble_gx2.submitted_timestamp);
+    checkU64("GX2GetLastSubmittedTimeStamp matches shadow state", last_submitted, g_arkchemy_gx2.submitted_timestamp);
     ppc_import_gx2_GX2DrawDone(ctx);
     checkBool("GX2DrawDone returns TRUE", (int)ctx->r[3], 1);
     ppc_import_gx2_GX2GetRetiredTimeStamp(ctx);
     uint64_t last_retired = ((uint64_t)ctx->r[3] << 32) | (uint64_t)ctx->r[4];
-    checkU64("GX2GetRetiredTimeStamp caught up after GX2DrawDone", last_retired, g_bramble_gx2.submitted_timestamp);
+    checkU64("GX2GetRetiredTimeStamp caught up after GX2DrawDone", last_retired, g_arkchemy_gx2.submitted_timestamp);
 
     // GX2WaitTimeStamp(time=retired_timestamp) -- already retired, must
     // return TRUE without needing a real wait.
-    uint64_t retired = g_bramble_gx2.retired_timestamp;
+    uint64_t retired = g_arkchemy_gx2.retired_timestamp;
     ctx->r[3] = (uint32_t)(retired >> 32);
     ctx->r[4] = (uint32_t)retired;
     ppc_import_gx2_GX2WaitTimeStamp(ctx);
@@ -268,7 +268,7 @@ static void run_state_selftest(PpcContext *ctx) {
     checkpoint("[GX2WaitForVsync] returned -- PASS (no hang/crash)");
 
     // The functions below are all backend-independent (pure guest-memory
-    // writes, no deko3d call, no g_bramble_gx2 shadow state involved) --
+    // writes, no deko3d call, no g_arkchemy_gx2 shadow state involved) --
     // unlike everything above, these were only verified analytically on
     // host before now (see docs/phase1d_import_surface.md); this is
     // their first real on-hardware exercise, at 0x2000 to avoid the
@@ -365,9 +365,9 @@ static void run_state_selftest(PpcContext *ctx) {
         ppc_import_gx2_GX2Flush(ctx);
         ppc_import_gx2_GX2DrawDone(ctx);
 
-        uint8_t *pool = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+        uint8_t *pool = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.sampler_descriptor_mem_block);
         uint8_t *pixel_slot = pool + 0 * sizeof(DkSamplerDescriptor);
-        uint8_t *vertex_slot = pool + BRAMBLE_GX2_SAMPLER_VERTEX_BASE * sizeof(DkSamplerDescriptor);
+        uint8_t *vertex_slot = pool + ARKCHEMY_GX2_SAMPLER_VERTEX_BASE * sizeof(DkSamplerDescriptor);
         int slots_differ = memcmp(pixel_slot, vertex_slot, sizeof(DkSamplerDescriptor)) != 0;
         checkBool("GX2SetPixelSampler/GX2SetVertexSampler write to different real descriptor slots", slots_differ, 1);
 
@@ -399,7 +399,7 @@ static void run_state_selftest(PpcContext *ctx) {
         ppc_import_gx2_GX2SetPixelSampler(ctx);
         ppc_import_gx2_GX2Flush(ctx);
         ppc_import_gx2_GX2DrawDone(ctx);
-        pool = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+        pool = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.sampler_descriptor_mem_block);
         pixel_slot = pool + 0 * sizeof(DkSamplerDescriptor);
         memcpy(before, pixel_slot, sizeof(before));
 
@@ -484,9 +484,9 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[3] = addr; ctx->r[4] = 0; // target 0
         ppc_import_gx2_GX2SetColorBuffer(ctx);
 
-        checkBool("GX2SetColorBuffer bound target 0", g_bramble_gx2.color_target_bound[0], 1);
-        if (g_bramble_gx2.color_target_bound[0]) {
-            uint8_t *dest = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.color_target_mem_block[0]);
+        checkBool("GX2SetColorBuffer bound target 0", g_arkchemy_gx2.color_target_bound[0], 1);
+        if (g_arkchemy_gx2.color_target_bound[0]) {
+            uint8_t *dest = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.color_target_mem_block[0]);
             int pixels_match = 1;
             for (y = 0; y < h && pixels_match; y++) {
                 for (x = 0; x < w && pixels_match; x++) {
@@ -505,7 +505,7 @@ static void run_state_selftest(PpcContext *ctx) {
         // one real, valid, bound resource at this slot.
         ctx->r[3] = addr; ctx->r[4] = 0;
         ppc_import_gx2_GX2SetColorBuffer(ctx);
-        checkBool("GX2SetColorBuffer re-bind still bound", g_bramble_gx2.color_target_bound[0], 1);
+        checkBool("GX2SetColorBuffer re-bind still bound", g_arkchemy_gx2.color_target_bound[0], 1);
     }
 
     // GX2SetDepthBuffer(depthBuffer@0x8000) -- real block-linear depth
@@ -551,9 +551,9 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[3] = addr;
         ppc_import_gx2_GX2SetDepthBuffer(ctx);
 
-        checkBool("GX2SetDepthBuffer bound", g_bramble_gx2.depth_target_bound, 1);
-        if (g_bramble_gx2.depth_target_bound) {
-            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+        checkBool("GX2SetDepthBuffer bound", g_arkchemy_gx2.depth_target_bound, 1);
+        if (g_arkchemy_gx2.depth_target_bound) {
+            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.depth_target_staging_mem_block);
             int pixels_match = 1;
             for (y = 0; y < h && pixels_match; y++) {
                 for (x = 0; x < w && pixels_match; x++) {
@@ -582,7 +582,7 @@ static void run_state_selftest(PpcContext *ctx) {
     // (texture@0x9000, unit=0) -- real block-linear texture image +
     // staging buffer bridge (same real design/verification reasoning
     // as GX2SetDepthBuffer above, not GX2SetColorBuffer's pitch-linear
-    // one -- see bramble_gx2_set_texture's own comment), plus a real
+    // one -- see arkchemy_gx2_set_texture's own comment), plus a real
     // image descriptor push + dkMakeTextureHandle + dkCmdBufBindTextures.
     // GX2Texture's own `surface` member sits at the same offset 0 as
     // GX2ColorBuffer/GX2DepthBuffer's, so this reuses the identical
@@ -615,9 +615,9 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[3] = addr; ctx->r[4] = 0; // unit 0
         ppc_import_gx2_GX2SetPixelTexture(ctx);
 
-        checkBool("GX2SetPixelTexture bound unit 0", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0], 1);
-        if (g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0]) {
-            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.texture_staging_mem_block[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0]);
+        checkBool("GX2SetPixelTexture bound unit 0", g_arkchemy_gx2.texture_bound[ARKCHEMY_GX2_SAMPLER_PIXEL_BASE + 0], 1);
+        if (g_arkchemy_gx2.texture_bound[ARKCHEMY_GX2_SAMPLER_PIXEL_BASE + 0]) {
+            uint8_t *staging = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.texture_staging_mem_block[ARKCHEMY_GX2_SAMPLER_PIXEL_BASE + 0]);
             int pixels_match = 1;
             for (y = 0; y < h && pixels_match; y++) {
                 for (x = 0; x < w && pixels_match; x++) {
@@ -632,13 +632,13 @@ static void run_state_selftest(PpcContext *ctx) {
         }
 
         // GX2SetVertexTexture uses a distinct, non-overlapping real
-        // slot range (BRAMBLE_GX2_SAMPLER_VERTEX_BASE) -- confirm
+        // slot range (ARKCHEMY_GX2_SAMPLER_VERTEX_BASE) -- confirm
         // binding unit 0 here doesn't disturb the pixel-stage binding
         // made just above.
         ctx->r[3] = addr; ctx->r[4] = 0; // unit 0
         ppc_import_gx2_GX2SetVertexTexture(ctx);
-        checkBool("GX2SetVertexTexture bound unit 0 (distinct slot)", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_VERTEX_BASE + 0], 1);
-        checkBool("GX2SetPixelTexture's own slot still bound after GX2SetVertexTexture", g_bramble_gx2.texture_bound[BRAMBLE_GX2_SAMPLER_PIXEL_BASE + 0], 1);
+        checkBool("GX2SetVertexTexture bound unit 0 (distinct slot)", g_arkchemy_gx2.texture_bound[ARKCHEMY_GX2_SAMPLER_VERTEX_BASE + 0], 1);
+        checkBool("GX2SetPixelTexture's own slot still bound after GX2SetVertexTexture", g_arkchemy_gx2.texture_bound[ARKCHEMY_GX2_SAMPLER_PIXEL_BASE + 0], 1);
 
         // Real, recorded GPU commands from both calls above (staging
         // copy + image descriptor push + texture bind) need to
@@ -759,7 +759,7 @@ static void run_state_selftest(PpcContext *ctx) {
         ctx->r[3] = addr; ctx->r[4] = 0; // scanTarget 0 (TV)
         ppc_import_gx2_GX2CopyColorBufferToScanBuffer(ctx);
 
-        checkBool("GX2CopyColorBufferToScanBuffer real temp source bound", g_bramble_gx2.scan_copy_temp_bound, 1);
+        checkBool("GX2CopyColorBufferToScanBuffer real temp source bound", g_arkchemy_gx2.scan_copy_temp_bound, 1);
 
         // Real, recorded GPU command from this call needs to actually
         // submit and complete without hanging/crashing.
@@ -779,8 +779,8 @@ int main(int argc, char *argv[]) {
     (void)argv;
 
     mkdir("sdmc:/switch", 0777);
-    mkdir("sdmc:/switch/Bramble", 0777);
-    g_log = fopen("sdmc:/switch/Bramble/gx2-test-results.log", "w");
+    mkdir("sdmc:/switch/Jouster", 0777);
+    g_log = fopen("sdmc:/switch/Jouster/gx2-test-results.log", "w");
 
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -883,7 +883,7 @@ int main(int argc, char *argv[]) {
         // gap tells you where and roughly when it stopped.
         if (frame % 15 == 0) {
             checkpoint("frame %d/%d (swap_count=%u flip_count=%u)", frame, GX2TEST_AUTO_EXIT_FRAMES,
-                       g_bramble_gx2.swap_count, g_bramble_gx2.flip_count);
+                       g_arkchemy_gx2.swap_count, g_arkchemy_gx2.flip_count);
         }
 
         frame++;

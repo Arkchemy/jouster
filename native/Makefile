@@ -13,14 +13,14 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET		:=	Bramble
+TARGET		:=	Arkchemy
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	include
 
-APP_TITLE	:=	Bramble Milestone 2
-APP_AUTHOR	:=	Bramble project
+APP_TITLE	:=	Arkchemy Milestone 2
+APP_AUTHOR	:=	Arkchemy project
 
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE

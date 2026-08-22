@@ -1,5 +1,5 @@
 #---------------------------------------------------------------------------------
-# Bramble's first full-game build: the real, complete recompiled
+# Arkchemy's first full-game build: the real, complete recompiled
 # Skylanders: Spyro's Adventure C output (switch/game/source/generated_*.c,
 # 213 files -- split from one real recomp run against the real
 # tfbGame_cafe.rpx, since a single ~308MB/8.5M-line translation unit was

@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_SKYLANDERS_PORTAL_H
-#define BRAMBLE_SKYLANDERS_PORTAL_H
+#ifndef ARKCHEMY_SKYLANDERS_PORTAL_H
+#define ARKCHEMY_SKYLANDERS_PORTAL_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -73,4 +73,4 @@ bool portal_write_command(const uint8_t *cmd, size_t len);
  * larger). Returns false on any USB transfer failure. */
 bool portal_read_response(uint8_t *out, size_t out_len);
 
-#endif /* BRAMBLE_SKYLANDERS_PORTAL_H */
+#endif /* ARKCHEMY_SKYLANDERS_PORTAL_H */

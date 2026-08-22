@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_SKYLANDERS_MIFARE_KEYS_H
-#define BRAMBLE_SKYLANDERS_MIFARE_KEYS_H
+#ifndef ARKCHEMY_SKYLANDERS_MIFARE_KEYS_H
+#define ARKCHEMY_SKYLANDERS_MIFARE_KEYS_H
 
 #include <stdint.h>
 
@@ -55,4 +55,4 @@
  * they're iterating 0-15 correctly. */
 void skylanders_mifare_key_a(int sector, const uint8_t uid[4], uint8_t key_out[6]);
 
-#endif /* BRAMBLE_SKYLANDERS_MIFARE_KEYS_H */
+#endif /* ARKCHEMY_SKYLANDERS_MIFARE_KEYS_H */

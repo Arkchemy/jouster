@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_SKYLANDERS_NFC_H
-#define BRAMBLE_SKYLANDERS_NFC_H
+#ifndef ARKCHEMY_SKYLANDERS_NFC_H
+#define ARKCHEMY_SKYLANDERS_NFC_H
 
 #include <stdbool.h>
 
@@ -84,4 +84,4 @@ void skylanders_nfc_exit(void);
  * turns out not to match real hardware once tested). */
 bool skylanders_nfc_read_figure(SkylandersFigureId *out);
 
-#endif /* BRAMBLE_SKYLANDERS_NFC_H */
+#endif /* ARKCHEMY_SKYLANDERS_NFC_H */
