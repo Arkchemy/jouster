@@ -1,6 +1,6 @@
-// Bramble's first real, full-game smoke test: calls the actual,
+// Arkchemy's first real, full-game smoke test: calls the actual,
 // completely recompiled Skylanders: Spyro's Adventure entry point
-// (ppc_bramble_game_entry, see recomp's own --entry-alias) on a real,
+// (ppc_arkchemy_game_entry, see recomp's own --entry-alias) on a real,
 // separate background thread, while this file's own main thread shows
 // a real, independent progress indicator -- deliberately *not* relying
 // on the recompiled game's own draw calls (see cafeos_gx2.h's "Real
@@ -47,7 +47,7 @@
 // change). Every one of those 213 files, and this one, `#include`s the
 // same real cafeos_*.h shim headers -- safe now, unlike an earlier
 // real attempt at this same split, because every shim header's own
-// persistent state (g_bramble_gx2 and friends) was converted from
+// persistent state (g_arkchemy_gx2 and friends) was converted from
 // `static` (silently, incorrectly private-per-file) to real `extern`
 // linkage, with the one, real, shared definition of each now living in
 // recomp/include/cafeos_state.c (compiled and linked into this project
@@ -56,7 +56,7 @@
 // into any cafeos_*.h shim directly (its own status display uses
 // libnx's console instead, see checkpoint()'s and main()'s own
 // comments) -- it calls into the real, complete recompiled game via
-// ppc_bramble_game_entry, forward-declared where it's used, same as
+// ppc_arkchemy_game_entry, forward-declared where it's used, same as
 // any other externally-linked function.
 
 static FILE *g_log;
@@ -163,7 +163,7 @@ static void unhandled_log_sink(const char *what) {
 static void fs_open_log_sink(const char *guest_path, const char *real_path, const char *mode, int found,
                               uint32_t handle, uint32_t handles_in_use) {
     checkpoint("[FSOpenFile] %s -> %s mode=\"%s\" (%s) handle=%u in_use=%u/%d", guest_path, real_path, mode,
-               found ? "found" : "NOT FOUND", handle, handles_in_use, BRAMBLE_FS_MAX_HANDLES);
+               found ? "found" : "NOT FOUND", handle, handles_in_use, ARKCHEMY_FS_MAX_HANDLES);
 }
 
 /* Real, ad hoc debug watchpoint sink -- see ppc_runtime.h's own comment
@@ -212,8 +212,8 @@ static void fs_open_log_sink(const char *guest_path, const char *real_path, cons
  * the much larger MEMAllocFromExpHeapEx failures already seen
  * elsewhere in this same run (those are for much bigger 131072-byte
  * requests -- a different size class, not proof this one also fails). */
-typedef struct { uint32_t tag; const char *label; uint32_t last_value; uint64_t hit_count; uint32_t changed_count; } BrambleDebugWatchSlot;
-static BrambleDebugWatchSlot g_debug_watch_slots[] = {
+typedef struct { uint32_t tag; const char *label; uint32_t last_value; uint64_t hit_count; uint32_t changed_count; } ArkchemyDebugWatchSlot;
+static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0x21aa648u, "sp_container_alloc", 0xFFFFFFFFu, 0, 0},
     {0xFFFFFFFEu, "dispatch_userInstantiate", 0xFFFFFFFFu, 0, 0},
     {0x215bf24u, "singleton_needs_ctx_flag", 0xFFFFFFFFu, 0, 0},
@@ -270,7 +270,7 @@ static BrambleDebugWatchSlot g_debug_watch_slots[] = {
      * inside the real igMemoryPoolFrame object, not part of that
      * object's own calloc'd (and confirmed-real-memset'd, so correctly
      * zeroed) memory. This watches that pointer field directly: is it
-     * still NULL (nothing ever set it, and Bramble's flat-memory model
+     * still NULL (nothing ever set it, and Arkchemy's flat-memory model
      * silently reads garbage from address 8 instead of faulting like
      * real hardware would), or a real, plausible pointer (meaning
      * whatever it points to has its own, separate, incomplete
@@ -295,7 +295,7 @@ static BrambleDebugWatchSlot g_debug_watch_slots[] = {
     {0x215bdd5u, "constructInstance_calloc2_result", 0xFFFFFFFFu, 0, 0},
     /* New lead, 2026-08-21 (cont.): confirmed reallocCommon's NULL
      * result is real, faithful behavior (realloc(NULL,0) -> NULL by
-     * real compiled design, not a Bramble bug) -- the real question is
+     * real compiled design, not a Arkchemy bug) -- the real question is
      * why the requested size was 0 in the first place. That comes from
      * the class's own metaobject (real reflection data, offset+0x32 =
      * "instance size"). igMemoryPoolFrame is known to have real fields
@@ -310,9 +310,9 @@ static BrambleDebugWatchSlot g_debug_watch_slots[] = {
     {0x21a4ff0u, "structmalloc", 0xFFFFFFFFu, 0, 0},
     {0x21a5024u, "bufmalloc", 0xFFFFFFFFu, 0, 0},
 };
-#define BRAMBLE_DEBUG_WATCH_SLOT_COUNT (sizeof(g_debug_watch_slots) / sizeof(g_debug_watch_slots[0]))
+#define ARKCHEMY_DEBUG_WATCH_SLOT_COUNT (sizeof(g_debug_watch_slots) / sizeof(g_debug_watch_slots[0]))
 static void debug_watch_sink(uint32_t pc, uint32_t value) {
-    for (size_t i = 0; i < BRAMBLE_DEBUG_WATCH_SLOT_COUNT; i++) {
+    for (size_t i = 0; i < ARKCHEMY_DEBUG_WATCH_SLOT_COUNT; i++) {
         if (g_debug_watch_slots[i].tag != pc) continue;
         g_debug_watch_slots[i].hit_count++;
         if (value != g_debug_watch_slots[i].last_value) {
@@ -399,7 +399,7 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
 static PpcContext g_ctx;
 static PpcSharedMemory g_shared;
 
-// void ppc_bramble_game_entry(PpcContext *ctx) -- the real, complete,
+// void ppc_arkchemy_game_entry(PpcContext *ctx) -- the real, complete,
 // recompiled game entry point (see recomp's own --entry-alias). Runs
 // on its own real thread (see this file's own top comment for why).
 static void game_thread_func(void *arg) {
@@ -415,7 +415,7 @@ static void game_thread_func(void *arg) {
     // completely untested real C++ constructors, which is exactly the
     // "looks totally frozen, no way to tell if it's alive" failure mode
     // this architecture exists to prevent. Belongs here instead, same as
-    // ppc_bramble_game_entry below it -- untested real code that might
+    // ppc_arkchemy_game_entry below it -- untested real code that might
     // genuinely hang, isolated from the main thread like everything
     // else in this function.
     void ppc_init_globals(PpcContext *ctx);
@@ -445,7 +445,7 @@ static void game_thread_func(void *arg) {
     // If that's genuinely true on a real run, the pointer should never
     // be NULL by the time anything calls getDefault() -- so this
     // widens the single watch to 4 slots (see ppc_runtime.h's own
-    // BRAMBLE_WATCH_SLOTS comment) to catch all four real call sites in
+    // ARKCHEMY_WATCH_SLOTS comment) to catch all four real call sites in
     // one real run and settle whether initBootstrap/bootstrapInitialize
     // ever actually ran before the NULL reached remove(), or something
     // else entirely is overwriting that pointer back to NULL later.
@@ -480,7 +480,7 @@ static void game_thread_func(void *arg) {
     // meta-object (r4, the real argument here).
     // Slot 1 repurposed again 2026-08-21: the boot-time igStringPool spin
     // is fixed (real root cause: a missing "bootstrap heap" -- see
-    // cafeos_coreinit_mem.h's own BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR
+    // cafeos_coreinit_mem.h's own ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR
     // comment). Real hardware now gets much further, into a NEW stall
     // inside Core::igObjectList::setCount (0x2164250), which shrinks a
     // list by decrementRefCount-ing (oldCount-newCount)>>3 groups of 8
@@ -533,7 +533,7 @@ static void game_thread_func(void *arg) {
     g_static_init_done = true;
     checkpoint("[game thread] ppc_run_static_initializers done");
     // Real, targeted fix added 2026-08-21 after a full real hardware trace
-    // (see cafeos_coreinit_mem.h's own BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR
+    // (see cafeos_coreinit_mem.h's own ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR
     // comment for the complete explanation) found the true root cause of
     // the boot-time igStringPool spin: a real dedicated "bootstrap heap"
     // that Core::igMemoryContext's own constructor needs to allocate
@@ -547,9 +547,9 @@ static void game_thread_func(void *arg) {
     // static initializers legitimately zero-constructs the global struct
     // this handle field lives in, clobbering an earlier write. Running
     // last, right before the real game entry point, avoids that.
-    checkpoint("[game thread] calling bramble_mem_bootstrap_heap_init...");
-    bramble_mem_bootstrap_heap_init(&g_ctx);
-    checkpoint("[game thread] bramble_mem_bootstrap_heap_init done");
+    checkpoint("[game thread] calling arkchemy_mem_bootstrap_heap_init...");
+    arkchemy_mem_bootstrap_heap_init(&g_ctx);
+    checkpoint("[game thread] arkchemy_mem_bootstrap_heap_init done");
 
     // Real, bounded diagnostic added 2026-08-20 per direct owner request
     // to "build something to test" alongside the igStringPool hang hunt
@@ -567,7 +567,7 @@ static void game_thread_func(void *arg) {
     // own FSOpenFile ignores the FSClient* argument entirely (confirmed
     // by reading its own source) and just resolves the path directly.
     // Runs here (after static initializers, before the real, currently-
-    // hanging ppc_bramble_game_entry) so this test's own result is
+    // hanging ppc_arkchemy_game_entry) so this test's own result is
     // independent of that separate, still-open bug -- global/static
     // state Bink itself might rely on is already real and initialized
     // by this point, same as real hardware's own boot order.
@@ -603,10 +603,10 @@ static void game_thread_func(void *arg) {
         }
     }
 
-    checkpoint("[game thread] calling ppc_bramble_game_entry...");
-    void ppc_bramble_game_entry(PpcContext *ctx);
-    ppc_bramble_game_entry(&g_ctx);
-    checkpoint("[game thread] ppc_bramble_game_entry returned");
+    checkpoint("[game thread] calling ppc_arkchemy_game_entry...");
+    void ppc_arkchemy_game_entry(PpcContext *ctx);
+    ppc_arkchemy_game_entry(&g_ctx);
+    checkpoint("[game thread] ppc_arkchemy_game_entry returned");
     g_game_thread_done = true;
 }
 
@@ -656,7 +656,7 @@ int main(int argc, char *argv[]) {
     // alive" indicator. deko3d's swapchain framebuffers are GPU-tiled,
     // hardware-compressed image memory (DkImageFlags_HwCompression,
     // DkMemBlockFlags_GpuCached -- see cafeos_gx2.h's own
-    // bramble_gx2_create_framebuffers) -- not CPU-writable, so real text
+    // arkchemy_gx2_create_framebuffers) -- not CPU-writable, so real text
     // can't be blitted into them without a full shader/vertex pipeline
     // this project doesn't have yet. libnx's own console is a complete,
     // separate, CPU-side text renderer that needs none of that, so this
@@ -817,7 +817,7 @@ int main(int argc, char *argv[]) {
         // (no real USB HID backend exists yet for that one). This call
         // keeps the shim's own real button/stick state current every
         // frame, same rate as this file's own padUpdate() above.
-        bramble_vpad_update(&pad);
+        arkchemy_vpad_update(&pad);
 
         // Auto-press A, simulating the owner's own manual "press A
         // repeatedly, semi-randomly" testing session that originally
@@ -837,7 +837,7 @@ int main(int argc, char *argv[]) {
         // so it can't interfere with anything during the earlier real
         // init phases, which never read VPAD anyway.
         if (g_static_init_done && (frame % 180) < 6) {
-            g_bramble_vpad.held |= 0x8000u; /* VPAD_BUTTON_A */
+            g_arkchemy_vpad.held |= 0x8000u; /* VPAD_BUTTON_A */
         }
 
         u64 kDown = padGetButtonsDown(&pad);
@@ -912,7 +912,7 @@ int main(int argc, char *argv[]) {
             // ..." prefix this gets appended to.
             char loopwatch_buf[3072];
             size_t loopwatch_len = 0;
-            for (size_t i = 0; i < BRAMBLE_DEBUG_WATCH_SLOT_COUNT && loopwatch_len < sizeof(loopwatch_buf); i++) {
+            for (size_t i = 0; i < ARKCHEMY_DEBUG_WATCH_SLOT_COUNT && loopwatch_len < sizeof(loopwatch_buf); i++) {
                 int n = snprintf(loopwatch_buf + loopwatch_len, sizeof(loopwatch_buf) - loopwatch_len,
                                   " -- loopwatch(%s) hits=%llu changed=%u last=0x%x", g_debug_watch_slots[i].label,
                                   (unsigned long long)g_debug_watch_slots[i].hit_count, g_debug_watch_slots[i].changed_count,
@@ -930,8 +930,8 @@ int main(int argc, char *argv[]) {
                        g_game_thread_started, g_game_thread_done,
                        g_ppc_static_init_index, g_ppc_current_pc, g_ppc_last_caller_lr, (unsigned long long)g_ppc_fn_call_count,
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
-                       (unsigned long long)g_bramble_mem_alloc_fail_total, (unsigned long long)g_bramble_mem_free_total,
-                       (unsigned long long)g_bramble_mem_reuse_total,
+                       (unsigned long long)g_arkchemy_mem_alloc_fail_total, (unsigned long long)g_arkchemy_mem_free_total,
+                       (unsigned long long)g_arkchemy_mem_reuse_total,
                        g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4,
                        g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3,
                        g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count, g_ppc_watch[2].r3, g_ppc_watch[2].r4,

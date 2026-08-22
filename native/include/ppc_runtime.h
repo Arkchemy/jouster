@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_PPC_RUNTIME_H
-#define BRAMBLE_PPC_RUNTIME_H
+#ifndef ARKCHEMY_PPC_RUNTIME_H
+#define ARKCHEMY_PPC_RUNTIME_H
 
 #include <math.h>
 #include <stdint.h>
@@ -460,4 +460,4 @@ static inline double ppc_frsp(double val) { return (double)(float)val; }
  */
 void ppc_dispatch(PpcContext *ctx, uint32_t addr);
 
-#endif /* BRAMBLE_PPC_RUNTIME_H */
+#endif /* ARKCHEMY_PPC_RUNTIME_H */

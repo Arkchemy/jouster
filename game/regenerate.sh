@@ -44,7 +44,7 @@ echo "running recomp against $RPX (this takes a while, ~8.5M lines of output)...
 # very next step below patches exactly those sites. Only a genuinely
 # different, unexpected exit code should actually stop this script.
 set +e
-"$RECOMP" --entry-alias bramble_game_entry "$RPX" -o "$WORK/full.c"
+"$RECOMP" --entry-alias arkchemy_game_entry "$RPX" -o "$WORK/full.c"
 recomp_status=$?
 set -e
 if [ "$recomp_status" -ne 0 ] && [ "$recomp_status" -ne 2 ]; then
@@ -190,7 +190,7 @@ while i < n:
 flush_chunk()
 
 with open(decl_path, "w") as f:
-    f.write("#ifndef BRAMBLE_GAME_GENERATED_DECLS_H\n#define BRAMBLE_GAME_GENERATED_DECLS_H\n")
+    f.write("#ifndef ARKCHEMY_GAME_GENERATED_DECLS_H\n#define ARKCHEMY_GAME_GENERATED_DECLS_H\n")
     f.writelines(decls)
     f.writelines(extra_decls)
     f.write("#endif\n")

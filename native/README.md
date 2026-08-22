@@ -13,7 +13,7 @@ affects projects, like Viridite, that need portlibs).
 ## What it does
 
 `source/main.c` is a standard libnx console app (via `consoleInit`) that
-runs **five** of Bramble's recompiler test programs — not just one —
+runs **five** of Arkchemy's recompiler test programs — not just one —
 against real ARM64 Switch hardware, checking each against the exact same
 known-correct values `tools/verify.sh` already checks under QEMU-ARM64:
 
@@ -37,7 +37,7 @@ categories, not just one integer-arithmetic program.
 **Logging, not just an on-screen result.** Per the project's own Notion
 plan ("Tooling & Development Approach" — self-instrumented automated
 testing), the app writes a checkpointed log to
-`sdmc:/switch/Bramble/test-results.log` as it runs, flushed after every
+`sdmc:/switch/Jouster/test-results.log` as it runs, flushed after every
 line — not just a summary at exit. If the app freezes or crashes partway
 through a future, more ambitious test, the last-written checkpoint in that
 log narrows down where, without needing a human to guess blind. The same
@@ -66,8 +66,8 @@ export DEVKITPRO=/opt/devkitpro   # if not already set by the installer
 make
 ```
 
-Output: `Bramble.nro`. Copy it to `/switch/Bramble/` on your SD
-card (alongside, or replacing, `switch/build/bramble_poc.nro` from the
+Output: `Arkchemy.nro`. Copy it to `/switch/Jouster/` on your SD
+card (alongside, or replacing, `switch/build/arkchemy_poc.nro` from the
 libnx-free attempt). Drop what happens in `switch/test-results/`, and grab
-`sdmc:/switch/Bramble/test-results.log` off the SD card for the full
+`sdmc:/switch/Jouster/test-results.log` off the SD card for the full
 checkpoint trail.

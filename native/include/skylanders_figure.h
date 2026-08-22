@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_SKYLANDERS_FIGURE_H
-#define BRAMBLE_SKYLANDERS_FIGURE_H
+#ifndef ARKCHEMY_SKYLANDERS_FIGURE_H
+#define ARKCHEMY_SKYLANDERS_FIGURE_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -112,4 +112,4 @@ typedef void (*SkylandersDumpCallback)(const SkylandersDumpEntry *entry, void *u
  * `dir_path` itself couldn't be opened as a directory. */
 int skylanders_figure_scan_dir(const char *dir_path, SkylandersDumpCallback callback, void *user_data);
 
-#endif /* BRAMBLE_SKYLANDERS_FIGURE_H */
+#endif /* ARKCHEMY_SKYLANDERS_FIGURE_H */

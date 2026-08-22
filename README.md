@@ -72,5 +72,5 @@ put whatever you see in `switch/test-results/`.
 switch/build.sh
 ```
 
-Output: `switch/build/bramble_poc.nro`. Copy it to
-`/switch/Bramble/bramble_poc.nro` on your SD card.
+Output: `switch/build/arkchemy_poc.nro`. Copy it to
+`/switch/Jouster/arkchemy_poc.nro` on your SD card.

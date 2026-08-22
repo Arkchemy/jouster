@@ -1,5 +1,5 @@
 // Milestone 2, expanded: a genuine libnx homebrew app that runs several of
-// Bramble's recompiler test programs (see switch/native/regenerate.sh) on
+// Arkchemy's recompiler test programs (see switch/native/regenerate.sh) on
 // real Switch hardware, checks each against the same known-correct ground
 // truth tools/verify.sh already checks under QEMU-ARM64, and -- per the
 // project plan's own "Tooling & Development Approach" section -- writes a
@@ -167,11 +167,11 @@ static void onFigureFound(const SkylandersDumpEntry *entry, void *user_data) {
 }
 
 static void runFigureScan(void) {
-    checkpoint("scanning sdmc:/switch/Bramble/figures for local figure dumps (Phase 3b)...");
+    checkpoint("scanning sdmc:/switch/Jouster/figures for local figure dumps (Phase 3b)...");
     g_figures_found = 0;
-    int n = skylanders_figure_scan_dir("sdmc:/switch/Bramble/figures", onFigureFound, NULL);
+    int n = skylanders_figure_scan_dir("sdmc:/switch/Jouster/figures", onFigureFound, NULL);
     if (n < 0) {
-        checkpoint("[figure scan] could not open sdmc:/switch/Bramble/figures");
+        checkpoint("[figure scan] could not open sdmc:/switch/Jouster/figures");
     } else if (n == 0) {
         checkpoint("[figure scan] no dumps found (drop real figure dumps in that folder to test this)");
     } else {
@@ -218,8 +218,8 @@ int main(int argc, char *argv[]) {
     // worth knowing about.
     fsdevMountSdmc();
     mkdir("sdmc:/switch", 0777);
-    mkdir("sdmc:/switch/Bramble", 0777);
-    g_log = fopen("sdmc:/switch/Bramble/test-results.log", "w");
+    mkdir("sdmc:/switch/Jouster", 0777);
+    g_log = fopen("sdmc:/switch/Jouster/test-results.log", "w");
 
     // Phase 3b (local figure dumps, no portal needed): scan a dedicated
     // SD card folder for real figure dumps, matching the project plan's
@@ -229,10 +229,10 @@ int main(int argc, char *argv[]) {
     // count toward g_pass_count/g_fail_count, same reasoning as
     // portal_init() reporting "no portal attached" as a normal outcome
     // rather than an error.
-    mkdir("sdmc:/switch/Bramble/figures", 0777);
+    mkdir("sdmc:/switch/Jouster/figures", 0777);
 
-    printf("Bramble -- on-hardware recompiler test suite\n\n");
-    checkpoint("== Bramble on-hardware test suite starting ==");
+    printf("Arkchemy -- on-hardware recompiler test suite\n\n");
+    checkpoint("== Arkchemy on-hardware test suite starting ==");
     if (!g_log) {
         checkpoint("(warning: could not open SD card log file -- continuing without it)");
     }
@@ -249,7 +249,7 @@ int main(int argc, char *argv[]) {
     checkpoint("== done: %d passed, %d failed ==", g_pass_count, g_fail_count);
     printf("\n%s\n\n", g_fail_count == 0 ? "ALL MATCH" : "SOME MISMATCHED");
     if (g_log) {
-        printf("Log written to sdmc:/switch/Bramble/test-results.log\n");
+        printf("Log written to sdmc:/switch/Jouster/test-results.log\n");
     }
     printf("Press + to exit.\n");
     consoleUpdate(NULL);
