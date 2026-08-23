@@ -12,11 +12,22 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
+# Same pre-split path problem fixed in game/Makefile (audit 2026-08-24):
+# ../../recomp/include only exists in the old monorepo layout, so this
+# could not build from a fresh clone. Resolved against TOPDIR because
+# this makefile re-invokes itself from inside $(BUILD).
+CONQUERTRON	?=	$(TOPDIR)/../../conquertron
+CONQUERTRON_DIR	:=	$(abspath $(CONQUERTRON))
+
+ifeq ($(wildcard $(CONQUERTRON_DIR)/include/ppc_runtime.h),)
+$(error conquertron headers not found at $(CONQUERTRON_DIR)/include. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron)
+endif
+
 TARGET		:=	ArkchemyGx2Test
 BUILD		:=	build
-SOURCES		:=	source ../../recomp/include
+SOURCES		:=	source $(CONQUERTRON_DIR)/include
 DATA		:=	data
-INCLUDES	:=	include ../../recomp/include
+INCLUDES	:=	include $(CONQUERTRON_DIR)/include
 
 APP_TITLE	:=	Arkchemy GX2 Test
 APP_AUTHOR	:=	Arkchemy project
@@ -44,8 +55,8 @@ ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
 export TOPDIR	:=	$(CURDIR)
 
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
+export VPATH	:=	$(foreach dir,$(SOURCES),$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir))) \
+			$(foreach dir,$(DATA),$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir)))
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
@@ -65,7 +76,7 @@ export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
 export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
 
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir))) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
 
