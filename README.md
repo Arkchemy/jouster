@@ -25,12 +25,29 @@ legally-dumped copy.
 ## Building the game
 
 Requires [devkitPro](https://devkitpro.org/) with devkitA64, libnx, and
-deko3d.
+deko3d, plus a checkout of
+[conquertron](https://github.com/Arkchemy/conquertron) — it supplies
+`ppc_runtime.h`, the `cafeos_*.h` shims and `cafeos_state.c` that the
+generated C compiles against.
+
+The build defaults to conquertron being cloned next to this repo:
+
+```
+some-dir/
+  conquertron/
+  jouster/
+```
 
 ```bash
 export DEVKITPRO=/opt/devkitpro
 cd game
 make -j
+```
+
+If your checkout is laid out differently, point it at conquertron explicitly:
+
+```bash
+make -j CONQUERTRON=/path/to/conquertron
 ```
 
 That produces `game/Jouster.nro`. Copy it to your Switch's SD card under

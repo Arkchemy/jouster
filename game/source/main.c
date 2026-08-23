@@ -113,6 +113,14 @@ static const char *checkpoint_color(const char *msg) {
 }
 
 static Mutex g_console_mutex;
+/* Real gap found in an audit, 2026-08-24: this had no printf format
+ * attribute, so GCC did no format/argument checking at all on the most
+ * important diagnostic function in the project -- whose main call site
+ * passes dozens of arguments. A mismatch there is undefined behaviour
+ * that prints plausible-looking garbage instead of failing loudly,
+ * which is the worst failure mode for something every hardware
+ * investigation depends on for evidence. */
+__attribute__((format(printf, 1, 2)))
 static void checkpoint(const char *fmt, ...) {
     // Was 512 -- real, confirmed truncation found 2026-08-20: the main
     // periodic status line has grown one field at a time all session
@@ -120,13 +128,31 @@ static void checkpoint(const char *fmt, ...) {
     // silently overran 512 bytes, vsnprintf truncating it mid-field
     // right before this exact watchpoint's own distinct/last values --
     // which looked exactly like a real "only 6 hits" finding until this
-    // was checked. 4096 is comfortably past anything this one line is
-    // likely to grow to next.
-    char buf[4096];
+    // was checked.
+    //
+    // The same bug then came back, found in an audit 2026-08-24: "4096
+    // is comfortably past anything this line is likely to grow to"
+    // stopped being true once it picked up the dump/dispatch/vtable
+    // fields. Real measurement, not theory -- 116 lines per run landed
+    // at exactly 4095 characters and ended mid-field ("... -- loopwatch"
+    // with no name and no values), so every loopwatch slot past that
+    // point had been silently invisible.
+    //
+    // Raising the number alone would just set up a third occurrence, so
+    // truncation is now detected and reported rather than silent:
+    // vsnprintf returns the length it would have written, so anything
+    // >= the buffer size means output was lost. That turns a silently
+    // wrong diagnostic -- the worst kind, because it reads as real
+    // data -- into an obvious marker in the log.
+    char buf[8192];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    int needed = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+    if (needed >= (int)sizeof(buf)) {
+        static const char kMark[] = " [!!TRUNCATED!!]";
+        memcpy(buf + sizeof(buf) - sizeof(kMark), kMark, sizeof(kMark));
+    }
 
     // "\r\x1b[K" first: cleanly overwrites whatever the continuously-
     // animated status spinner (see main()'s own loop) left on the
@@ -347,14 +373,36 @@ static void mem_alloc_fail_log_sink(const char *what, uint32_t requested, uint32
     // out. Those events happen earlier, during the real fill-up, so a
     // single shared counter risked the (far more frequent) OOM-failure
     // spam using up the whole budget before any of them got logged.
-    static int fail_count = 0;
-    static int large_count = 0;
-    static int query_count = 0;
-    static int other_count = 0;
-    int *counter = &other_count;
-    if (strstr(what, "out of space") != NULL) counter = &fail_count;
-    else if (strstr(what, "large alloc") != NULL) counter = &large_count;
-    else if (strstr(what, "query") != NULL) counter = &query_count;
+    //
+    // Real gap found and fixed 2026-08-24: the category budget used to
+    // be shared across *every* heap. MEM1's own exhaustion burned the
+    // entire 40-event "out of space" budget within the first seconds of
+    // a run, so when a different heap later hit the same failure mode --
+    // the one actually being investigated -- there was no budget left to
+    // log it, and the run went silent with no indication why. Keying the
+    // budget by (category, heap_base) means a new heap always gets its
+    // own fresh budget regardless of what any other heap used up.
+    typedef struct { uint32_t heap_base; int fail_count, large_count, query_count, other_count; } ArkchemyMemLogBudget;
+    static ArkchemyMemLogBudget budgets[ARKCHEMY_MEM_MAX_HEAPS + 4];
+    static int budget_count = 0;
+    ArkchemyMemLogBudget *b = NULL;
+    int bi;
+    for (bi = 0; bi < budget_count; bi++) {
+        if (budgets[bi].heap_base == heap_base) { b = &budgets[bi]; break; }
+    }
+    if (b == NULL) {
+        if (budget_count < (int)(sizeof(budgets) / sizeof(budgets[0]))) {
+            b = &budgets[budget_count++];
+            b->heap_base = heap_base;
+            b->fail_count = b->large_count = b->query_count = b->other_count = 0;
+        } else {
+            b = &budgets[0]; /* documented fallback if more distinct heaps than slots ever appear */
+        }
+    }
+    int *counter = &b->other_count;
+    if (strstr(what, "out of space") != NULL) counter = &b->fail_count;
+    else if (strstr(what, "large alloc") != NULL) counter = &b->large_count;
+    else if (strstr(what, "query") != NULL) counter = &b->query_count;
     if (*counter >= 40) return;
     (*counter)++;
     // g_ppc_current_pc/g_ppc_fn_call_count are updated at the entry of
@@ -701,7 +749,23 @@ int main(int argc, char *argv[]) {
     checkpoint("Arkchemy (Jouster) game smoke test starting");
 
     Thread game_thread;
-    Result rc = threadCreate(&game_thread, game_thread_func, NULL, NULL, GAME_THREAD_STACK_SIZE, 0x2C, -2);
+    /* Priority was 0x2C -- identical to the main thread's own default,
+     * on the same core (-2). Real, measured consequence found in an
+     * audit 2026-08-24: when the recompiled game enters a tight loop
+     * making no function calls and no syscalls, it never yields, and an
+     * equal-priority main thread gets starved -- real runs managed
+     * roughly 180 frames of a 7200-frame/120-second test, about 1.5fps
+     * instead of 60, so the periodic status line simply stopped
+     * appearing.
+     *
+     * That is a dangerous failure mode for a diagnostic harness: "the
+     * log stopped" then looks exactly like "the game crashed or hung".
+     * The thread being observed must never be able to starve the thread
+     * doing the observing. 0x30 is numerically lower priority than the
+     * main thread on Horizon (0x00 highest, 0x3F lowest), so the harness
+     * always preempts the game and keeps logging. Scheduling only -- no
+     * recompiled game logic is affected. */
+    Result rc = threadCreate(&game_thread, game_thread_func, NULL, NULL, GAME_THREAD_STACK_SIZE, 0x30, -2);
     if (R_FAILED(rc)) {
         checkpoint("threadCreate failed: 0x%x", rc);
     } else {

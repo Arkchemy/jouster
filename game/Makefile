@@ -23,11 +23,39 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
+# Where conquertron (the recompiler) lives. It supplies ppc_runtime.h,
+# the cafeos_*.h Cafe OS shims and cafeos_state.c, all of which the
+# generated C is compiled against.
+#
+# Real issue found in an audit, 2026-08-24: this used to be hardcoded to
+# ../../recomp/include, which is only correct in the old pre-split
+# monorepo layout. After the org split that path does not exist, so the
+# published repository could not be built by anyone who cloned it --
+# make would simply not find a single header. Now a variable, defaulting
+# to the obvious side-by-side clone layout:
+#
+#     some-dir/
+#       conquertron/
+#       jouster/        <- you are in jouster/game when running make
+#
+# Override it if your checkout differs:
+#     make CONQUERTRON=/path/to/conquertron
+# Resolved against TOPDIR, not CURDIR: this makefile re-invokes itself
+# from inside $(BUILD), so a CURDIR-relative default silently points
+# somewhere different on the second pass. TOPDIR is exported by the
+# outer pass and stays correct in both.
+CONQUERTRON	?=	$(TOPDIR)/../../conquertron
+CONQUERTRON_DIR	:=	$(abspath $(CONQUERTRON))
+
+ifeq ($(wildcard $(CONQUERTRON_DIR)/include/ppc_runtime.h),)
+$(error conquertron headers not found at $(CONQUERTRON_DIR)/include. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron)
+endif
+
 TARGET		:=	Jouster
 BUILD		:=	build
-SOURCES		:=	source ../../recomp/include
+SOURCES		:=	source $(CONQUERTRON_DIR)/include
 DATA		:=	data
-INCLUDES	:=	include ../../recomp/include
+INCLUDES	:=	include $(CONQUERTRON_DIR)/include
 
 APP_TITLE	:=	Arkchemy -- Jouster
 APP_AUTHOR	:=	Arkchemy Contributors
@@ -55,8 +83,11 @@ ifneq ($(BUILD),$(notdir $(CURDIR)))
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
 export TOPDIR	:=	$(CURDIR)
 
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
+# $(if $(filter /%,...)): SOURCES/INCLUDES may contain absolute paths
+# now that conquertron lives in a separate repository. Prefixing an
+# absolute path with $(CURDIR)/ would produce a bogus location.
+export VPATH	:=	$(foreach dir,$(SOURCES),$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir))) \
+			$(foreach dir,$(DATA),$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir)))
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
@@ -76,7 +107,7 @@ export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
 export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
 
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(if $(filter /%,$(dir)),$(dir),$(CURDIR)/$(dir))) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
 
