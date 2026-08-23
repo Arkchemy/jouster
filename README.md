@@ -1,76 +1,70 @@
-# Milestone 2 (first attempt): does anything boot at all?
+# jouster
 
-This is **not** the recompiled game, and it's **not built with libnx**. It's
-the smallest possible thing that should be a structurally valid Switch
-homebrew `.nro`, meant to answer one question on real hardware: does the
-packaging pipeline actually produce something hbloader accepts and runs, or
-does it error out / crash immediately?
+The Nintendo Switch side of [Arkchemy](https://github.com/Arkchemy): it takes
+the C emitted by [conquertron](https://github.com/Arkchemy/conquertron) and
+builds it into a real Switch homebrew `.nro`.
 
-## Why no libnx
+No PowerPC emulation runs at runtime — the recompiled game is compiled to
+native ARM64 and linked against libnx like any other homebrew app.
 
-devkitPro's site is unreachable from this project's dev sandbox (see the
-main README and the Notion project log), so devkitA64 -- and therefore
-libnx, which is built against devkitA64's specific newlib toolchain and has
-hand-written ARM64 startup/exception-vector code tied to it -- isn't
-available here. Porting libnx itself to a different toolchain is a much
-bigger job than this milestone, and not something safely done without
-hardware to verify against.
+This repository contains no game code and no game assets. You supply your own
+legally-dumped copy.
 
-What *is* reachable: the source for `switch-tools` (`elf2nro`, `nacptool`,
-etc. -- see `github.com/switchbrew/switch-tools`) builds fine as ordinary
-host tools with plain `gcc`, no cross-toolchain needed, since they run on
-the *development* machine, not the Switch. So the packaging half of the
-pipeline is real and NRO-format-correct; the payload is deliberately trivial
-so nothing about *running* it depends on libnx.
+## Layout
 
-## What `switch/src/start.s` actually does
+| Path | What it is |
+| --- | --- |
+| `game/` | The full-game build: `Makefile`, `regenerate.sh`, and `source/main.c` (the harness/entry point). The recompiled `generated_*.c` are build artefacts and are not committed. |
+| `native/` | Smaller native test programs |
+| `gx2_test/` | GX2 → deko3d graphics experiments |
+| `src/start.s` | Bare-metal ARM64 startup used by the earliest no-libnx milestone |
+| `link.ld`, `build.sh` | Linker script and build script for that same bare-metal path |
+| `test-results/` | Dated real-hardware test logs |
+| `docs/` | Historical milestone notes |
 
-Per the [Homebrew ABI](https://switchbrew.org/wiki/Homebrew_ABI), hbloader
-calls the entry point with `x0`=env context pointer, `x1`=`0xFFFFFFFFFFFFFFFF`,
-`lr`=return address into the loader. A well-behaved app returns to that `lr`
-with `x0`=an error code. This program does exactly that and nothing else:
+## Building the game
 
-```
-mov x0, xzr
-ret
+Requires [devkitPro](https://devkitpro.org/) with devkitA64, libnx, and
+deko3d.
+
+```bash
+export DEVKITPRO=/opt/devkitpro
+cd game
+make -j
 ```
 
-libnx's own `crt0` (`switch_crt0.s` in the libnx repo) does self-relocation
-via a MOD0 header before calling into C, because a real program has
-data/GOT/`.rela.dyn` references that need fixing up once loaded at an
-ASLR-chosen base address. MOD0 is *not* something the OS loader itself
-requires -- it's crt0's own bookkeeping for relocating itself. This program
-has no data references, no calls to other addresses, nothing position-
-dependent, so there's nothing to relocate and MOD0 is safely omitted.
+That produces `game/Jouster.nro`. Copy it to your Switch's SD card under
+`/switch/Jouster/`.
 
-`switch/link.ld` is a from-scratch linker script (not libnx's `switch.ld`)
-that produces exactly the program-header shape `elf2nro` requires: 3
-`PT_LOAD` segments (code/rodata/data) followed by a 4th header it reads
-purely to compute `.bss` size. Confirmed locally with `readelf -l`.
+The generated C is not in the repository — `game/regenerate.sh` drives
+conquertron against your own dump to produce it before building.
 
-## What's actually been verified vs. not
+## Test harness
 
-Verified on this machine, without hardware:
-- The linker produces exactly the 4-phdr shape `elf2nro` expects.
-- `elf2nro` and `nacptool` run cleanly against it with no errors, producing
-  a file with a well-formed `NRO0` header and `ASET`/nacp block.
-- The first 8 bytes of the file decode to the expected `mov x0, xzr` / `ret`
-  instruction encoding.
+`game/source/main.c` is not a normal entry point; it is a diagnostic harness.
+It runs the recompiled game on a worker thread while the main thread logs
+periodic checkpoints to `sdmc:/switch/Jouster/game-results.log`, including
+memory-allocation events, watched function arguments, and a stall detector
+that exits early if execution stops making forward progress. Test duration can
+be overridden by writing a number of seconds to
+`sdmc:/switch/Jouster/test-seconds.txt`.
 
-**Not** verified, because it requires your hardware:
-- Whether hbloader actually accepts and loads this file.
-- Whether the entry/return convention as implemented here is complete
-  enough in practice (there could be an undocumented loader expectation
-  this misses).
+Those logs are how nearly every bug in this project has been found; dated
+examples live in `test-results/`.
 
-If this doesn't boot, that's useful information, not a wasted test --
-put whatever you see in `switch/test-results/`.
+## Status
 
-## Building
+Early. The game boots and runs its engine startup sequence, but nothing is
+rendered yet, no audio plays, and no level or asset loading has been reached.
+Graphics calls are honest no-ops pending a Switch backend. Expect it to run for
+a while and then stop, not to be playable.
 
-```sh
-switch/build.sh
-```
+## Licence
 
-Output: `switch/build/arkchemy_poc.nro`. Copy it to
-`/switch/Jouster/arkchemy_poc.nro` on your SD card.
+See [`LICENSE`](LICENSE) — Arkchemy Free & Source-Available License v2.0. It is
+**not** an OSI-approved open source licence and some uses require permission,
+so please read it before reusing anything here. Contact details and the
+project Discord are in [`llms.txt`](llms.txt).
+
+Contributors are listed in [`CONTRIBUTORS.csv`](CONTRIBUTORS.csv); the codename
+scheme is explained in [`CODENAMES.md`](CODENAMES.md).
