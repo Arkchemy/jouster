@@ -666,6 +666,32 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
 }
 
 static PpcContext g_ctx;
+
+/* Read a guest string into a host buffer, bounded and sanitised.
+ * Added 2026-08-24 to recover the engine's own error text: the game
+ * calls Core::igReportHandler::reportVaList to describe some failure,
+ * and igStringBuf::append then hangs scanning that message for a NUL
+ * that never arrives -- so the report is never emitted and we have
+ * never seen what the engine was actually complaining about. Reading it
+ * here, with a hard length cap and no reliance on a terminator, shows
+ * the message even though the game's own strlen cannot finish it.
+ * Non-printable bytes are escaped so a garbage pointer is obvious
+ * rather than corrupting the log line. */
+static void guest_str(uint32_t addr, char *out, size_t out_size) {
+    size_t n = 0;
+    if (addr == 0) { snprintf(out, out_size, "<null>"); return; }
+    while (n + 5 < out_size) {
+        uint8_t c = ppc_load_u8(&g_ctx, addr + (uint32_t)n);
+        if (c == 0) break;
+        if (c >= 0x20 && c < 0x7f) out[n] = (char)c;
+        else { out[n] = '.'; }
+        n++;
+        if (n >= 96) break;   /* cap: this may be an unterminated string */
+    }
+    out[n] = '\0';
+    if (n == 0) snprintf(out, out_size, "<empty>");
+}
+
 static PpcSharedMemory g_shared;
 
 // void ppc_arkchemy_game_entry(PpcContext *ctx) -- the real, complete,
@@ -930,7 +956,18 @@ static void game_thread_func(void *arg) {
      * the three together say whether boot reaches initBootstrap, whether
      * the context object is ever constructed, and whether it is ever
      * published to the global. */
-    g_ppc_watch[2].pc = 0x2178438u; /* igMemoryContext::igMemoryContext(bool) entry */
+    /* Retargeted 2026-08-24 (final). The constructor question is
+     * answered -- the boot chain is repaired. Far more interesting: the
+     * caller_lr recorded while igStringBuf::append spins is 0x218a62c,
+     * inside Core::igReportHandler::reportVaList. So the engine hit some
+     * error, called its own reporter to describe it, and the reporter
+     * hung formatting the message. Whatever that report says is very
+     * likely the explanation for everything downstream, and we have
+     * never seen it because the reporter never finishes.
+     *
+     * r3 is the ReportType and r4 the format string, so watching the
+     * entry captures the message the engine was trying to emit. */
+    g_ppc_watch[2].pc = 0x218a548u; /* igReportHandler::reportVaList -- r3=type r4=fmt */
     /* Repurposed 2026-08-22: mallocString never fired in any hardware run
      * across the whole igMemoryPoolFrame investigation (hits=0 always) --
      * dead slot. Post-LWZU-fix, the game now runs a sustained real loop
@@ -1522,11 +1559,17 @@ int main(int argc, char *argv[]) {
                                   "%s0x%x", vd == 0 ? "" : ",", vtable_dump[vd]);
                 if (n > 0) vtable_dump_len += (size_t)n;
             }
+            /* Recover the engine's own report text and whatever
+             * igStringBuf::append is stuck scanning -- see guest_str. */
+            char report_fmt_str[112];
+            char append_str_str[112];
+            guest_str(g_ppc_watch[2].r4, report_fmt_str, sizeof(report_fmt_str));
+            guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
-                       " -- w2(igMemoryContextCtor) hits=%u@%llu this=0x%x arg=0x%x"
+                       " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"
                        " -- w3(reallocCommon) hits=%u@%llu pool=0x%x ptr=0x%x size=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
@@ -1535,6 +1578,7 @@ int main(int argc, char *argv[]) {
                        " -- pool0x81024c[0..3]=0x%x,0x%x,0x%x,0x%x"
                        " -- pool_vtable[0..17]=%s"
                        " -- cur_mem_ctx(.data+5336)=0x%x boot_heap_handle=0x%x"
+                       " -- report_fmt=\"%s\" append_str=\"%s\""
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -1571,6 +1615,7 @@ int main(int argc, char *argv[]) {
                         * never dispatched. Sampling it each frame shows
                         * when it goes. */
                        ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR),
+                       report_fmt_str, append_str_str,
                        loopwatch_buf);
         }
 
