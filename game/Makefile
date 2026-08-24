@@ -123,6 +123,12 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
+# main.c carries the __DATE__/__TIME__ build stamp printed as the first
+# log line, which is how a hardware log identifies which .nro produced
+# it. Without this touch the stamp goes stale whenever only generated_*.c
+# changed, so a genuinely new binary reports an old build time -- exactly
+# the ambiguity the stamp exists to remove. One extra compile out of 218.
+	@touch $(CURDIR)/source/main.c
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 clean:
