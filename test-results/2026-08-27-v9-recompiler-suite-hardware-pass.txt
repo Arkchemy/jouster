@@ -1,0 +1,71 @@
+Arkchemy @ commit 986866a (2026-08-27), native/Arkchemy.nro, run on real
+modded Switch hardware. Raw SD-card log
+(sdmc:/switch/Jouster/test-results.log) reproduced below verbatim.
+
+9/9 PASS, 0 failures.
+
+This is the first hardware run since the org split, and the first for
+which the generated C was regenerated rather than inherited: t1-t5 are
+no longer the 2026-08-14 build's output. They came out identical anyway,
+which is the useful part -- the recompiler changes since then (the
+per-translation-unit ppc_run_static_initializers, the ~240 lines of
+ppc_runtime.h this repo had been pinned behind) did not move any of the
+five previously-passing answers, and blaster's build_ppc.sh switch to
+powerpc-freestanding-eabihf did not move t2_floating's FP result.
+
+t6-t9 are new to hardware. All four cover things found in real code
+rather than invented for a test: andi./lwzu, conditional return and
+addis/frsp came out of recompiling a genuine Wii U homebrew .rpx, and
+bss_large is the oversized-.bss address-assignment bug from the real
+Skylanders binary. t8_addis_frsp is the one that would have silently
+stopped testing anything under a newer zig -- soft float removes the
+frsp instruction entirely -- so its PASS here is specifically a
+hard-float result.
+
+The figure scan and NFC read are not pass/fail checks and are not
+counted: no dumps were placed in sdmc:/switch/Jouster/figures and no
+figure was placed on the controller during this run, so "no dumps found"
+and "no figure detected in time" are the expected outcomes, not
+failures.
+
+Coverage note, recorded because it is the obvious next question: this
+suite ran 9 of the 23 test programs blaster's verify.sh runs under
+QEMU. The remaining 14 (bitops, rotate, carry, division, indexed, fcmp,
+mulhw, double, misc_bitops, mixed_double, globals, multifunc_globals,
+manyargs, multifile) were added to the suite immediately after this run
+and need their own hardware pass.
+
+=== raw log ===
+
+== Arkchemy on-hardware test suite starting ==
+running t1_arithmetic (integer arithmetic/calls)...
+[t1_arithmetic] got=260 want=260 -- PASS
+running t2_floating (single-precision FP + rodata constants)...
+[t2_floating (x100)] got=2025 want=2025 -- PASS
+running t3_loop (mtctr/bdnz counted-loop branches, -O2)...
+[t3_loop] got=35 want=35 -- PASS
+running t4_rodata (switch-statement lookup table, -O2)...
+  classify(0) got=7 want=7 -- ok
+  classify(1) got=300 want=300 -- ok
+  classify(2) got=-19 want=-19 -- ok
+  classify(3) got=42 want=42 -- ok
+  classify(4) got=1001 want=1001 -- ok
+  classify(5) got=5 want=5 -- ok
+  classify(6) got=-1 want=-1 -- ok
+[t4_rodata] -- PASS
+running t5_fnptr (mtctr/bctrl indirect calls)...
+[t5_fnptr] add=30(want 30) mul=200(want 200) -- PASS
+running t6_andi_lwzu (andi./lwzu, real Wii U code find, -O1)...
+[t6_andi_lwzu] got=153 want=153 -- PASS
+running t7_cond_return (conditional return, real Wii U code find, -O1)...
+[t7_cond_return] guarded(-5)=0(want 0) guarded(7)=14(want 14) -- PASS
+running t8_addis_frsp (addis/frsp, real Wii U code find, -O1)...
+[t8_addis_frsp (x2)] got=655567 want=655567 -- PASS
+running t9_bss_large (oversized .bss, real Skylanders regression, -O0)...
+[t9_bss_large] got=45483 want=45483 -- PASS
+scanning sdmc:/switch/Jouster/figures for local figure dumps (Phase 3b)...
+[figure scan] no dumps found (drop real figure dumps in that folder to test this)
+checking for a Skylanders figure via Joy-Con NFC (Phase 3c, up to ~5s)...
+[nfc read] no figure detected in time (place one on the controller's NFC point to test this)
+
+== done: 9 passed, 0 failed ==

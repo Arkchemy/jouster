@@ -52,28 +52,57 @@ OUTDIR="$NATIVE_ROOT/source"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-rename_syms() {
-    # rename_syms <file> <prefix> <name...>
-    file="$1"; prefix="$2"; shift 2
-    for name in "$@"; do
-        sed -i "s/\bppc_${name}\b/${prefix}_${name}/g" "$file"
+rename_fns() {
+    # rename_fns <file> <prefix> <name...> -- the program's own functions.
+    # These take the *shared* prefix: for a multi-object test the caller
+    # in one file has to keep resolving to the callee in the other.
+    rn_file="$1"; rn_prefix="$2"; shift 2
+    for rn_name in "$@"; do
+        sed -i "s/\bppc_${rn_name}\b/${rn_prefix}_${rn_name}/g" "$rn_file"
     done
-    sed -i "s/\bppc_init_globals\b/${prefix}_init_globals/g" "$file"
-    sed -i "s/\bppc_dispatch\b/${prefix}_dispatch/g" "$file"
-    # Emitted into every translation unit by the current recompiler, so
-    # it collides across files exactly like the three above. The
-    # generated files committed before 2026-08-27 predate it, which is
-    # why this only started failing to link once they were regenerated.
-    sed -i "s/\bppc_run_static_initializers\b/${prefix}_run_static_initializers/g" "$file"
+}
+
+rename_boilerplate() {
+    # rename_boilerplate <file> <prefix> -- the three functions recomp
+    # emits into every translation unit. These take a *per-file* prefix,
+    # since two files belonging to the same test still each define their
+    # own copy. ppc_run_static_initializers in particular is emitted by
+    # the current recompiler and not by the one that produced the files
+    # committed before 2026-08-27, which is why the collision only
+    # appeared once they were regenerated.
+    bp_file="$1"; bp_prefix="$2"
+    [ -f "$bp_file" ] || { echo "rename_boilerplate: no such file: $bp_file" >&2; exit 1; }
+    sed -i "s/\bppc_init_globals\b/${bp_prefix}_init_globals/g" "$bp_file"
+    sed -i "s/\bppc_dispatch\b/${bp_prefix}_dispatch/g" "$bp_file"
+    sed -i "s/\bppc_run_static_initializers\b/${bp_prefix}_run_static_initializers/g" "$bp_file"
 }
 
 gen_test() {
     # gen_test <prefix> <testdata-name> <opt> <fn-names...>
-    prefix="$1"; name="$2"; opt="$3"; shift 3
-    (cd "$BLASTER" && testdata/build_ppc.sh "testdata/$name.c" "$WORK/${prefix}.o" "$opt" >/dev/null)
-    "$RECOMP" "$WORK/${prefix}.o" -o "$OUTDIR/generated_${prefix}.c"
-    rename_syms "$OUTDIR/generated_${prefix}.c" "$prefix" "$@"
-    echo "wrote $OUTDIR/generated_${prefix}.c"
+    gt_prefix="$1"; gt_name="$2"; gt_opt="$3"; shift 3
+    (cd "$BLASTER" && testdata/build_ppc.sh "testdata/$gt_name.c" "$WORK/${gt_prefix}.o" "$gt_opt" >/dev/null)
+    "$RECOMP" "$WORK/${gt_prefix}.o" -o "$OUTDIR/generated_${gt_prefix}.c"
+    rename_fns "$OUTDIR/generated_${gt_prefix}.c" "$gt_prefix" "$@"
+    rename_boilerplate "$OUTDIR/generated_${gt_prefix}.c" "$gt_prefix"
+    echo "wrote $OUTDIR/generated_${gt_prefix}.c"
+}
+
+gen_multifile() {
+    # gen_multifile <prefix> -- testdata/multifile_{a,b}.c, the one test
+    # made of two separate objects: b's compute() calls a's helper().
+    # Mirrors verify.sh's own pipeline, --extern-globals on the first
+    # object included. Both files share the function prefix so that call
+    # keeps resolving, but each gets its own boilerplate prefix.
+    gm_prefix="$1"
+    (cd "$BLASTER" && testdata/build_ppc.sh testdata/multifile_a.c "$WORK/${gm_prefix}_a.o" -O0 >/dev/null)
+    (cd "$BLASTER" && testdata/build_ppc.sh testdata/multifile_b.c "$WORK/${gm_prefix}_b.o" -O0 >/dev/null)
+    "$RECOMP" --extern-globals "$WORK/${gm_prefix}_a.o" -o "$OUTDIR/generated_${gm_prefix}_a.c"
+    "$RECOMP" "$WORK/${gm_prefix}_b.o" -o "$OUTDIR/generated_${gm_prefix}_b.c"
+    rename_fns "$OUTDIR/generated_${gm_prefix}_a.c" "$gm_prefix" helper compute
+    rename_fns "$OUTDIR/generated_${gm_prefix}_b.c" "$gm_prefix" helper compute
+    rename_boilerplate "$OUTDIR/generated_${gm_prefix}_a.c" "${gm_prefix}_a"
+    rename_boilerplate "$OUTDIR/generated_${gm_prefix}_b.c" "${gm_prefix}_b"
+    echo "wrote $OUTDIR/generated_${gm_prefix}_{a,b}.c"
 }
 
 gen_test t1_arithmetic arithmetic   -O0 add compute
@@ -94,6 +123,26 @@ gen_test t6_andi_lwzu   andi_lwzu   -O1 compute
 gen_test t7_cond_return cond_return -O1 guarded
 gen_test t8_addis_frsp  addis_frsp  -O1 compute
 gen_test t9_bss_large   bss_large   -O0 fill_and_check
+
+# Everything else blaster's verify.sh covers under QEMU. Added
+# 2026-08-27 after noticing the on-hardware suite ran nine of the
+# twenty-three programs verify.sh runs -- the console was checking a
+# minority of what the emulator checks. Optimisation levels match
+# verify.sh's own pipelines.
+gen_test t10_bitops            bitops            -O0 compute
+gen_test t11_rotate            rotate            -O1 compute
+gen_test t12_carry             carry             -O0 compute
+gen_test t13_division          division          -O0 compute
+gen_test t14_indexed           indexed           -O0 compute
+gen_test t15_fcmp              fcmp              -O0 compute
+gen_test t16_mulhw             mulhw             -O1 compute
+gen_test t17_double            double            -O0 compute
+gen_test t18_misc_bitops       misc_bitops       -O0 compute
+gen_test t19_mixed_double      mixed_double      -O0 compute
+gen_test t20_globals           globals           -O0 compute
+gen_test t21_multifunc_globals multifunc_globals -O0 bump read_shared compute
+gen_test t22_manyargs          manyargs          -O0 sum9 compute
+gen_multifile t23_multifile
 
 cp "$CONQUERTRON/include/ppc_runtime.h" "$NATIVE_ROOT/include/"
 echo "done"

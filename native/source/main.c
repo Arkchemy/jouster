@@ -55,6 +55,25 @@ void t8_addis_frsp_init_globals(PpcContext *ctx);
 void t9_bss_large_fill_and_check(PpcContext *ctx);
 void t9_bss_large_init_globals(PpcContext *ctx);
 
+// Everything else blaster's verify.sh covers under QEMU. Added
+// 2026-08-27: the console had been checking nine of the twenty-three
+// programs the emulator checks, which is the wrong way round -- QEMU is
+// the proxy and the console is the thing being certified.
+void t10_bitops_compute(PpcContext *ctx);            void t10_bitops_init_globals(PpcContext *ctx);
+void t11_rotate_compute(PpcContext *ctx);            void t11_rotate_init_globals(PpcContext *ctx);
+void t12_carry_compute(PpcContext *ctx);             void t12_carry_init_globals(PpcContext *ctx);
+void t13_division_compute(PpcContext *ctx);          void t13_division_init_globals(PpcContext *ctx);
+void t14_indexed_compute(PpcContext *ctx);           void t14_indexed_init_globals(PpcContext *ctx);
+void t15_fcmp_compute(PpcContext *ctx);              void t15_fcmp_init_globals(PpcContext *ctx);
+void t16_mulhw_compute(PpcContext *ctx);             void t16_mulhw_init_globals(PpcContext *ctx);
+void t17_double_compute(PpcContext *ctx);            void t17_double_init_globals(PpcContext *ctx);
+void t18_misc_bitops_compute(PpcContext *ctx);       void t18_misc_bitops_init_globals(PpcContext *ctx);
+void t19_mixed_double_compute(PpcContext *ctx);      void t19_mixed_double_init_globals(PpcContext *ctx);
+void t20_globals_compute(PpcContext *ctx);           void t20_globals_init_globals(PpcContext *ctx);
+void t21_multifunc_globals_compute(PpcContext *ctx); void t21_multifunc_globals_init_globals(PpcContext *ctx);
+void t22_manyargs_compute(PpcContext *ctx);
+void t23_multifile_compute(PpcContext *ctx);         void t23_multifile_b_init_globals(PpcContext *ctx);
+
 static FILE *g_log;
 static int g_pass_count, g_fail_count;
 
@@ -254,6 +273,185 @@ static void runBssLarge(void) {
     checkResult("t9_bss_large", (int32_t)ctx.r[3], 45483);
 }
 
+// Ground truth for every test below is the same as verify.sh's: a plain
+// native gcc build of the original testdata source, run and compared.
+// Inputs match blaster's gen_harness_*.c exactly, so a disagreement
+// between this suite and verify.sh means the console and QEMU disagree,
+// not that the two suites are asking different questions.
+
+static void checkResult64(const char *name, int64_t got, int64_t want) {
+    int pass = (got == want);
+    if (pass) g_pass_count++; else g_fail_count++;
+    checkpoint("[%s] got=%lld want=%lld -- %s", name, (long long)got, (long long)want,
+               pass ? "PASS" : "FAIL");
+}
+
+#define SETUP_CTX() \
+    static PpcContext ctx; \
+    static PpcSharedMemory ctx_shared; \
+    ctx.shared = &ctx_shared; \
+    ctx.r[1] = PPC_MEM_SIZE - 256
+
+static void runBitops(void) {
+    checkpoint("running t10_bitops (bitwise/shift/byte-halfword)...");
+    SETUP_CTX();
+    t10_bitops_init_globals(&ctx);
+    t10_bitops_compute(&ctx);
+    checkResult("t10_bitops", (int32_t)ctx.r[3], 489503770);
+}
+
+static void runRotate(void) {
+    checkpoint("running t11_rotate (rlwinm/rlwimi/clrlwi/rotlwi, -O1)...");
+    SETUP_CTX();
+    t11_rotate_init_globals(&ctx);
+    ctx.r[3] = 9;
+    t11_rotate_compute(&ctx);
+    // Result is unsigned and exceeds INT32_MAX, so compare as 64-bit
+    // rather than sign-flipping it into a confusing negative.
+    checkResult64("t11_rotate", (int64_t)ctx.r[3], 2140813910LL);
+}
+
+static void runCarry(void) {
+    checkpoint("running t12_carry (64-bit arithmetic / carry)...");
+    SETUP_CTX();
+    t12_carry_init_globals(&ctx);
+    ctx.r[3] = 0x12345678u;
+    ctx.r[4] = 0x9ABCDEF0u;
+    t12_carry_compute(&ctx);
+    // A 64-bit return straddles r3:r4 in the real ABI -- the only test
+    // here whose result does not fit one register.
+    int64_t got = ((int64_t)(int32_t)ctx.r[3] << 32) | (uint32_t)ctx.r[4];
+    checkResult64("t12_carry", got, 2623536934927580641LL);
+}
+
+static void runDivision(void) {
+    checkpoint("running t13_division (divw/divwu/modulo)...");
+    SETUP_CTX();
+    t13_division_init_globals(&ctx);
+    ctx.r[3] = 17; ctx.r[4] = 5; ctx.r[5] = 100; ctx.r[6] = 7;
+    t13_division_compute(&ctx);
+    checkResult("t13_division", (int32_t)ctx.r[3], 19);
+}
+
+static void runIndexed(void) {
+    checkpoint("running t14_indexed (indexed loads over a 150-entry array)...");
+    SETUP_CTX();
+    t14_indexed_init_globals(&ctx);
+    const uint32_t arr_addr = 0x1000;
+    for (int i = 0; i < 150; i++) {
+        ppc_store_u32(&ctx, arr_addr + (uint32_t)i * 4, (uint32_t)(i - 50));
+    }
+    ctx.r[3] = arr_addr;
+    ctx.r[4] = 120;
+    t14_indexed_compute(&ctx);
+    checkResult("t14_indexed", (int32_t)ctx.r[3], 1141);
+}
+
+static void runFcmp(void) {
+    checkpoint("running t15_fcmp (float compare/branch)...");
+    SETUP_CTX();
+    t15_fcmp_init_globals(&ctx);
+    ctx.f[1] = 3.5; ctx.f[2] = 7.25;
+    t15_fcmp_compute(&ctx);
+    // -3.75 exactly; x100 keeps the compare exact rather than fuzzy.
+    checkResult("t15_fcmp (x100)", (int32_t)((float)ctx.f[1] * 100.0f), -375);
+}
+
+static void runMulhw(void) {
+    checkpoint("running t16_mulhw (mulhw/mulhwu high-word multiply, -O1)...");
+    SETUP_CTX();
+    t16_mulhw_init_globals(&ctx);
+    ctx.r[3] = (uint32_t)12345678;
+    ctx.r[4] = 4000000000u;
+    t16_mulhw_compute(&ctx);
+    checkResult("t16_mulhw", (int32_t)ctx.r[3], 573192239);
+}
+
+static void runDouble(void) {
+    checkpoint("running t17_double (double-precision arithmetic)...");
+    SETUP_CTX();
+    t17_double_init_globals(&ctx);
+    ctx.f[1] = 3.5; ctx.f[2] = 7.25;
+    t17_double_compute(&ctx);
+    // 28.625 exactly (a sum of powers of two), so x1000 stays exact.
+    checkResult("t17_double (x1000)", (int32_t)(ctx.f[1] * 1000.0), 28625);
+}
+
+static void runMiscBitops(void) {
+    checkpoint("running t18_misc_bitops (cntlzw/extsb/nand/eqv and friends)...");
+    SETUP_CTX();
+    t18_misc_bitops_init_globals(&ctx);
+    ctx.r[3] = 0x0F0F0F0Fu;
+    ctx.r[4] = 0xFF00FF00u;
+    t18_misc_bitops_compute(&ctx);
+    checkResult("t18_misc_bitops", (int32_t)ctx.r[3], 15729884);
+}
+
+static void runMixedDouble(void) {
+    checkpoint("running t19_mixed_double (double + integer array, mixed ABI)...");
+    SETUP_CTX();
+    t19_mixed_double_init_globals(&ctx);
+    ctx.f[1] = -3.5;
+    const uint32_t arr_addr = 0x1000;
+    static const int32_t arr[5] = {1, 2, 3, 4, 5};
+    for (int i = 0; i < 5; i++) {
+        ppc_store_u32(&ctx, arr_addr + (uint32_t)i * 4, (uint32_t)arr[i]);
+    }
+    ctx.r[3] = arr_addr;
+    ctx.r[4] = 5;
+    t19_mixed_double_compute(&ctx);
+    // 18.5 exactly; x2 makes it a whole number with no rounding at all.
+    checkResult("t19_mixed_double (x2)", (int32_t)(ctx.f[1] * 2.0), 37);
+}
+
+static void runGlobals(void) {
+    checkpoint("running t20_globals (.data/.bss global access)...");
+    SETUP_CTX();
+    t20_globals_init_globals(&ctx);
+    static const int32_t idxs[3] = {0, 1, 3};
+    static const int32_t expect[3] = {110, 121, 144};
+    int allPass = 1;
+    for (int i = 0; i < 3; i++) {
+        ctx.r[3] = (uint32_t)idxs[i];
+        t20_globals_compute(&ctx);
+        int32_t got = (int32_t)ctx.r[3];
+        int pass = (got == expect[i]);
+        if (!pass) allPass = 0;
+        checkpoint("  compute(%d) got=%d want=%d -- %s", (int)idxs[i], (int)got, (int)expect[i],
+                   pass ? "ok" : "WRONG");
+    }
+    if (allPass) g_pass_count++; else g_fail_count++;
+    checkpoint("[t20_globals] -- %s", allPass ? "PASS" : "FAIL");
+}
+
+static void runMultifuncGlobals(void) {
+    checkpoint("running t21_multifunc_globals (shared globals across functions)...");
+    SETUP_CTX();
+    t21_multifunc_globals_init_globals(&ctx);
+    ctx.r[3] = 10; ctx.r[4] = 20;
+    t21_multifunc_globals_compute(&ctx);
+    checkResult("t21_multifunc_globals", (int32_t)ctx.r[3], 35);
+}
+
+static void runManyargs(void) {
+    checkpoint("running t22_manyargs (arguments spilling past r10 onto the stack)...");
+    SETUP_CTX();
+    t22_manyargs_compute(&ctx);
+    checkResult("t22_manyargs", (int32_t)ctx.r[3], 45);
+}
+
+static void runMultifile(void) {
+    checkpoint("running t23_multifile (call across two separately recompiled objects)...");
+    SETUP_CTX();
+    // Only file b defines globals; a was recompiled with --extern-globals
+    // precisely so the two objects share one set rather than each
+    // carrying its own.
+    t23_multifile_b_init_globals(&ctx);
+    ctx.r[3] = 5;
+    t23_multifile_compute(&ctx);
+    checkResult("t23_multifile", (int32_t)ctx.r[3], 35);
+}
+
 static int g_figures_found;
 
 static void onFigureFound(const SkylandersDumpEntry *entry, void *user_data) {
@@ -349,6 +547,20 @@ int main(int argc, char *argv[]) {
     runCondReturn();
     runAddisFrsp();
     runBssLarge();
+    runBitops();
+    runRotate();
+    runCarry();
+    runDivision();
+    runIndexed();
+    runFcmp();
+    runMulhw();
+    runDouble();
+    runMiscBitops();
+    runMixedDouble();
+    runGlobals();
+    runMultifuncGlobals();
+    runManyargs();
+    runMultifile();
     runFigureScan();
     runNfcRead();
 
