@@ -1,0 +1,96 @@
+Jouster game harness (game/Jouster.nro), build stamp "Aug 27 2026
+08:09:11", run on real modded Switch hardware for the full 120s / 7200
+frames and exited on its own -- no hang, no crash. Raw SD-card log
+(sdmc:/switch/Jouster/game-results.log, 526KB / 277 lines) not
+reproduced in full here; the frame lines are ~4KB each. Key events and
+final state below.
+
+IMPORTANT -- the instrumentation that produced this log is NOT in any
+repository. The probe labels in it (NULL TABLE, NULL REGISTRY ENTRY,
+NULL OBJECT, BADBUF, FOREIGN REALLOC, FOREIGN FREE, INTEGRITY) appear
+nowhere in jouster or conquertron, and a search of the whole laptop
+found no source containing them. Only game/source/main.c's generic
+emitter survives. Whatever tree built this .nro is gone, so this log's
+output can no longer be reproduced from a clean checkout, and the probes
+would have to be written again.
+
+FINAL STATE
+
+  globals_init=1 static_init=1 game_started=1 game_done=0
+  sti_idx=113 last_pc=0x21a6b5c caller_lr=0x218a62c calls=78154
+  mem: fail=2268 free=47 reuse=42
+  report_fmt="Memory pool (index %d) failed integrity check."
+  append_str="."
+
+Two things changed since the 2026-08-24 sessions. The reporter no longer
+hangs: append_str is now "." rather than garbage at 0x640000, and the
+run reached its own 7200-frame exit instead of stopping dead. And
+fail=2268 free=47 reuse=42 is unchanged from 24 Aug, so the allocation
+picture did not move.
+
+DECODING NOTE
+
+The probes reuse the allocation emitter, so four unrelated values are
+carried in fields named requested / heap_base / heap_size / heap_used,
+positionally matching each label's own "A / B / C / D" list. That
+mapping is confirmed rather than assumed: FOREIGN REALLOC's fourth
+packed value is 34910052 = 0x214AF64, which is exactly the caller_lr the
+same line prints separately.
+
+TWO INDEPENDENT FAILURES, NOT ONE
+
+1. Static initialiser 87 exhausts the ExpHeap.
+
+   Every allocation event in the static-init phase carries sti_idx=87,
+   last_pc=0x2583420, caller_lr=0x257f2d8, and requested=131072 exactly.
+   The DEFHEAP arena is reported spent (heap_used=0 against a 1,040MB
+   region) and each 128KB request falls through to the ExpHeap at
+   0x4000000, which climbs 131,136 -> 5,245,440 across 40 logged events
+   before suppression, and is later found full at heap_used=121,563,072
+   of 121,634,816. That is roughly 927 allocations of 128KB from one
+   initialiser, all from the same call site, none of them freed. This is
+   the same "MEM2 fills to ~100% at every size from 32MB to 928MB"
+   behaviour recorded on 24 Aug, now pinned to a single initialiser and
+   a single call site rather than to a size.
+
+2. The registry table itself is NULL -- not an unregistered entry in it.
+
+   This is a correction to the 2026-08-24 (cont. 50) conclusion, which
+   read the fault as "a NULL entry in a global registry" and asked for a
+   build that logs the table base and index so the missing entry could
+   be named. This is that build, and it names them:
+
+     NULL REGISTRY ENTRY: table=0x0  index=0  byteoff=0  caller_lr=0x215DBC0
+
+   Both the table pointer and the index are zero. So there is no entry
+   to name: the lookup is not indexing past the end of a populated
+   registry, it is dereferencing a registry pointer that was never
+   populated. That moves the question from "which type failed to
+   register" to "which global holds this table, and what was supposed to
+   write it" -- a different search, and a narrower one.
+
+   The rest of the chain matches 24 Aug exactly:
+
+     NULL TABLE:   dispatchTarget=0 thisObj=0 result=0 result+0x14=0
+     NULL OBJECT:  reallocateFieldMemory(obj=0) metafield=0 pool=0 caller_lr=0x215DC18
+     BADBUF:       propsObj=9 flagsAndSize=0x5FFFF00 buffer=0x7000000 caller_lr=0x2184EF0
+     FOREIGN REALLOC: pool=0x3000184 ptr=0x7000000 size=0 caller_lr=0x214AF64
+     FOREIGN FREE:    pool=0x3000184 ptr=0x7000000 poolbuf=0x30001F0 caller_lr=0x216F900
+     INTEGRITY:       pool=0x3000184 index=0 vtable+0x11c target=0x217CA84 verdict=1
+
+   propsObj=9 is the obj+fieldOffset = 0+9 already traced on 24 Aug, and
+   0x217CA84 is the same "not a function entry at all" vtable slot
+   target recorded then -- 312 bytes into
+   igBidirectionalHeapMemoryPool::checkIntegrity.
+
+OTHER OBSERVATIONS
+
+  - bramble_mem_bootstrap_heap_init wrote handle 0x3000000 and read it
+    back unchanged.
+  - FSOpenFile found movies/bash.mov on the SD card (handle=1) and
+    BinkOpen still returned NULL, so that is a real decode/open failure
+    rather than a missing file.
+  - A write watch was armed on 0x30001fc (TLSF control+0xc) and did not
+    report firing anywhere in the log.
+  - Guest mem[] is 1024MB; process total=3189MB used=3185MB. This build
+    is application-mode sized and would not fit applet mode.
