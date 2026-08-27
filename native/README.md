@@ -13,7 +13,7 @@ affects projects, like Viridite, that need portlibs).
 ## What it does
 
 `source/main.c` is a standard libnx console app (via `consoleInit`) that
-runs **nine** of Arkchemy's recompiler test programs — not just one —
+runs **all twenty-three** of Arkchemy's recompiler test programs — not just one —
 against real ARM64 Switch hardware, checking each against the exact same
 known-correct values blaster's `verify.sh` already checks under QEMU-ARM64:
 
@@ -42,6 +42,15 @@ QEMU until then:
 - `t9_bss_large` (`testdata/bss_large.c`) — the real oversized-`.bss`
   address-assignment bug from the actual Skylanders binary, where every
   global past the first 256 bytes silently aliased the next section.
+
+`t10`-`t23`, added the same day, are the rest of what verify.sh runs, so
+the console and QEMU now certify the same set: bitops, rotate, carry,
+division, indexed, fcmp, mulhw, double, misc_bitops, mixed_double,
+globals, multifunc_globals, manyargs, and multifile — the last of
+which is two separately recompiled objects calling across each other.
+Inputs match blaster's `gen_harness_*.c` exactly, so a disagreement
+between the two suites means the console and the emulator disagree,
+rather than that they are asking different questions.
 
 QEMU is a good proxy for "does the recompiled code compute the right
 answer," but it's still an emulator — this is the actual target hardware,
