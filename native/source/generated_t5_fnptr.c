@@ -9,6 +9,9 @@ void t5_fnptr_dispatch(PpcContext *ctx, uint32_t addr);
 void t5_fnptr_init_globals(PpcContext *ctx) {
 }
 
+void t5_fnptr_run_static_initializers(PpcContext *ctx) {
+}
+
 void t5_fnptr_dispatch(PpcContext *ctx, uint32_t addr) {
   switch (addr) {
     case 0u: t5_fnptr_add(ctx); return;
@@ -18,6 +21,9 @@ void t5_fnptr_dispatch(PpcContext *ctx, uint32_t addr) {
 }
 
 void t5_fnptr_add(PpcContext *ctx) {
+  g_ppc_last_caller_lr = ctx->lr;
+  g_ppc_current_pc = 0x0u; g_ppc_fn_call_count++;
+  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
   /* 0: stwu r1, -0x20(r1) */
   ppc_store_u32(ctx, ctx->r[1] + (int32_t)-32, ctx->r[1]);
   ctx->r[1] = ctx->r[1] + (int32_t)-32;
@@ -43,6 +49,9 @@ void t5_fnptr_add(PpcContext *ctx) {
   return;
 }
 void t5_fnptr_mul(PpcContext *ctx) {
+  g_ppc_last_caller_lr = ctx->lr;
+  g_ppc_current_pc = 0x2cu; g_ppc_fn_call_count++;
+  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
   /* 2c: stwu r1, -0x20(r1) */
   ppc_store_u32(ctx, ctx->r[1] + (int32_t)-32, ctx->r[1]);
   ctx->r[1] = ctx->r[1] + (int32_t)-32;
@@ -68,62 +77,72 @@ void t5_fnptr_mul(PpcContext *ctx) {
   return;
 }
 void t5_fnptr_compute(PpcContext *ctx) {
+  g_ppc_last_caller_lr = ctx->lr;
+  g_ppc_current_pc = 0x58u; g_ppc_fn_call_count++;
+  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
   /* 58: mflr r0 */
   ctx->r[0] = ctx->lr;
-  /* 5c: stwu r1, -0x20(r1) */
-  ppc_store_u32(ctx, ctx->r[1] + (int32_t)-32, ctx->r[1]);
-  ctx->r[1] = ctx->r[1] + (int32_t)-32;
-  /* 60: stw r31, 0x1c(r1) */
-  ppc_store_u32(ctx, ctx->r[1] + (int32_t)28, ctx->r[31]);
-  /* 64: stw r0, 0x24(r1) */
-  ppc_store_u32(ctx, ctx->r[1] + (int32_t)36, ctx->r[0]);
+  /* 5c: stwu r1, -0x30(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)-48, ctx->r[1]);
+  ctx->r[1] = ctx->r[1] + (int32_t)-48;
+  /* 60: stw r31, 0x2c(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)44, ctx->r[31]);
+  /* 64: stw r0, 0x34(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)52, ctx->r[0]);
   /* 68: mr r31, r1 */
   ctx->r[31] = ctx->r[1];
-  /* 6c: stw r3, 0x18(r31) */
-  ppc_store_u32(ctx, ctx->r[31] + (int32_t)24, ctx->r[3]);
-  /* 70: stw r4, 0x14(r31) */
-  ppc_store_u32(ctx, ctx->r[31] + (int32_t)20, ctx->r[4]);
-  /* 74: stw r5, 0x10(r31) */
-  ppc_store_u32(ctx, ctx->r[31] + (int32_t)16, ctx->r[5]);
-  /* 78: lwz r5, 0x10(r31) */
-  ctx->r[5] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)16);
+  /* 6c: stw r3, 0x28(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)40, ctx->r[3]);
+  /* 70: stw r4, 0x24(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)36, ctx->r[4]);
+  /* 74: stw r5, 0x20(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)32, ctx->r[5]);
+  /* 78: lwz r4, 0x20(r31) */
+  ctx->r[4] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)32);
   /* 7c: lis r3, 0 */
   ctx->r[3] = 0u; /* &add */
   /* 80: addi r3, r3, 0 */
   ctx->r[3] = ctx->r[3];
-  /* 84: lis r4, 0 */
-  ctx->r[4] = 44u; /* &mul */
-  /* 88: addi r4, r4, 0 */
-  ctx->r[4] = ctx->r[4];
-  /* 8c: cmplwi r5, 0 */
-  ppc_cmplw(ctx, ctx->r[5], 0u);
-  /* 90: beq 0x9c */
-  if (ctx->cr0_eq) goto L_9c;
-  /* 94: ori r3, r4, 0 */
-  ctx->r[3] = ctx->r[4] | 0u;
-  /* 98: b 0x9c */
-  goto L_9c;
-  L_9c: ;
-  /* 9c: stw r3, 0xc(r31) */
-  ppc_store_u32(ctx, ctx->r[31] + (int32_t)12, ctx->r[3]);
-  /* a0: lwz r5, 0xc(r31) */
-  ctx->r[5] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)12);
+  /* 84: stw r3, 0x14(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)20, ctx->r[3]);
+  /* 88: lis r3, 0 */
+  ctx->r[3] = 44u; /* &mul */
+  /* 8c: addi r3, r3, 0 */
+  ctx->r[3] = ctx->r[3];
+  /* 90: cmplwi r4, 0 */
+  ppc_cmplw(ctx, ctx->r[4], 0u);
+  /* 94: stw r3, 0x18(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)24, ctx->r[3]);
+  /* 98: bne 0xa4 */
+  if (!ctx->cr0_eq) goto L_a4;
+  /* 9c: lwz r3, 0x14(r31) */
+  ctx->r[3] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)20);
+  /* a0: stw r3, 0x18(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)24, ctx->r[3]);
+  L_a4: ;
   /* a4: lwz r3, 0x18(r31) */
   ctx->r[3] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)24);
-  /* a8: lwz r4, 0x14(r31) */
-  ctx->r[4] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)20);
-  /* ac: mtctr r5 */
+  /* a8: stw r3, 0x1c(r31) */
+  ppc_store_u32(ctx, ctx->r[31] + (int32_t)28, ctx->r[3]);
+  /* ac: lwz r5, 0x1c(r31) */
+  ctx->r[5] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)28);
+  /* b0: lwz r3, 0x28(r31) */
+  ctx->r[3] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)40);
+  /* b4: lwz r4, 0x24(r31) */
+  ctx->r[4] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)36);
+  /* b8: mtctr r5 */
   ctx->ctr = ctx->r[5];
-  /* b0: bctrl  */
+  /* bc: bctrl  */
+  ctx->lr = 0xc0u;
   t5_fnptr_dispatch(ctx, ctx->ctr);
-  /* b4: lwz r0, 0x24(r1) */
-  ctx->r[0] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)36);
-  /* b8: lwz r31, 0x1c(r1) */
-  ctx->r[31] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)28);
-  /* bc: addi r1, r1, 0x20 */
-  ctx->r[1] = ctx->r[1] + (uint32_t)(int32_t)32;
-  /* c0: mtlr r0 */
+  /* c0: lwz r0, 0x34(r1) */
+  ctx->r[0] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)52);
+  /* c4: lwz r31, 0x2c(r1) */
+  ctx->r[31] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)44);
+  /* c8: addi r1, r1, 0x30 */
+  ctx->r[1] = ctx->r[1] + (uint32_t)(int32_t)48;
+  /* cc: mtlr r0 */
   ctx->lr = ctx->r[0];
-  /* c4: blr  */
+  /* d0: blr  */
   return;
 }

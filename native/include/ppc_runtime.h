@@ -1,10 +1,147 @@
 #ifndef ARKCHEMY_PPC_RUNTIME_H
 #define ARKCHEMY_PPC_RUNTIME_H
 
+/* Some cafeos_*.h shims (e.g. cafeos_coreinit_sync.h's real pthread-
+ * backed OSMutex/OSEvent/OSSemaphore) need POSIX APIs (clock_gettime,
+ * nanosleep, gmtime_r, pthread_mutexattr_settype/PTHREAD_MUTEX_RECURSIVE,
+ * ...) beyond ISO C. glibc feature-test macros only take effect if
+ * defined before the *first* system header of the translation unit is
+ * ever processed (glibc's <features.h> computes and locks its __USE_*
+ * set once, then no-ops on repeat inclusion) -- since this header is
+ * always the first thing every cafeos_*.h includes, and in turn is
+ * always the first #include in any translation unit that pulls in more
+ * than one cafeos_*.h file, defining it here (rather than redundantly,
+ * and too late to matter, in cafeos_coreinit_sync.h alone) is what
+ * actually makes it reliably apply regardless of header include order. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Real, always-on, cheap "where is execution right now" tracker: codegen.cpp
+ * emits a one-line write to this at the start of every real recompiled
+ * function (see its own comment there), so a diagnostic log (or a debugger)
+ * can see which real PPC function address is currently executing without
+ * any per-instruction tracing. Real problem this specific form solves: this
+ * header is included by every one of a real many-file build's separately-
+ * compiled translation units (switch/game/'s 213 generated_*.c files), each
+ * of which needs to update and a single *shared* value that switch/game/'s
+ * own main.c (yet another, different translation unit) can read -- the
+ * usual fix for that elsewhere in this project (extern here + one real
+ * definition in cafeos_state.c) would mean every one of this project's much
+ * smaller single-translation-unit programs (switch/native/, switch/gx2_test/,
+ * and every tools/verify.sh test harness) would also need to link
+ * cafeos_state.c just to satisfy this one symbol, for no real benefit to
+ * them. `__attribute__((weak))` sidesteps that: every translation unit gets
+ * its own real, tentative definition, and the linker coalesces all of them
+ * that end up in the same final binary into exactly one shared instance
+ * automatically -- correct, single-instance behavior in a real multi-file
+ * build, and just as correct (trivially, since there's only one TU to
+ * coalesce) in a single-file one, with no separate definition file needed
+ * either way. Supported by every real toolchain this project's own builds
+ * already depend on (GNU ld via devkitA64, and clang/lld via zig cc). */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_current_pc = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ppc_fn_call_count = 0;
+
+/* Same real reasoning as g_ppc_current_pc above, added 2026-08-20 for a
+ * real, specific need it doesn't cover on its own: ppc_run_static_
+ * initializers (see recomp's own main.cpp) calls up to 114 real,
+ * completely untested C++ static initializers in a flat sequence -- if
+ * one of them genuinely hangs, g_ppc_current_pc alone only shows the
+ * last *recompiled* function entered, which is often a tiny, widely-
+ * shared linker helper (e.g. a real "_savegprN"/"_restgprN"-style
+ * register-spill routine used by hundreds of unrelated call sites) that
+ * gives no clue which of the 114 initializers is actually stuck. This
+ * index is set right before each of the 114 calls, so combined with
+ * g_ppc_current_pc it answers "stuck inside initializer #N specifically"
+ * instead of just "stuck somewhere". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_static_init_index = 0xFFFFFFFFu;
+
+/* Real "who called the currently-executing function" tracker -- see
+ * codegen.cpp's own comment on why g_ppc_current_pc alone isn't enough
+ * once a hang is inside a tiny, universally-shared helper (a real
+ * register-spill routine, in the specific real case this was added
+ * for) that hundreds of unrelated call sites all call identically. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_last_caller_lr = 0;
+
+/* Bounded log of real indirect/virtual dispatch targets seen within a
+ * specific real call-count window, 2026-08-24 -- set at ppc_dispatch()'s
+ * own entry (a hand-inserted one-line edit in its generated_*.c
+ * definition, not a per-instruction watch, so no risk of the
+ * buffer/regen reliability issues this session's other hand-inserted
+ * watches ran into). Neither a plain overwriting "last dispatch" global
+ * nor an unconditional "first N ever" log works here: a plain global
+ * gets overwritten by millions of later unrelated steady-state
+ * dispatches before any checkpoint print sees it, and logging
+ * unconditionally from boot fills the whole cap with static-init-phase
+ * noise (confirmed on real hardware, 2026-08-24: all 64 slots used up
+ * long before reaching the real target calls around g_ppc_fn_call_count
+ * ~21100-21150) -- gating recording to ARKCHEMY_DISPATCH_LOG_WINDOW_LO/HI
+ * instead keeps only the window this session actually needs to inspect
+ * (initializePool's own two vtable-dispatched capacity-reservation
+ * calls, hit at call 21131 per w0) regardless of how long the run
+ * continues before or after it. Answers a specific question: does a
+ * particular vtable-dispatched call resolve to a real function (a value
+ * matching a real recompiled address) or 0/garbage (the vtable slot
+ * backing it was never populated). */
+#define ARKCHEMY_DISPATCH_LOG_WINDOW_LO 21100u
+
+
+
+/* Generic "dump r3-r6 the instant a specific real function is entered"
+ * mechanism, added 2026-08-20 hunting a real hang inside
+ * Core::igStringPool::remove: g_ppc_current_pc alone says *that* the
+ * function was entered, not what real arguments it was called with, and
+ * this one has no internal call to any other traced function (a pure
+ * pointer-chase loop over its own hash-bucket linked list), so nothing
+ * else in the existing diagnostic set can show the real 'this'/item/
+ * bucket-index values it's looping on. codegen.cpp's function prologue
+ * checks every one of ARKCHEMY_WATCH_SLOTS real addresses on every real
+ * function call and snapshots r3-r6 (plus the real g_ppc_fn_call_count
+ * at that moment, and a running hit count) into whichever slot's own
+ * `pc` field matches -- cheap enough (a handful of comparisons per
+ * real function call) to leave compiled in permanently.
+ *
+ * Widened from a single watch point to 4 slots the same day, once the
+ * first hit (a NULL `this` reaching `igStringPool::remove`) raised a
+ * new, more specific question needing several real call sites'
+ * arguments correlated *together* in one real run: does
+ * `Core::igStringPool::bootstrapInitialize` (the real singleton
+ * constructor) actually run before `Core::igStringPool::getDefault`
+ * (the real accessor) is ever called, and what does getDefault() end
+ * up returning each time. */
+#define ARKCHEMY_WATCH_SLOTS 4
+typedef struct {
+    volatile uint32_t pc;         /* 0xFFFFFFFF = unused/never matches */
+    volatile uint32_t r3, r4, r5, r6;
+    volatile uint32_t hit_count;
+    volatile uint64_t last_hit_call_count; /* g_ppc_fn_call_count at last hit, for ordering slots against each other */
+} ArkchemyWatchSlot;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+ArkchemyWatchSlot g_ppc_watch[ARKCHEMY_WATCH_SLOTS] = {
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+};
 
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
@@ -58,6 +195,39 @@ typedef struct PpcContext {
     uint8_t cr0_lt;
     uint8_t cr0_gt;
     uint8_t cr0_eq;
+    /* Real CR1-CR7 field bits (LT/GT/EQ; SO is never tracked, same real
+     * gap CR0's own SO already has). Added additively, alongside the
+     * existing `cr0_lt`/`cr0_gt`/`cr0_eq` fields above (left completely
+     * untouched -- every already-proven cr0-only codegen path keeps
+     * using them exactly as before), rather than folding cr0 into this
+     * array too, to avoid touching heavily-tested existing code for no
+     * real benefit. Index 0 of each array is real but unused (cr0 has
+     * its own dedicated fields above instead) -- kept anyway so `crN`
+     * maps directly to array index N with no off-by-one, matching
+     * codegen.cpp's own real crN address-to-index arithmetic
+     * (`reg - PPC_REG_CR0LT` etc., confirmed contiguous in real
+     * Capstone's own `ppc.h` register enum). Real motivation: the real
+     * PowerPC SVR4 ABI's own varargs convention has a real caller set
+     * CR1's EQ bit via `crclr`/`cror`/`crmove` to tell a vararg callee
+     * whether floating-point register arguments were passed -- real,
+     * confirmed-live code in the actual Skylanders binary this project
+     * targets (GHS-compiled varargs prologues), not a hypothetical. */
+    uint8_t cr_lt[8];
+    uint8_t cr_gt[8];
+    uint8_t cr_eq[8];
+    /* Real GQR0-GQR7 (Graphics Quantization Registers), SPRs 912-919 --
+     * real hardware state controlling psq_l/psq_lu/psq_st/psq_stu's
+     * real quantized (non-float) paired-single formats (see
+     * ppc_psq_store_quantized/ppc_psq_load_quantized below for the real
+     * bit layout/semantics, confirmed against Dolphin's real, open-
+     * source Gekko/Broadway CPU emulation -- same real CPU family as
+     * the Wii U's Espresso). Zero-initialized, matching real hardware's
+     * own real post-reset GQR state (type=FLOAT, scale=0, i.e. no
+     * quantization) -- an honest, documented real default, not a
+     * guess, for the common case where nothing in a given recompiled
+     * program ever writes a GQR via mtspr before using a quantized
+     * paired-single load/store. */
+    uint32_t gqr[8];
     uint8_t xer_ca; /* XER carry bit, set by addc/adde (used for multi-word/64-bit arithmetic) */
     /* mftb (move-from-timebase): real code reads this as a free-running
      * hardware cycle counter (profiling, or occasionally a random seed).
@@ -80,9 +250,7 @@ typedef struct PpcContext {
      * but points `shared` at the same block. A single-threaded program
      * (everything so far) just points its one `PpcContext` at its own
      * privately-owned `PpcSharedMemory` -- behaviorally identical to the
-     * old inline array, see `PPC_MEM_SIZE` below for the size (unchanged
-     * at 4MB, still an arbitrary, generous, documented placeholder, not
-     * a claim this matches real Wii U game scale).
+     * old inline array, see `PPC_MEM_SIZE` below for the size.
      *
      * Every existing `PpcContext` consumer (tools/gen_harness*.c,
      * switch/native/source/main.c) already used `static` storage
@@ -97,7 +265,88 @@ typedef struct PpcContext {
     struct PpcSharedMemory *shared;
 } PpcContext;
 
-#define PPC_MEM_SIZE (4 * 1024 * 1024)
+/* Real, found-the-hard-way sizing: the previous 4MB was "an arbitrary,
+ * generous, documented placeholder, not a claim this matches real Wii U
+ * game scale" -- turned out to be a real, severe bug once actually
+ * exercised against the real, complete Skylanders: Spyro's Adventure
+ * binary. `assign_global_addrs` (elf_loader.cpp) lays out that real
+ * game's own .data/.bss/.rodata globals starting at 0x2000, and for
+ * this specific real binary that region runs all the way out to
+ * 0x670b00 (~6.75MB, confirmed by direct instrumentation, not
+ * estimated) -- already bigger than the entire old 4MB guest address
+ * space by itself, before any heap or stack. Every guest memory access
+ * masks its address with `& (PPC_MEM_SIZE - 1)` (see ppc_load_u32 and
+ * friends below), so with the old 4MB size, large stretches of the
+ * real game's own global variables were silently wrapping around and
+ * aliasing on top of *each other*, and on top of the small fixed-
+ * address heap regions cafeos_coreinit_mem.h reserves -- real,
+ * ongoing memory corruption from the moment the game's own static
+ * initializers ran, long before any of its own code had a chance to
+ * misbehave on its own. 128MB gave real breathing room for this
+ * specific game's ~6.75MB of globals, cafeos_coreinit_mem.h's own
+ * MEM1/MEM2 heap regions (see that header's own layout comment), and a
+ * real stack -- still an arbitrary, chosen-for-this-game placeholder,
+ * not a claim this matches real Wii U MEM1/MEM2 scale (which is far
+ * larger), but grounded in this real binary's own measured needs
+ * rather than picked blind.
+ *
+ * Bumped 128MB -> 256MB on 2026-08-21 after real hardware logs caught
+ * the actual root cause of the boot-time igStringPool spin: a
+ * MEMAllocFromExpHeapEx call for 128KB failing over and over against
+ * cafeos_coreinit_mem.h's MEM1 heap, which was sitting at ~16.65MB used
+ * out of only 16MB total. That 16MB MEM1 size was always documented as
+ * an undersized placeholder, not a real Wii U value -- real Wii U MEM1
+ * is 32MB. Doubling MEM1 to the real size needed 16MB more guest
+ * address space than the old 128MB total had room for, and this mask
+ * requires a power of two, so the whole space steps up to 256MB rather
+ * than some tighter number -- see cafeos_coreinit_mem.h's own layout
+ * comment for where that extra room actually goes. */
+/* Raised 256MB -> 512MB, 2026-08-24. Must stay a power of two: every
+ * accessor masks with (PPC_MEM_SIZE - 1).
+ *
+ * Measured reason, not a guess. With the default heap correctly routed
+ * to MEM2, Green Hills libc's sbrk() consumed the entire 96MB MEM2 pool
+ * during static initialisation alone (heap_used 100,582,552 of
+ * 100,663,296) and allocations began failing again. sbrk only ever
+ * grows, so the game's C heap needs real room. Real Wii U MEM2 is 2GB;
+ * the binding constraint here is this address space, not the pool
+ * layout inside it, so the space itself had to grow.
+ *
+ * 1GB again as of 2026-08-24 (late). This was tried and reverted once
+ * before, and the reasons it failed then no longer hold: malloc was
+ * broken at the time (successive sbrk allocations were not adjacent, so
+ * it never reused its heap and consumed whatever it was given), which
+ * is why extra memory bought nothing. With that contract fixed, malloc
+ * genuinely reuses memory, and the run that exposed this now reaches
+ * real engine work instead of a null-pool spin -- so headroom should
+ * now convert into progress rather than vanish. Being explicit that
+ * this is a deliberate retry of a previously-failed change under
+ * materially different conditions, not a forgotten lesson.
+ *
+ * Historical note on that first attempt: MEM2 at
+ * 928MB filled to 99.995% and produced 1,567 failures against 1,563 at
+ * 416MB. Doubling the pool moved only when the wall was hit (call
+ * 18,257 -> 38,727), not whether. sbrk consumes whatever it is given at
+ * every size from 32MB to 928MB, so this is unbounded growth and no
+ * amount of BSS fixes it -- see MEM2's note for where the real suspicion
+ * now sits.
+ *
+ * Cost: mem[] is a static array, so this is 512MB of BSS on top of
+ * ~158MB of .text. That is comfortable in application mode (the owner
+ * launches via a Sphaira forwarder from the HOME menu, so gigabytes are
+ * available) but would NOT fit applet mode's ~448MB budget -- a build
+ * launched from the Album applet will fail to allocate. Worth knowing
+ * before anyone tries that. */
+/* Overridable at compile time (-DPPC_MEM_SIZE=...) because not every
+ * consumer of this header wants the full-game arena. jouster's native/
+ * on-hardware test suite links nine small recompiled test programs into
+ * one .nro, each with its own PpcSharedMemory for isolation -- at 1GB
+ * apiece that is 9GB of BSS in a homebrew app, which simply will not
+ * load. It builds with 4MB instead. Must stay a power of two: every
+ * accessor below masks with (PPC_MEM_SIZE - 1). */
+#ifndef PPC_MEM_SIZE
+#define PPC_MEM_SIZE (1024u * 1024u * 1024u)
+#endif
 
 typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];
@@ -108,7 +357,33 @@ static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/* Real, general-purpose "watch every store to one specific real address"
+ * mechanism, added 2026-08-20 alongside ppc_debug_watch below (same real
+ * extern/shared-definition pattern, see cafeos_state.c) -- found
+ * necessary chasing a real, confirmed heap-corruption bug: a malloc
+ * free-list head field read back 0xFFFFFFFF instead of a real address,
+ * and grepping generated source by hand for "whoever writes this
+ * specific computed address" isn't reliable (the same real address can
+ * be split into a `lis`+offset pair in many different, equally valid
+ * ways across different real call sites -- there's no single literal
+ * string to grep for). Every 32-bit store in the entire recompiled
+ * program already goes through this one function, making it the exact
+ * right choke point: set g_ppc_watch_store_addr to the real address of
+ * interest and every write to it fires ppc_debug_watch with the value
+ * being written, tagged so it's distinguishable from other watch call
+ * sites -- reveals *who* writes a bad value somewhere in ~19,000
+ * functions without needing to guess which one to hand-instrument. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_store_addr = 0xFFFFFFFFu;
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value); /* real definition below */
+
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
+    if (addr == g_ppc_watch_store_addr) {
+        ppc_debug_watch(0xf0000001u, val);              /* the value being written */
+        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* which real function is doing it */
+    }
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
@@ -121,6 +396,19 @@ static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
 }
 
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
+    // Real gap found and fixed 2026-08-20: g_ppc_watch_store_addr's check
+    // only lived in ppc_store_u32, so it silently missed real writes made
+    // one byte at a time -- confirmed real, not hypothetical:
+    // ppc_init_globals (see main.cpp) copies every section's real initial
+    // byte content via exactly this function, one ppc_store_u8 call per
+    // real non-zero byte, and a watched address that only ever gets
+    // written this way would show zero hits despite genuinely holding
+    // real, non-zero initial content. Same real address, any of its 4
+    // real bytes.
+    if (addr >= g_ppc_watch_store_addr && addr < g_ppc_watch_store_addr + 4) {
+        ppc_debug_watch(0xf0000003u, ((addr - g_ppc_watch_store_addr) << 8) | val);
+        ppc_debug_watch(0xf0000004u, g_ppc_current_pc);
+    }
     ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
@@ -185,25 +473,57 @@ static inline void ppc_cmplw(PpcContext *ctx, uint32_t a, uint32_t b) {
     ctx->cr0_eq = a == b;
 }
 
-/* mfcr: packs CR0 (the only CR field this model tracks -- see the
- * struct-level fidelity note above) into bits 28-31 of a 32-bit value,
- * matching the real CR register layout (CR0 is the top 4 bits: LT,GT,EQ,
- * SO). SO is never tracked/set, so that bit is always 0. Other CR fields
- * are always 0 here too, which is only actually correct if nothing in
- * the recompiled code reads them -- a real but narrow gap shared with
- * every other cr0-only piece of this runtime. */
-static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
-    uint32_t cr0 = (ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u);
-    return cr0 << 28;
+/* Real cmpw/cmplw variants targeting an explicit non-cr0 field
+ * (`cr` is 1-7 -- see `PpcContext::cr_lt`/`cr_gt`/`cr_eq`'s own
+ * comment for why cr0 keeps using the separate, original functions
+ * above instead of index 0 here). */
+static inline void ppc_cmpw_cr(PpcContext *ctx, int cr, int32_t a, int32_t b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
 }
 
-/* mtcrf targeting field 0 (CR0) specifically -- see codegen.cpp's
- * PPC_INS_MTCRF handling for why only field 0 is wired up. */
+static inline void ppc_cmplw_cr(PpcContext *ctx, int cr, uint32_t a, uint32_t b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
+}
+
+/* mfcr: packs all 8 real CR fields into a real 32-bit CR value, matching
+ * real hardware's layout (CR0 is the top 4 bits: LT,GT,EQ,SO; CR1 the
+ * next 4; ...; CR7 the bottom 4). SO is never tracked/set for any real
+ * field (a real, narrow, pre-existing gap), so those bits are always 0.
+ * CR1-CR7 now come from the real, tracked `cr_lt`/`cr_gt`/`cr_eq` arrays
+ * (see PpcContext's own comment) -- previously always 0 here
+ * regardless, correct only when nothing recompiled read them. */
+static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
+    uint32_t cr = ((ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u)) << 28;
+    int i;
+    for (i = 1; i < 8; i++) {
+        uint32_t field = (ctx->cr_lt[i] ? 8u : 0u) | (ctx->cr_gt[i] ? 4u : 0u) | (ctx->cr_eq[i] ? 2u : 0u);
+        cr |= field << (28 - i * 4);
+    }
+    return cr;
+}
+
+/* mtcrf targeting field 0 (CR0) specifically -- real hardware bit
+ * layout, same reasoning as ppc_mfcr above. */
 static inline void ppc_mtcrf_cr0(PpcContext *ctx, uint32_t val) {
     uint32_t cr0 = (val >> 28) & 0xFu;
     ctx->cr0_lt = (cr0 & 8u) != 0;
     ctx->cr0_gt = (cr0 & 4u) != 0;
     ctx->cr0_eq = (cr0 & 2u) != 0;
+}
+
+/* mtcrf targeting an explicit non-cr0 field (1-7) -- extracts that
+ * field's real 4-bit slice (LT,GT,EQ,SO) from the same real bit
+ * position it occupies in a full 32-bit CR value, matching
+ * ppc_mtcrf_cr0's own real bit-layout reasoning. */
+static inline void ppc_mtcrf_field(PpcContext *ctx, int field, uint32_t val) {
+    uint32_t bits = (val >> (28 - field * 4)) & 0xFu;
+    ctx->cr_lt[field] = (bits & 8u) != 0;
+    ctx->cr_gt[field] = (bits & 4u) != 0;
+    ctx->cr_eq[field] = (bits & 2u) != 0;
 }
 
 /* addc/adde: used together to add 64-bit (or wider) values held across
@@ -374,9 +694,137 @@ static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
     ctx->cr0_eq = a == b;
 }
 
+/* Real fcmpu variant targeting an explicit non-cr0 field, same real
+ * reasoning as ppc_cmpw_cr/ppc_cmplw_cr above. */
+static inline void ppc_fcmpu_cr(PpcContext *ctx, int cr, double a, double b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
+}
+
 /* fabs fD, fB: absolute value, done branchlessly here to avoid pulling in
  * <math.h> for something this simple. */
 static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
+
+/* ---- Real GQR-quantized paired-single load/store -----------------------
+ *
+ * Real GQR register bit layout and real quantize-type encodings,
+ * confirmed against Dolphin's real, open-source Gekko/Broadway CPU
+ * emulation (`Source/Core/Core/PowerPC/Gekko.h`'s real `UGQR` union and
+ * `EQuantizeType` enum) -- same real CPU family as the Wii U's Espresso,
+ * not guessed/derived: `st_type` bits [0:2], `st_scale` bits [8:13],
+ * `ld_type` bits [16:18], `ld_scale` bits [24:29]. Real types: 0=FLOAT
+ * (no quantization), 1-3=reserved/invalid (never expected in practice,
+ * treated the same as FLOAT here -- an honest "no quantization applied"
+ * fallback, not a guess at some other real behavior), 4=U8, 5=U16,
+ * 6=S8, 7=S16. */
+#define PPC_GQR_TYPE_U8 4u
+#define PPC_GQR_TYPE_U16 5u
+#define PPC_GQR_TYPE_S8 6u
+#define PPC_GQR_TYPE_S16 7u
+
+/* Real quantize/dequantize scale factor: a real GQR scale field is a
+ * real, signed 6-bit value (raw 32-63 means -32..-1 in two's
+ * complement) -- confirmed against Dolphin's real dequantize/quantize
+ * lookup tables, which are mathematically just a real `2^scale` for a
+ * signed scale in that same range; `ldexpf` gives the identical real
+ * result without needing a 64-entry table. */
+static inline float ppc_gqr_scale_factor(uint32_t scale6, int negate) {
+    int signed_scale = (scale6 >= 32) ? (int)scale6 - 64 : (int)scale6;
+    return ldexpf(1.0f, negate ? -signed_scale : signed_scale);
+}
+
+/* Real quantized paired-single store: writes 1 or 2 real elements (per
+ * `single`, matching the real instruction's W bit) of a real
+ * quantized-type-and-width-appropriate size, each real element =
+ * `clamp(ps * 2^st_scale, real type range)`, matching Dolphin's own
+ * real `ScaleAndClamp`/`QuantizeAndStore` logic exactly. `gqr` is the
+ * real, raw 32-bit GQR register value (only its real ST_TYPE/ST_SCALE
+ * bits are read here). */
+static inline void ppc_psq_store_quantized(PpcContext *ctx, uint32_t addr, double ps0, double ps1, uint32_t gqr, int single) {
+    uint32_t type = gqr & 0x7u;
+    uint32_t scale = (gqr >> 8) & 0x3Fu;
+    float factor = ppc_gqr_scale_factor(scale, 0);
+    float v0 = (float)ps0 * factor;
+    float v1 = (float)ps1 * factor;
+    switch (type) {
+        case PPC_GQR_TYPE_U8: {
+            float c0f = v0 < 0.0f ? 0.0f : (v0 > 255.0f ? 255.0f : v0);
+            ppc_store_u8(ctx, addr, (uint8_t)c0f);
+            if (!single) {
+                float c1f = v1 < 0.0f ? 0.0f : (v1 > 255.0f ? 255.0f : v1);
+                ppc_store_u8(ctx, addr + 1, (uint8_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_S8: {
+            float c0f = v0 < -128.0f ? -128.0f : (v0 > 127.0f ? 127.0f : v0);
+            ppc_store_u8(ctx, addr, (uint8_t)(int8_t)c0f);
+            if (!single) {
+                float c1f = v1 < -128.0f ? -128.0f : (v1 > 127.0f ? 127.0f : v1);
+                ppc_store_u8(ctx, addr + 1, (uint8_t)(int8_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_U16: {
+            float c0f = v0 < 0.0f ? 0.0f : (v0 > 65535.0f ? 65535.0f : v0);
+            ppc_store_u16(ctx, addr, (uint16_t)c0f);
+            if (!single) {
+                float c1f = v1 < 0.0f ? 0.0f : (v1 > 65535.0f ? 65535.0f : v1);
+                ppc_store_u16(ctx, addr + 2, (uint16_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_S16: {
+            float c0f = v0 < -32768.0f ? -32768.0f : (v0 > 32767.0f ? 32767.0f : v0);
+            ppc_store_u16(ctx, addr, (uint16_t)(int16_t)c0f);
+            if (!single) {
+                float c1f = v1 < -32768.0f ? -32768.0f : (v1 > 32767.0f ? 32767.0f : v1);
+                ppc_store_u16(ctx, addr + 2, (uint16_t)(int16_t)c1f);
+            }
+            break;
+        }
+        default: /* FLOAT (0) or a real reserved/invalid type (1-3) -- honest fallback, no quantization */
+            ppc_store_f32(ctx, addr, ps0);
+            if (!single) ppc_store_f32(ctx, addr + 4, ps1);
+            break;
+    }
+}
+
+/* Real quantized paired-single load, the dequantize counterpart to
+ * ppc_psq_store_quantized above -- `gqr`'s real LD_TYPE/LD_SCALE bits
+ * (a different real bit range from ST_TYPE/ST_SCALE) determine the
+ * real element width/dequantize factor. `*out_ps1` is left untouched
+ * when `single` (matching real psq_l/psq_lu's own W=1 behavior of
+ * always setting ps1 to 1.0f, handled by the caller, not here, same
+ * as the existing float-only psq_l/psq_lu codegen already does). */
+static inline void ppc_psq_load_quantized(const PpcContext *ctx, uint32_t addr, double *out_ps0, double *out_ps1, uint32_t gqr, int single) {
+    uint32_t type = (gqr >> 16) & 0x7u;
+    uint32_t scale = (gqr >> 24) & 0x3Fu;
+    float factor = ppc_gqr_scale_factor(scale, 1);
+    switch (type) {
+        case PPC_GQR_TYPE_U8:
+            *out_ps0 = (double)((float)ppc_load_u8(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)ppc_load_u8(ctx, addr + 1) * factor);
+            break;
+        case PPC_GQR_TYPE_S8:
+            *out_ps0 = (double)((float)(int8_t)ppc_load_u8(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)(int8_t)ppc_load_u8(ctx, addr + 1) * factor);
+            break;
+        case PPC_GQR_TYPE_U16:
+            *out_ps0 = (double)((float)ppc_load_u16(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)ppc_load_u16(ctx, addr + 2) * factor);
+            break;
+        case PPC_GQR_TYPE_S16:
+            *out_ps0 = (double)((float)(int16_t)ppc_load_u16(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)(int16_t)ppc_load_u16(ctx, addr + 2) * factor);
+            break;
+        default: /* FLOAT (0) or a real reserved/invalid type (1-3) -- honest fallback, no quantization */
+            *out_ps0 = (double)ppc_load_f32(ctx, addr);
+            if (!single) *out_ps1 = (double)ppc_load_f32(ctx, addr + 4);
+            break;
+    }
+}
 
 /* tw/twu (unconditional trap): real hardware raises a program exception,
  * which real compiled code relies on to actually stop execution (e.g.
@@ -387,6 +835,73 @@ static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
  * executing instead of failing loudly the way the original binary
  * would. */
 static inline void ppc_trap(void) { abort(); }
+
+/* Real, honest, deliberately temporary fallback for the small number of
+ * real instructions this runtime doesn't yet model correctly (every
+ * real call site names itself via recomp's own generated `what`
+ * string, taken directly from the exact real `#error` diagnostic that
+ * would otherwise have blocked the whole program from compiling --
+ * this exists specifically to unblock a full real-game build/run while
+ * those few genuinely-unhandled real cases get fixed properly, not to
+ * hide them). Logs (if a sink is registered via
+ * ppc_set_unhandled_log -- real, optional, e.g. a real SD-card
+ * checkpoint file) and returns, letting the rest of a real recompiled
+ * program keep running instead of hard-aborting the whole process over
+ * one, possibly-never-exercised code path -- a real, deliberate choice
+ * favoring "see the real game run" over "perfect from instruction
+ * one," consistent with this project's own established shader/draw-
+ * call no-op precedent (see cafeos_gx2.h's own comment on that). */
+typedef void (*ppc_unhandled_log_fn)(const char *);
+/* extern, not `static` -- this same header is included by every one of
+ * a real many-file build's separately-compiled translation units (see
+ * switch/game/'s own 213 generated_*.c files), and the actual
+ * ppc_unhandled_stub() calls this sink almost always happen inside one
+ * of *those* files, not the one file (main.c) that calls
+ * ppc_set_unhandled_log() to register it. A `static` copy here would
+ * mean every one of those 213 files gets its own, separate, never-set
+ * NULL copy -- real bug found and fixed this way (same root cause as
+ * cafeos_state.c's own g_arkchemy_gx2 and friends): logging would
+ * silently never fire for any real unhandled-instruction hit inside
+ * the actual recompiled game code, only from a hit in main.c itself
+ * (which has none). Real, single, shared definition lives in
+ * cafeos_state.c alongside everything else that needed this fix. */
+extern ppc_unhandled_log_fn g_ppc_unhandled_log;
+static inline void ppc_set_unhandled_log(ppc_unhandled_log_fn fn) { g_ppc_unhandled_log = fn; }
+static inline void ppc_unhandled_stub(PpcContext *ctx, const char *what) {
+    (void)ctx;
+    if (g_ppc_unhandled_log) g_ppc_unhandled_log(what);
+}
+
+/* Real, general-purpose, ad hoc debug watchpoint -- not called anywhere
+ * by default (no codegen support needed): a one-off call to
+ * ppc_debug_watch() can be hand-inserted directly into a specific
+ * generated_*.c file (machine-generated, gitignored, safe to hand-edit
+ * for one debugging session -- regenerate.sh overwrites it back to
+ * clean output next real run) at whatever exact real PPC instruction
+ * address needs a live register/memory value confirmed on real
+ * hardware, without needing new codegen support or a full regenerate +
+ * rebuild cycle for something this targeted.
+ *
+ * Weak, not plain extern (real regression found and fixed 2026-08-20):
+ * this used to only ever get referenced by a translation unit that had
+ * an explicit, hand-inserted ppc_debug_watch() call, so small single-
+ * file test programs (tools/gen_harness*.c) never needed a real shared
+ * definition from cafeos_state.c. That stopped being true once
+ * ppc_store_u32 itself started calling this unconditionally (see
+ * g_ppc_watch_store_addr above) -- now every single program using
+ * ppc_store_u32 at all references it, including every one of those
+ * small test harnesses, which broke tools/verify.sh with a real
+ * "undefined reference to g_ppc_debug_watch" link error. Same weak-
+ * symbol pattern as g_ppc_current_pc above fixes it the same way. */
+typedef void (*ppc_debug_watch_fn)(uint32_t pc, uint32_t value);
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+ppc_debug_watch_fn g_ppc_debug_watch = NULL;
+static inline void ppc_set_debug_watch(ppc_debug_watch_fn fn) { g_ppc_debug_watch = fn; }
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value) {
+    if (g_ppc_debug_watch) g_ppc_debug_watch(pc, value);
+}
 
 /* lswi rD, rA, NB: loads NB bytes (1-32; 0 means 32) from memory starting
  * at EA into consecutive GPRs starting at rD, wrapping r31 -> r0. Each

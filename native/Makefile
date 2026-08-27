@@ -25,6 +25,14 @@ APP_AUTHOR	:=	Arkchemy project
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
+# Guest arena size, overriding ppc_runtime.h's 1GB full-game default
+# (see that header's own comment). Nine test programs each get their own
+# PpcSharedMemory so a failing one cannot corrupt the next, so this is
+# the per-test cost: 9 x 4MB of BSS rather than 9 x 1GB, which would not
+# load at all. Must stay a power of two -- the guest accessors mask with
+# (PPC_MEM_SIZE - 1).
+DEFINES	+=	-DPPC_MEM_SIZE=\(4u*1024u*1024u\)
+
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 

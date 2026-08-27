@@ -38,6 +38,23 @@ void t4_rodata_init_globals(PpcContext *ctx);
 void t5_fnptr_compute(PpcContext *ctx);
 void t5_fnptr_init_globals(PpcContext *ctx);
 
+// t6_andi_lwzu (testdata/andi_lwzu.c, -O1) -- andi./lwzu, found missing
+// while recompiling a real Wii U homebrew .rpx.
+void t6_andi_lwzu_compute(PpcContext *ctx);
+// t7_cond_return (testdata/cond_return.c, -O1) -- conditional-return
+// (blelr and friends), same real-code origin.
+void t7_cond_return_guarded(PpcContext *ctx);
+// t8_addis_frsp (testdata/addis_frsp.c, -O1) -- addis/frsp, same real-code
+// origin; also the only test here whose result is a double.
+void t8_addis_frsp_compute(PpcContext *ctx);
+void t8_addis_frsp_init_globals(PpcContext *ctx);
+// t9_bss_large (testdata/bss_large.c, -O0) -- the real oversized-.bss
+// address-assignment bug found in the actual Skylanders binary: .bss
+// regions were capped at a 256-byte placeholder, so every global past
+// the first 256 bytes silently aliased whatever section came next.
+void t9_bss_large_fill_and_check(PpcContext *ctx);
+void t9_bss_large_init_globals(PpcContext *ctx);
+
 static FILE *g_log;
 static int g_pass_count, g_fail_count;
 
@@ -151,6 +168,92 @@ static void runFnptr(void) {
                pass ? "PASS" : "FAIL");
 }
 
+// The four tests below cover instructions and a memory-layout bug found
+// in real code rather than invented for a test: three came out of
+// recompiling a genuine Wii U homebrew .rpx (vgmoose/wiiu-space, open
+// source) and one out of the real Skylanders binary's oversized .bss.
+// blaster's verify.sh has run all four under QEMU-ARM64; none had ever
+// run on the actual console before this build. Ground truth for each is
+// the same as verify.sh's: a plain native gcc build of the original
+// source, run and compared.
+
+static void runAndiLwzu(void) {
+    checkpoint("running t6_andi_lwzu (andi./lwzu, real Wii U code find, -O1)...");
+    static PpcContext ctx;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
+    // compute(x=0x23, arr=[10,20,30,40,50], n=5): masked = 0x23 & 0x1F = 3,
+    // total = 150, so 153.
+    uint32_t arr_addr = 0x1000;
+    static const int32_t arr[5] = {10, 20, 30, 40, 50};
+    for (int i = 0; i < 5; i++) {
+        ppc_store_u32(&ctx, arr_addr + (uint32_t)i * 4, (uint32_t)arr[i]);
+    }
+    ctx.r[3] = 0x23;
+    ctx.r[4] = arr_addr;
+    ctx.r[5] = 5;
+    t6_andi_lwzu_compute(&ctx);
+    checkResult("t6_andi_lwzu", (int32_t)ctx.r[3], 153);
+}
+
+static void runCondReturn(void) {
+    checkpoint("running t7_cond_return (conditional return, real Wii U code find, -O1)...");
+    static PpcContext ctx;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
+    // guarded(x) returns 0 for x <= 0 and x*2 otherwise -- both sides of
+    // the early-return branch, since that branch is the whole point.
+    ctx.r[3] = (uint32_t)-5;
+    t7_cond_return_guarded(&ctx);
+    int32_t gotNeg = (int32_t)ctx.r[3];
+    ctx.r[3] = 7;
+    t7_cond_return_guarded(&ctx);
+    int32_t gotPos = (int32_t)ctx.r[3];
+    int pass = (gotNeg == 0) && (gotPos == 14);
+    if (pass) g_pass_count++; else g_fail_count++;
+    checkpoint("[t7_cond_return] guarded(-5)=%d(want 0) guarded(7)=%d(want 14) -- %s",
+               (int)gotNeg, (int)gotPos, pass ? "PASS" : "FAIL");
+}
+
+static void runAddisFrsp(void) {
+    checkpoint("running t8_addis_frsp (addis/frsp, real Wii U code find, -O1)...");
+    static PpcContext ctx;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
+    t8_addis_frsp_init_globals(&ctx);
+    // compute(a=3.5, b=1.25, base=100) = (float)3.5 + (100 + 0x50000)
+    //                                  = 3.5 + 327780 = 327783.5, in f1.
+    // b is genuinely unused by the source; it is passed anyway because the
+    // real ABI still gives it an FPR slot, which is part of what this
+    // test is checking. Scaled by 2 to compare as an exact integer: the
+    // value has a single binary fraction digit, so this is exact, not a
+    // tolerance.
+    ctx.f[1] = 3.5;
+    ctx.f[2] = 1.25;
+    ctx.r[3] = 100;
+    t8_addis_frsp_compute(&ctx);
+    checkResult("t8_addis_frsp (x2)", (int32_t)(ctx.f[1] * 2.0), 655567);
+}
+
+static void runBssLarge(void) {
+    checkpoint("running t9_bss_large (oversized .bss, real Skylanders regression, -O0)...");
+    static PpcContext ctx;
+    static PpcSharedMemory ctx_shared;
+    ctx.shared = &ctx_shared;
+    ctx.r[1] = PPC_MEM_SIZE - 256;
+    t9_bss_large_init_globals(&ctx);
+    // fill_and_check() writes 300 ints into a .bss table, sums them
+    // (1..300 = 45150) and adds a .rodata entry that sits immediately
+    // after .bss (333) -> 45483. Under the bug this covers, the writes
+    // past byte 256 of .bss landed on top of that .rodata entry, so the
+    // wrong answer here means addresses are aliasing again.
+    t9_bss_large_fill_and_check(&ctx);
+    checkResult("t9_bss_large", (int32_t)ctx.r[3], 45483);
+}
+
 static int g_figures_found;
 
 static void onFigureFound(const SkylandersDumpEntry *entry, void *user_data) {
@@ -242,6 +345,10 @@ int main(int argc, char *argv[]) {
     runLoop();
     runRodataTable();
     runFnptr();
+    runAndiLwzu();
+    runCondReturn();
+    runAddisFrsp();
+    runBssLarge();
     runFigureScan();
     runNfcRead();
 

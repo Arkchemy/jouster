@@ -7,6 +7,9 @@ void t3_loop_dispatch(PpcContext *ctx, uint32_t addr);
 void t3_loop_init_globals(PpcContext *ctx) {
 }
 
+void t3_loop_run_static_initializers(PpcContext *ctx) {
+}
+
 void t3_loop_dispatch(PpcContext *ctx, uint32_t addr) {
   switch (addr) {
     case 0u: t3_loop_sumn(ctx); return;
@@ -14,26 +17,41 @@ void t3_loop_dispatch(PpcContext *ctx, uint32_t addr) {
 }
 
 void t3_loop_sumn(PpcContext *ctx) {
-  /* 0: cmpwi r3, 0 */
+  g_ppc_last_caller_lr = ctx->lr;
+  g_ppc_current_pc = 0x0u; g_ppc_fn_call_count++;
+  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
+  /* 0: stwu r1, -0x10(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)-16, ctx->r[1]);
+  ctx->r[1] = ctx->r[1] + (int32_t)-16;
+  /* 4: stw r31, 0xc(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)12, ctx->r[31]);
+  /* 8: mr r31, r1 */
+  ctx->r[31] = ctx->r[1];
+  /* c: cmpwi r3, 0 */
   ppc_cmpw(ctx, (int32_t)ctx->r[3], 0);
-  /* 4: ble 0x20 */
-  if ((ctx->cr0_lt || ctx->cr0_eq)) goto L_20;
-  /* 8: mtctr r3 */
+  /* 10: ble 0x2c */
+  if ((ctx->cr0_lt || ctx->cr0_eq)) goto L_2c;
+  /* 14: mtctr r3 */
   ctx->ctr = ctx->r[3];
-  /* c: li r3, 0 */
+  /* 18: li r3, 0 */
   ctx->r[3] = (uint32_t)(int32_t)0;
-  L_10: ;
-  /* 10: lwz r5, 0(r4) */
+  L_1c: ;
+  /* 1c: lwz r5, 0(r4) */
   ctx->r[5] = ppc_load_u32(ctx, ctx->r[4] + (int32_t)0);
-  /* 14: add r3, r5, r3 */
+  /* 20: add r3, r5, r3 */
   ctx->r[3] = ctx->r[5] + ctx->r[3];
-  /* 18: bdnz 0x10 */
-  if (--ctx->ctr != 0) goto L_10;
-  /* 1c: blr  */
-  return;
-  L_20: ;
-  /* 20: li r3, 0 */
+  /* 24: bdnz 0x1c */
+  if (--ctx->ctr != 0) goto L_1c;
+  /* 28: b 0x30 */
+  goto L_30;
+  L_2c: ;
+  /* 2c: li r3, 0 */
   ctx->r[3] = (uint32_t)(int32_t)0;
-  /* 24: blr  */
+  L_30: ;
+  /* 30: lwz r31, 0xc(r1) */
+  ctx->r[31] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)12);
+  /* 34: addi r1, r1, 0x10 */
+  ctx->r[1] = ctx->r[1] + (uint32_t)(int32_t)16;
+  /* 38: blr  */
   return;
 }

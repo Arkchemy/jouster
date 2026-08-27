@@ -18,6 +18,9 @@ void t4_rodata_init_globals(PpcContext *ctx) {
   ppc_store_u8(ctx, 8215u, 5);
 }
 
+void t4_rodata_run_static_initializers(PpcContext *ctx) {
+}
+
 void t4_rodata_dispatch(PpcContext *ctx, uint32_t addr) {
   switch (addr) {
     case 0u: t4_rodata_classify(ctx); return;
@@ -25,23 +28,37 @@ void t4_rodata_dispatch(PpcContext *ctx, uint32_t addr) {
 }
 
 void t4_rodata_classify(PpcContext *ctx) {
-  /* 0: cmplwi r3, 5 */
+  g_ppc_last_caller_lr = ctx->lr;
+  g_ppc_current_pc = 0x0u; g_ppc_fn_call_count++;
+  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
+  /* 0: stwu r1, -0x10(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)-16, ctx->r[1]);
+  ctx->r[1] = ctx->r[1] + (int32_t)-16;
+  /* 4: stw r31, 0xc(r1) */
+  ppc_store_u32(ctx, ctx->r[1] + (int32_t)12, ctx->r[31]);
+  /* 8: mr r31, r1 */
+  ctx->r[31] = ctx->r[1];
+  /* c: cmplwi r3, 5 */
   ppc_cmplw(ctx, ctx->r[3], 5u);
-  /* 4: li r4, -1 */
+  /* 10: li r4, -1 */
   ctx->r[4] = (uint32_t)(int32_t)-1;
-  /* 8: bgt 0x1c */
-  if (ctx->cr0_gt) goto L_1c;
-  /* c: lis r4, 0 */
+  /* 14: bgt 0x28 */
+  if (ctx->cr0_gt) goto L_28;
+  /* 18: lis r4, 0 */
   ctx->r[4] = 8192u; /* &.rodata+0 */
-  /* 10: slwi r3, r3, 2 */
+  /* 1c: slwi r3, r3, 2 */
   ctx->r[3] = ctx->r[3] << 2;
-  /* 14: addi r4, r4, 0 */
+  /* 20: addi r4, r4, 0 */
   ctx->r[4] = ctx->r[4];
-  /* 18: lwzx r4, r4, r3 */
+  /* 24: lwzx r4, r4, r3 */
   ctx->r[4] = ppc_load_u32(ctx, ctx->r[4] + ctx->r[3]);
-  L_1c: ;
-  /* 1c: mr r3, r4 */
+  L_28: ;
+  /* 28: mr r3, r4 */
   ctx->r[3] = ctx->r[4];
-  /* 20: blr  */
+  /* 2c: lwz r31, 0xc(r1) */
+  ctx->r[31] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)12);
+  /* 30: addi r1, r1, 0x10 */
+  ctx->r[1] = ctx->r[1] + (uint32_t)(int32_t)16;
+  /* 34: blr  */
   return;
 }

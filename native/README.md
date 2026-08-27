@@ -13,9 +13,9 @@ affects projects, like Viridite, that need portlibs).
 ## What it does
 
 `source/main.c` is a standard libnx console app (via `consoleInit`) that
-runs **five** of Arkchemy's recompiler test programs — not just one —
+runs **nine** of Arkchemy's recompiler test programs — not just one —
 against real ARM64 Switch hardware, checking each against the exact same
-known-correct values `tools/verify.sh` already checks under QEMU-ARM64:
+known-correct values blaster's `verify.sh` already checks under QEMU-ARM64:
 
 - `t1_arithmetic` (`testdata/arithmetic.c`) — integer arithmetic/calls.
 - `t2_floating` (`testdata/floating.c`) — single-precision FP + rodata
@@ -28,6 +28,20 @@ known-correct values `tools/verify.sh` already checks under QEMU-ARM64:
   hardware rather than just QEMU.
 - `t5_fnptr` (`testdata/fnptr.c`) — `mtctr`/`bctrl` indirect calls through
   a function pointer.
+
+The four below were added 2026-08-27. Each covers something found in real
+code rather than invented for a test, and each had only ever run under
+QEMU until then:
+
+- `t6_andi_lwzu` (`testdata/andi_lwzu.c`, -O1) — `andi.`/`lwzu`, found
+  missing while recompiling a genuine Wii U homebrew `.rpx`.
+- `t7_cond_return` (`testdata/cond_return.c`, -O1) — conditional return
+  (`blelr` and friends), same origin.
+- `t8_addis_frsp` (`testdata/addis_frsp.c`, -O1) — `addis`/`frsp`, same
+  origin; the only test here returning a double.
+- `t9_bss_large` (`testdata/bss_large.c`) — the real oversized-`.bss`
+  address-assignment bug from the actual Skylanders binary, where every
+  global past the first 256 bytes silently aliased the next section.
 
 QEMU is a good proxy for "does the recompiled code compute the right
 answer," but it's still an emulator — this is the actual target hardware,
@@ -56,8 +70,23 @@ etc.), leaving the shared runtime helpers in `ppc_runtime.h`
 underlying `testdata/*.c` files change:
 
 ```sh
-switch/native/regenerate.sh
+./regenerate.sh
 ```
+
+It expects `blaster` and `conquertron` cloned beside this repo (override
+with `BLASTER=` / `CONQUERTRON=`) and a built `conquertron/build/recomp`.
+Two things worth knowing before running it:
+
+- The generated files committed before 2026-08-27 came from an older
+  recompiler and an older `ppc_runtime.h` (a pinned 4MB copy, ~240 lines
+  behind). Regenerating pulls in the current header, whose full-game
+  default arena is 1GB — nine of those will not load on a console, so
+  `Makefile` overrides `PPC_MEM_SIZE` back to 4MB.
+- blaster's `build_ppc.sh` now pins `powerpc-freestanding-eabihf`. Plain
+  `eabi` leaves the float ABI to the installed zig's default, and newer
+  zig picks soft float, which turns every FP operation into a libgcc
+  helper the recompiler emits as an unresolved extern — and removes the
+  `frsp` instruction `t8` exists to cover.
 
 ## Building
 
