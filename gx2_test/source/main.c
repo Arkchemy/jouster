@@ -771,6 +771,301 @@ static void run_state_selftest(PpcContext *ctx) {
     checkpoint("=== self-test done: %d passed, %d failed ===", g_pass_count, g_fail_count);
 }
 
+// Second self-test phase: the real GX2* functions this project has
+// actually implemented but that no hardware run has ever exercised --
+// every one of the checks above (and every one in test-results/) covers
+// the state-setter family reached from GX2Init/GX2ClearColor/
+// GX2SwapScanBuffers; the ~30 functions below have only ever been
+// verified by reading the code. That gap is exactly the kind of thing
+// this project found real bugs in before (the rodata-table addressing
+// bug, the border-color self-test bug), so they get the same real
+// treatment here rather than being assumed correct.
+//
+// Two genuinely different kinds of check live in here, and the
+// difference is worth stating plainly rather than blurring:
+//
+//  * Functions whose whole real effect is a value returned in r3 or a
+//    write into *guest* memory (GX2GetSurfaceFormatBits,
+//    GX2SetClearDepth, the GX2InitSampler* family, ...) touch no deko3d
+//    state at all, so their real, exact expected values can be asserted
+//    outright -- same reasoning as GX2CalcSurfaceSizeAndAlignment's own
+//    checks in the phase above.
+//
+//  * Functions that only record into the real deko3d command buffer
+//    (GX2SetViewport, GX2SetScissor, GX2SetBlendControl, ...) keep no
+//    shadow state this file can read back, and deko3d exposes no way to
+//    query recorded state -- so an honest check here is *not* "the GPU
+//    is now in state X", it's "these real commands, with real
+//    game-plausible arguments, actually record, submit and complete on
+//    real hardware without faulting or hanging". That is a genuinely
+//    weaker claim than the assertions above and is deliberately not
+//    dressed up as anything more; it is also the exact failure mode
+//    that matters for these calls (a bad enum reaching a lookup table,
+//    an out-of-range target index, a malformed viewport), and it is
+//    unreachable without running them on a real console.
+static void run_untested_surface_selftest(PpcContext *ctx) {
+    checkpoint("=== GX2 previously-unexercised surface self-test ===");
+
+    // ---- Fixed-answer queries. Real hardware facts sourced from Cemu's
+    // own real HLE implementation (see each function's own comment in
+    // cafeos_gx2.h), not guessed -- so an exact compare is right here.
+    ppc_import_gx2_GX2TempGetGPUVersion(ctx);
+    checkBool("GX2TempGetGPUVersion", (int)ctx->r[3], 2);
+    ppc_import_gx2_GX2GetSystemTVScanMode(ctx);
+    checkBool("GX2GetSystemTVScanMode", (int)ctx->r[3], 7);
+    ppc_import_gx2_GX2GetSystemTVAspectRatio(ctx);
+    checkBool("GX2GetSystemTVAspectRatio", (int)ctx->r[3], 1);
+
+    // GX2GetSurfaceFormatBits -- real table-driven bit depth. Three
+    // real cases, each covering a distinct branch of the real formula:
+    // a plain 32-bit format, the same format carrying GX2's real
+    // upper-bit flags (which must be masked off, not folded into the
+    // table index), and a real BC-compressed format (whose table entry
+    // is a per-block size the function divides by 16 to get real bits
+    // per pixel).
+    ctx->r[3] = 0x01a; /* UNORM_R8_G8_B8_A8 */
+    ppc_import_gx2_GX2GetSurfaceFormatBits(ctx);
+    checkBool("GX2GetSurfaceFormatBits(RGBA8)", (int)ctx->r[3], 32);
+    ctx->r[3] = 0x41a; /* SRGB_R8_G8_B8_A8 -- same hw format, real flag bits set above bit 5 */
+    ppc_import_gx2_GX2GetSurfaceFormatBits(ctx);
+    checkBool("GX2GetSurfaceFormatBits(SRGB_RGBA8) masks flag bits", (int)ctx->r[3], 32);
+    ctx->r[3] = 0x031; /* UNORM_BC1 -- real 64-bit block / 16 pixels */
+    ppc_import_gx2_GX2GetSurfaceFormatBits(ctx);
+    checkBool("GX2GetSurfaceFormatBits(BC1) per-block divide", (int)ctx->r[3], 4);
+
+    // ---- Real guest-memory writers, at 0xE000+ to stay clear of every
+    // scratch region the first phase already used.
+
+    // GX2SetClearDepth(depthBuffer@0xE000, 0.75) / GX2SetClearStencil
+    // (depthBuffer@0xE000, 0x1AB) -- the single-field siblings of
+    // GX2SetClearDepthStencil (already covered in the phase above),
+    // writing the same real WUT_CHECK_OFFSET-confirmed 0x88/0x8C
+    // fields. The stencil value here deliberately overflows 8 bits:
+    // real GX2 masks it to 0xFF, so 0x1AB must land as 0xAB, and each
+    // call must leave the *other* field alone (they are independent
+    // real API calls, unlike the combined one).
+    ctx->r[3] = 0xE000; ctx->f[1] = 0.75;
+    ppc_import_gx2_GX2SetClearDepth(ctx);
+    ctx->r[3] = 0xE000; ctx->r[4] = 0x1AB;
+    ppc_import_gx2_GX2SetClearStencil(ctx);
+    checkBool("GX2SetClearDepth.depthClear", ppc_load_f32(ctx, 0xE000 + 0x88) == 0.75f, 1);
+    checkBool("GX2SetClearStencil masks to 8 bits", (int)ppc_load_u32(ctx, 0xE000 + 0x8C), 0xAB);
+    checkBool("GX2SetClearStencil preserves GX2SetClearDepth's field", ppc_load_f32(ctx, 0xE000 + 0x88) == 0.75f, 1);
+
+    // GX2CalcColorBufferAuxInfo(colorBuffer@0xE000, sizeOut@0xE100,
+    // alignOut@0xE104) -- real Cemu HLE behavior is the same kind of
+    // fixed 0x1000/0x100 answer GX2CalcDepthBufferHiZInfo gives (see
+    // its own comment); asserted exactly, same as that one.
+    ctx->r[3] = 0xE000; ctx->r[4] = 0xE100; ctx->r[5] = 0xE104;
+    ppc_import_gx2_GX2CalcColorBufferAuxInfo(ctx);
+    checkBool("GX2CalcColorBufferAuxInfo.size", (int)ppc_load_u32(ctx, 0xE100), 0x1000);
+    checkBool("GX2CalcColorBufferAuxInfo.align", (int)ppc_load_u32(ctx, 0xE104), 0x100);
+
+    // GX2CalcFetchShaderSizeEx / GX2EndDisplayList -- real, honest
+    // fixed answers this project's own shim documents (a fixed 256-byte
+    // fetch-shader allocation; no display-list recording implemented,
+    // so a recorded size of 0). Checked here so a future change to
+    // either can't silently drift away from what the rest of the shim
+    // assumes.
+    ctx->r[3] = 4; ctx->r[4] = 0; ctx->r[5] = 0;
+    ppc_import_gx2_GX2CalcFetchShaderSizeEx(ctx);
+    checkBool("GX2CalcFetchShaderSizeEx", (int)ctx->r[3], 256);
+    ctx->r[3] = 0;
+    ppc_import_gx2_GX2EndDisplayList(ctx);
+    checkBool("GX2EndDisplayList reports 0 bytes recorded", (int)ctx->r[3], 0);
+
+    // ---- The rest of the GX2InitSampler* family (sampler@0xE200), all
+    // real bit-packers into the same shared WORD0 the already-verified
+    // GX2InitSampler/GX2InitSamplerLOD/GX2InitSamplerDepthCompare write
+    // -- so this is both a field-encoding check and the same real
+    // shared-state question the phase above kept asking of the
+    // GX2Set*Control family: does each one leave the others' fields
+    // alone?
+    ctx->r[3] = 0xE200; ctx->r[4] = 0; ctx->r[5] = 0; /* GX2InitSampler(WRAP, POINT) -- real baseline */
+    ppc_import_gx2_GX2InitSampler(ctx);
+
+    // GX2InitSamplerClamping(sampler, clampX=CLAMP(2), clampY=MIRROR(1),
+    // clampZ=CLAMP_BORDER(6)) -- real 3-bit fields at bits 0/3/6.
+    ctx->r[3] = 0xE200; ctx->r[4] = 2; ctx->r[5] = 1; ctx->r[6] = 6;
+    ppc_import_gx2_GX2InitSamplerClamping(ctx);
+    {
+        uint32_t w0 = ppc_load_u32(ctx, 0xE200);
+        checkBool("GX2InitSamplerClamping.CLAMP_X", (int)(w0 & 0x7), 2);
+        checkBool("GX2InitSamplerClamping.CLAMP_Y", (int)((w0 >> 3) & 0x7), 1);
+        checkBool("GX2InitSamplerClamping.CLAMP_Z", (int)((w0 >> 6) & 0x7), 6);
+    }
+
+    // GX2InitSamplerXYFilter(sampler, filterMag=LINEAR(1),
+    // filterMin=LINEAR(1), maxAniso=RATIO_2_1(2)) -- real, non-obvious
+    // hardware behavior worth pinning down on real silicon: with
+    // anisotropy requested, POINT(0)/LINEAR(1) are remapped to the
+    // hardware's real anisotropic filter codes 4/5, not written
+    // through unchanged.
+    ctx->r[3] = 0xE200; ctx->r[4] = 1; ctx->r[5] = 1; ctx->r[6] = 2;
+    ppc_import_gx2_GX2InitSamplerXYFilter(ctx);
+    {
+        uint32_t w0 = ppc_load_u32(ctx, 0xE200);
+        checkBool("GX2InitSamplerXYFilter(aniso).XY_MAG_FILTER remapped", (int)((w0 >> 9) & 0x7), 5);
+        checkBool("GX2InitSamplerXYFilter(aniso).XY_MIN_FILTER remapped", (int)((w0 >> 12) & 0x7), 5);
+        checkBool("GX2InitSamplerXYFilter(aniso).MAX_ANISO_RATIO", (int)((w0 >> 19) & 0x7), 2);
+    }
+
+    // Same call with maxAniso=NONE(0): the remap above must NOT happen
+    // -- the filter codes go through exactly as given (LINEAR(1) stays
+    // 1, POINT(0) stays 0). The real branch the case above can't reach.
+    ctx->r[3] = 0xE200; ctx->r[4] = 1; ctx->r[5] = 0; ctx->r[6] = 0;
+    ppc_import_gx2_GX2InitSamplerXYFilter(ctx);
+    {
+        uint32_t w0 = ppc_load_u32(ctx, 0xE200);
+        checkBool("GX2InitSamplerXYFilter(no aniso).XY_MAG_FILTER verbatim", (int)((w0 >> 9) & 0x7), 1);
+        checkBool("GX2InitSamplerXYFilter(no aniso).XY_MIN_FILTER verbatim", (int)((w0 >> 12) & 0x7), 0);
+        checkBool("GX2InitSamplerXYFilter(no aniso).MAX_ANISO_RATIO", (int)((w0 >> 19) & 0x7), 0);
+    }
+
+    // GX2InitSamplerZMFilter(sampler, zFilter=POINT(1), mipFilter=
+    // LINEAR(2)) -- real 2-bit fields at bits 15/17, and the real
+    // shared-WORD0 question: this must not disturb the clamp fields
+    // GX2InitSamplerClamping set above, nor the filter fields
+    // GX2InitSamplerXYFilter just set.
+    ctx->r[3] = 0xE200; ctx->r[4] = 1; ctx->r[5] = 2;
+    ppc_import_gx2_GX2InitSamplerZMFilter(ctx);
+    {
+        uint32_t w0 = ppc_load_u32(ctx, 0xE200);
+        checkBool("GX2InitSamplerZMFilter.Z_FILTER", (int)((w0 >> 15) & 0x3), 1);
+        checkBool("GX2InitSamplerZMFilter.MIP_FILTER", (int)((w0 >> 17) & 0x3), 2);
+        checkBool("GX2InitSamplerZMFilter preserves CLAMP_X", (int)(w0 & 0x7), 2);
+        checkBool("GX2InitSamplerZMFilter preserves XY_MAG_FILTER", (int)((w0 >> 9) & 0x7), 1);
+    }
+
+    // ---- GX2SetEventCallback: real registration state (not a deko3d
+    // call and not a guest-memory write -- it stores into this shim's
+    // own g_arkchemy_gx2 event tables), including the real GX2 contract
+    // that registering a callback returns whatever was registered
+    // before it. Checked without assuming the slot starts empty:
+    // register once, then register again and require the second call to
+    // hand back exactly what the first one installed.
+    {
+        ctx->r[3] = 0; ctx->r[4] = 0x11112222; ctx->r[5] = 0xAAAA0001; /* type=GX2_EVENT_TYPE_VSYNC(0) */
+        ppc_import_gx2_GX2SetEventCallback(ctx);
+        ctx->r[3] = 0; ctx->r[4] = 0x33334444; ctx->r[5] = 0xAAAA0002;
+        ppc_import_gx2_GX2SetEventCallback(ctx);
+        checkBool("GX2SetEventCallback returns the previously-registered callback",
+                  (int)(ctx->r[3] == 0x11112222), 1);
+        checkBool("GX2SetEventCallback stored the new callback",
+                  (int)(g_arkchemy_gx2.event_callback_func[0] == 0x33334444), 1);
+        checkBool("GX2SetEventCallback stored the new user data",
+                  (int)(g_arkchemy_gx2.event_callback_userdata[0] == 0xAAAA0002), 1);
+
+        // Real out-of-range event type (>= ARKCHEMY_GX2_NUM_EVENT_TYPES):
+        // must report no previous callback and, more importantly, must
+        // not write past the real, fixed-size table -- checked by
+        // confirming slot 0's registration above is still intact.
+        ctx->r[3] = ARKCHEMY_GX2_NUM_EVENT_TYPES + 3; ctx->r[4] = 0x55556666; ctx->r[5] = 0;
+        ppc_import_gx2_GX2SetEventCallback(ctx);
+        checkBool("GX2SetEventCallback(out-of-range type) returns 0", (int)ctx->r[3], 0);
+        checkBool("GX2SetEventCallback(out-of-range type) left the real table untouched",
+                  (int)(g_arkchemy_gx2.event_callback_func[0] == 0x33334444), 1);
+    }
+
+    // ---- GX2SetCullOnlyControl: the one deko3d-backed function in this
+    // phase that *does* keep readable shadow state (it shares
+    // g_arkchemy_gx2.rasterizer_state with GX2SetPolygonControl, exactly
+    // like GX2SetRasterizerClipControl does), so it gets a real
+    // assertion rather than the weaker submit-check the rest get.
+    // frontFace=CCW(0), cullFront=0, cullBack=1 -> DkFace_Back, and the
+    // polygon mode GX2SetPolygonControl set in the phase above must
+    // survive it.
+    ctx->r[3] = 0; ctx->r[4] = 0; ctx->r[5] = 1;
+    ppc_import_gx2_GX2SetCullOnlyControl(ctx);
+    checkBool("GX2SetCullOnlyControl.cullMode", (int)g_arkchemy_gx2.rasterizer_state.cullMode, (int)DkFace_Back);
+    checkBool("GX2SetCullOnlyControl preserves prior polygonModeFront",
+              (int)g_arkchemy_gx2.rasterizer_state.polygonModeFront, (int)DkPolygonMode_Fill);
+
+    // ---- Command-buffer-only setters. Real, game-plausible arguments
+    // (a full 1280x720 viewport/scissor matching this project's own real
+    // framebuffer size, ordinary alpha blending, a standard 0xFFFF
+    // primitive-restart index), recorded into the real command buffer
+    // and then actually submitted below. No shadow state exists to
+    // assert -- see this function's own header comment on why that makes
+    // this a weaker but still real check.
+    ctx->f[1] = 0.0; ctx->f[2] = 0.0; ctx->f[3] = 1280.0; ctx->f[4] = 720.0; ctx->f[5] = 0.0; ctx->f[6] = 1.0;
+    ppc_import_gx2_GX2SetViewport(ctx);
+    ctx->r[3] = 0; ctx->r[4] = 0; ctx->r[5] = 1280; ctx->r[6] = 720;
+    ppc_import_gx2_GX2SetScissor(ctx);
+    ctx->f[1] = 2.0;
+    ppc_import_gx2_GX2SetLineWidth(ctx);
+    ctx->f[1] = 4.0; ctx->f[2] = 4.0;
+    ppc_import_gx2_GX2SetPointSize(ctx);
+    /* GX2SetPolygonOffset(frontOffset, frontScale, backOffset, backScale, clamp) -- all five real floats in f1-f5 */
+    ctx->f[1] = 1.0; ctx->f[2] = 2.0; ctx->f[3] = 3.0; ctx->f[4] = 4.0; ctx->f[5] = 0.5;
+    ppc_import_gx2_GX2SetPolygonOffset(ctx);
+    ctx->f[1] = 0.25; ctx->f[2] = 0.5; ctx->f[3] = 0.75; ctx->f[4] = 1.0;
+    ppc_import_gx2_GX2SetBlendConstantColor(ctx);
+    /* GX2SetStencilMask(frontMask, frontWriteMask, frontRef, backMask, backWriteMask, backRef) */
+    ctx->r[3] = 0xFF; ctx->r[4] = 0xFF; ctx->r[5] = 1;
+    ctx->r[6] = 0x0F; ctx->r[7] = 0x0F; ctx->r[8] = 2;
+    ppc_import_gx2_GX2SetStencilMask(ctx);
+    ctx->r[3] = 0xFFFF;
+    ppc_import_gx2_GX2SetPrimitiveRestartIndex(ctx);
+
+    // GX2SetBlendControl twice, deliberately at both ends of the real
+    // GX2BlendMode/GX2BlendCombineMode enum ranges: ordinary alpha
+    // blending first, then the highest real values either enum defines
+    // (INV_CONSTANT_ALPHA(20), REV_SUB(4)) on the highest real render
+    // target index (7). Those maxima are exactly where an off-by-one in
+    // this shim's own real lookup tables would read past the end of a
+    // 21- or 5-entry array, so they are worth submitting for real
+    // rather than only reasoning about.
+    ctx->r[3] = 0; /* target 0 */
+    ctx->r[4] = 5; ctx->r[5] = 6; ctx->r[6] = 0;  /* SRC_ALPHA, INV_SRC_ALPHA, ADD */
+    ctx->r[7] = 1;                                 /* useAlphaBlend */
+    ctx->r[8] = 1; ctx->r[9] = 0; ctx->r[10] = 0;  /* ONE, ZERO, ADD */
+    ppc_import_gx2_GX2SetBlendControl(ctx);
+    ctx->r[3] = 7; /* highest real render target */
+    ctx->r[4] = 20; ctx->r[5] = 20; ctx->r[6] = 4; /* INV_CONSTANT_ALPHA x2, REV_SUB -- real enum maxima */
+    ctx->r[7] = 0;                                 /* no separate alpha blend -- color factors reused */
+    ctx->r[8] = 0; ctx->r[9] = 0; ctx->r[10] = 0;
+    ppc_import_gx2_GX2SetBlendControl(ctx);
+
+    // Real, documented no-ops in this shim (shaders, attribute buffers,
+    // display-list recording, context state, draws). Calling them proves
+    // only that they link and return -- deliberately NOT counted as
+    // passes, since there is no real behavior behind them to pass; they
+    // are here so that when any of them does gain a real implementation,
+    // it is already being called on hardware from this test.
+    ctx->r[3] = 0; ctx->r[4] = 0; ctx->r[5] = 0; ctx->r[6] = 0;
+    ppc_import_gx2_GX2SetContextState(ctx);
+    ppc_import_gx2_GX2SetShaderModeEx(ctx);
+    ppc_import_gx2_GX2SetAttribBuffer(ctx);
+    ppc_import_gx2_GX2SetFetchShader(ctx);
+    ppc_import_gx2_GX2SetVertexShader(ctx);
+    ppc_import_gx2_GX2SetPixelShader(ctx);
+    ppc_import_gx2_GX2SetSwapInterval(ctx);
+    ppc_import_gx2_GX2Invalidate(ctx);
+    ppc_import_gx2_GX2DrawEx(ctx);
+    ppc_import_gx2_GX2DrawIndexedEx(ctx);
+    checkpoint("[documented no-ops: shaders/attrib buffers/draws/context state] called -- linked and returned (no behavior to check)");
+
+    // Everything recorded above has to actually reach the GPU and
+    // complete. This is the real check for the whole command-buffer
+    // group -- a malformed viewport, an out-of-range blend target or a
+    // bad enum reaching a lookup table shows up here, on real hardware,
+    // as a fault or a hang, and nowhere else.
+    uint64_t before = g_arkchemy_gx2.submitted_timestamp;
+    ppc_import_gx2_GX2Flush(ctx);
+    ppc_import_gx2_GX2DrawDone(ctx);
+    checkBool("previously-unexercised command-buffer state submitted and completed",
+              g_arkchemy_gx2.submitted_timestamp > before, 1);
+    checkpoint("[viewport/scissor/line/point/depth-bias/blend/stencil/restart] submitted+completed -- PASS (no hang/crash)");
+
+    // Leave the real rasterizer/scissor state where the frame loop below
+    // expects it: a full-framebuffer scissor is what was set above, so
+    // the loop's own GX2ClearColor still covers the whole screen and the
+    // green/red pass indicator stays meaningful.
+    checkpoint("=== previously-unexercised surface self-test done: %d passed, %d failed (cumulative) ===",
+               g_pass_count, g_fail_count);
+}
+
 #define GX2TEST_SWAP_COUNT_ADDR 0x2000u
 #define GX2TEST_FLIP_COUNT_ADDR 0x2004u
 
@@ -796,6 +1091,7 @@ int main(int argc, char *argv[]) {
     checkpoint("GX2Init done");
 
     run_state_selftest(&ctx);
+    run_untested_surface_selftest(&ctx);
 
     // GX2GetSwapStatus/swap_count+flip_count real increment check, done
     // here (not in run_state_selftest) since it needs a real

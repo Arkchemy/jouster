@@ -56,6 +56,22 @@ That produces `game/Jouster.nro`. Copy it to your Switch's SD card under
 The generated C is not in the repository — `game/regenerate.sh` drives
 conquertron against your own dump to produce it before building.
 
+### Without a local devkitPro install
+
+The devkitPro toolchain also ships as a container image, which builds
+everything here without touching your system package manager (podman or
+docker, run from the directory that holds both checkouts):
+
+```bash
+podman run --rm -v "$PWD":/work:z -w /work/jouster/native --userns=keep-id \
+    docker.io/devkitpro/devkita64 \
+    bash -lc 'export PATH=$DEVKITPRO/devkitA64/bin:$PATH; make -j'
+```
+
+Swap `native` for `gx2_test` or `game` to build the others; the image
+already carries libnx and deko3d, so nothing else needs fetching.
+
+
 ## Test harness
 
 `game/source/main.c` is not a normal entry point; it is a diagnostic harness.

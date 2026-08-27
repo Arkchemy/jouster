@@ -1,0 +1,14 @@
+# Build output from the devkitPro/libnx makefiles (native/, gx2_test/,
+# game/) and from build.sh's bare-metal path.
+build/
+*.nro
+*.elf
+*.nacp
+*.map
+
+# The recompiled full-game C: a build artefact produced by
+# game/regenerate.sh from your own dump, deliberately never committed
+# (see game/README.md). Deliberately scoped to game/ only --
+# native/source/generated_t*.c are the small recompiler test programs
+# and *are* committed, since they're what native/'s .nro actually tests.
+game/source/generated_*.c
