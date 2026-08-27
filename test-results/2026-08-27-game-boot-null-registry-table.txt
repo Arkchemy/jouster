@@ -5,14 +5,19 @@ frames and exited on its own -- no hang, no crash. Raw SD-card log
 reproduced in full here; the frame lines are ~4KB each. Key events and
 final state below.
 
-IMPORTANT -- the instrumentation that produced this log is NOT in any
-repository. The probe labels in it (NULL TABLE, NULL REGISTRY ENTRY,
-NULL OBJECT, BADBUF, FOREIGN REALLOC, FOREIGN FREE, INTEGRITY) appear
-nowhere in jouster or conquertron, and a search of the whole laptop
-found no source containing them. Only game/source/main.c's generic
-emitter survives. Whatever tree built this .nro is gone, so this log's
-output can no longer be reproduced from a clean checkout, and the probes
-would have to be written again.
+NOTE on reproducing this -- corrected 2026-08-28, an earlier revision of
+this file overstated it. Most of the instrumentation IS committed: the
+whole harness in game/source/main.c (emitter, w0-w3 watch slots, every
+loopwatch slot) and the allocation probes in conquertron's
+cafeos_coreinit_mem.h. Finding 1 below is therefore reproducible today
+with no new code. What is missing is eight ad-hoc probes from that one
+investigation -- CTXCTOR, NULL TABLE, NULL REGISTRY ENTRY, NULL OBJECT,
+BADBUF, FOREIGN REALLOC, FOREIGN FREE, INTEGRITY -- which appear in
+neither repository nor anywhere on the laptop, and the .nro that
+contained them is no longer on the SD card either. They are
+reconstructible: this log names each probe's four values in order and
+the exact last_pc/caller_lr it fired at. See
+docs/game-probe-reconstruction.md.
 
 FINAL STATE
 
