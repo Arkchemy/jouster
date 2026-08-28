@@ -1,0 +1,41 @@
+Jouster game harness, build "Aug 28 2026 19:23:54".
+
+  [PROBE ARKREGISTER_GATE] x23, all with:
+      arkcore=0x3000004  flag@0x16=0x1
+      depth@0x18 = 0 (x10), 1 (x10), 2 (x3)
+
+THE GATE IS OPEN.
+
+findings.json named the flag byte at igArkCore+0x16 as the first thing to
+check if reflection looked wholesale-missing. It reads 0x1 on every one of
+the 23 calls, and the nesting depth climbs 0 -> 1 -> 2 as registration
+recurses through parent classes. So lazy registration is permitted and is
+actually running, and that explanation is closed.
+
+Worth stating plainly why this needed measuring at all: beginArkRegister
+had already been observed firing 23 times, and that was treated as
+"registration runs". A hit count says nothing about a function's RETURN
+VALUE, and here the return value is the entire decision. The distinction
+went unmeasured for several runs.
+
+WHAT IS LEFT
+
+The object is an igMemoryPoolHandlePool; _handleList is a field of its
+base class igHandlePool. The base's own registration runs, and its
+append call is well-formed with a count of 2. The gate is open. The
+object is constructed with a real vtable, and its scalar field carries
+its metafield default.
+
+So the remaining question is whether the SUBCLASS metaobject carries the
+base class's fields at all. A fifth probe reports, immediately after
+createInstance returns:
+
+  meta                 the igMemoryPoolHandlePool metaobject
+  meta_fieldcount      meta+0xC, the same word the base's append reads
+  obj                  the new instance
+  obj_handleList@0x18  _handleList on it, before anything else touches it
+
+  fieldcount 0 or small, handleList null -> the subclass metaobject does
+      not inherit the base's fields, and that is the bug.
+  fieldcount sane, handleList null -> the fields are known and
+      createInstance is not constructing them.
