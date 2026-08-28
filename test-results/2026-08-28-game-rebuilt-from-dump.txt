@@ -1,0 +1,57 @@
+Jouster game harness, build stamp "Aug 28 2026 14:14:23" -- the first
+full game build produced on this laptop, from the owner's own decrypted
+dump (code/tfbGame_cafe.rpx, sha256
+8be8316c9b0518779339c0248abb1dde7baf2c2428eafe6e25ead83e91ec7dd3).
+Run on real hardware for the full 120s / 7200 frames; exited on its own.
+
+REPRODUCIBILITY
+
+Byte-for-byte the same failure state as the 2026-08-27 build:
+
+  sti_idx=113 last_pc=0x21a6b5c caller_lr=0x218a62c calls=78154
+  mem: fail=2268 free=47 reuse=42
+  report_fmt="Memory pool (index %d) failed integrity check."
+
+Identical call count and identical allocation figures across two
+independently regenerated builds is worth recording on its own: the
+recompiler's output is deterministic, and the fault is not timing- or
+allocation-order-dependent.
+
+Two differences from the 2026-08-27 log, both explained:
+
+  - append_str is garbage again ("H...|..y@.") where the previous run
+    showed ".". Same reporter path, different garbage; nothing about it
+    is stable, which is consistent with it being an uninitialised read
+    rather than a real string.
+  - None of the eight ad-hoc probes appear. They lived inside
+    generated_*.c, which regenerate.sh overwrites, so regenerating
+    deleted them -- as documented in docs/game-probe-reconstruction.md.
+
+WHAT THIS RUN WAS SUPPOSED TO ANSWER, AND DID NOT
+
+g_ppc_watch_store_addr was armed on synthetic address 435928 (guest
+0x101345e8, &.bss+321000) -- the global feeding the registry index in
+Core::igDataList::setCapacity, and the only static reference to that
+address in ~8.7M lines of generated C.
+
+The log contains no wwatch field at all. The reason is a real gap, not
+a bad run: ppc_store_u32/ppc_store_u8 raise the watch under synthetic
+tags 0xf0000001-0xf0000004, and debug_watch_sink only records events
+whose tag matches a slot in g_debug_watch_slots[]. No slot existed for
+those tags, so every event was dropped on the floor. Arming the address
+was necessary and not sufficient.
+
+Four slots added afterwards (storewatch_value, storewatch_writer_pc,
+and the two byte-store equivalents). The next run answers the question
+properly: hit_count staying 0 across a full run means nothing writes
+that global at all, which would make this a registration step that never
+runs rather than one that runs too late.
+
+STILL OPEN, UNCHANGED BY THIS RUN
+
+  - BinkOpen("movies/bash.mov") returns NULL on a file FSOpenFile finds.
+    Not an empty-file problem: the asset is 13,421,988 bytes on both the
+    SD card and the laptop copy.
+  - Static initialiser 87 exhausting the ExpHeap through unfreed 128KB
+    allocations, all from sbrk (0x2583420) -- named for the first time by
+    reading the regenerated C.

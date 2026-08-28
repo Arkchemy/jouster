@@ -249,6 +249,28 @@ static void fs_open_log_sink(const char *guest_path, const char *real_path, cons
  * requests -- a different size class, not proof this one also fails). */
 typedef struct { uint32_t tag; const char *label; uint32_t last_value; uint64_t hit_count; uint32_t changed_count; uint64_t last_hit_call_count; } ArkchemyDebugWatchSlot;
 static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
+    /* The store-watch's own synthetic tags. ppc_store_u32 and
+     * ppc_store_u8 in ppc_runtime.h raise these whenever a store hits
+     * g_ppc_watch_store_addr, but debug_watch_sink only records events
+     * whose tag matches a slot -- so without these four rows, arming
+     * that watch records precisely nothing and the run comes back with
+     * no evidence either way. That is exactly what happened on the
+     * 2026-08-28 run: the watch was armed on the registry global and the
+     * log had no field for it at all.
+     *
+     * 0xf0000001 = the value stored, 0xf0000002 = which recompiled
+     * function stored it. The two byte-store tags cover a partial write
+     * into the same word, which is the case the 2026-08-20 fix in
+     * ppc_store_u8 was added for.
+     *
+     * hit_count staying 0 across a full run is the interesting answer
+     * here, not a broken probe: it means nothing writes the watched
+     * address at all. */
+    {0xf0000001u, "storewatch_value", 0xFFFFFFFFu, 0, 0},
+    {0xf0000002u, "storewatch_writer_pc", 0xFFFFFFFFu, 0, 0},
+    {0xf0000003u, "storewatch_bytevalue", 0xFFFFFFFFu, 0, 0},
+    {0xf0000004u, "storewatch_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
+
     {0x21aa648u, "sp_container_alloc", 0xFFFFFFFFu, 0, 0},
     {0xFFFFFFFEu, "dispatch_userInstantiate", 0xFFFFFFFFu, 0, 0},
     {0x215bf24u, "singleton_needs_ctx_flag", 0xFFFFFFFFu, 0, 0},
