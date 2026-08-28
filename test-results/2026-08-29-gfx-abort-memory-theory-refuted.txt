@@ -1,0 +1,76 @@
+2026-08-29 (run 3) — memory starvation refuted; console removed as the victim
+==============================================================================
+
+RUN 3 RESULT
+------------
+Identical to run 2, to the call:
+
+    MEM EVENT #1 ... calls=4082        (run 2: calls=4081)
+    frame lines: 1                      (frame 0 only)
+    host mem @frame 0: used=3185MB total=3189MB free=3MB
+
+Dies under a second in, same libnx 2345-0020 (BadGfxQueueBuffer) in
+framebufferEnd from the main thread's consoleUpdate.
+
+THE MEMORY THEORY IS DEAD
+-------------------------
+It was a reasonable read of "used=3185MB of total=3189MB", and it was wrong.
+
+Two independent measurements kill it:
+
+1. The 128MB __libnx_initheap override changed "used" by exactly nothing --
+   3185MB before, 3185MB after. hbloader commits that memory before this NRO
+   runs, so the NRO's own image (1GB .bss + 159MB .text) lives *inside* the
+   already-committed region. Nothing an NRO does from the inside moves that
+   number.
+
+2. More decisively: run 2 survived 81 seconds of continuous per-frame
+   consoleUpdate on the identical 3MB of headroom. If 3MB were fatal to the
+   graphics driver, that run could not have happened. The headroom is normal
+   for this program, not a symptom.
+
+The override has been removed. It cost 128MB of .bss inside the same
+committed region to achieve nothing, which makes it worse than absent.
+
+ALSO ALREADY RULED OUT (by inspection, not argument)
+-----------------------------------------------------
+- Guest memory reaching the host: every guest access masks with
+  & (PPC_MEM_SIZE - 1), so a wild guest pointer cannot leave the 1GB arena.
+- Unlocked console race: both threads take g_console_mutex.
+- Ignored applet suspend: the frame loop is driven by appletMainLoop().
+- A second owner of the display: nothing but consoleInit touches
+  nwindowGetDefault; the GX2 shims never create a window or swapchain.
+- Lost log tail: checkpoint() fflushes every line, so MEM EVENT #1 really is
+  the last thing that happened, not the last thing that got written.
+
+WHAT ACTUALLY CORRELATES
+------------------------
+The only thing that changed between the run that survived 81 seconds and the
+runs that die in under one is what the GAME THREAD is doing:
+
+    run 2 (81s alive):  stuck in igStringHelper::comparei, a leaf function,
+                        touching nothing but the guest arena
+    run 3 (<1s alive):  past setAppCommandLine and into real engine code
+
+So something the game thread does once it reaches real engine init takes the
+main thread's framebuffer down with it. The game is never on the crash stack,
+which means we are looking at the victim rather than the culprit.
+
+THE EXPERIMENT
+--------------
+main.c now sets g_console_enabled = false immediately before calling
+ppc_arkchemy_game_entry. Everything still goes to game-results.log, which is
+fflushed per line; only the screen goes quiet.
+
+This removes the victim, and both outcomes are informative:
+
+  survives  -> the console/graphics path was the thing being broken, it is
+               confirmed, and we finally get a full 120 seconds of boot
+               telemetry: w4 initBootstrap, w6 igArkCore::init, w7 = 36
+               control, and whether FSOpenFile ever sees alchemy.xml
+  still dies -> the fault is in the game thread itself, and the crash report
+               will point at recompiled game code with a symbolisable PC
+               instead of at libnx's graphics path
+
+Expect a frozen screen for the full 120 seconds. That is the intended
+behaviour of this build, not a hang.

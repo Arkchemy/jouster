@@ -113,6 +113,31 @@ static const char *checkpoint_color(const char *msg) {
 }
 
 static Mutex g_console_mutex;
+
+/* On-screen console output is switched off the moment the recompiled game
+ * entry is called (2026-08-29). The log file keeps everything.
+ *
+ * Why: three runs in a row died with libnx 2345-0020 (BadGfxQueueBuffer)
+ * inside framebufferEnd, reached from the MAIN thread's consoleUpdate, under
+ * a second after the game thread entered real engine code. The game itself
+ * is never on that stack.
+ *
+ * Two explanations were checked and refuted by measurement rather than
+ * argument:
+ *   - guest memory corrupting the host: impossible, every guest access is
+ *     masked with & (PPC_MEM_SIZE - 1);
+ *   - host memory starvation: the run of the same day survived 81 seconds of
+ *     continuous console updates on the identical "used=3185MB total=3189MB"
+ *     3MB of headroom, and capping the libnx heap moved that number not at
+ *     all (hbloader commits it before this NRO runs).
+ *
+ * What is left is that something the game thread does once it reaches real
+ * engine code takes the console's framebuffer down with it. Removing the
+ * console removes the victim: if the run then survives, that is confirmed
+ * and we finally get to watch the boot; if it still dies, the fault is in
+ * the game thread and the crash report will point straight at it instead of
+ * at libnx's graphics path. Either result is worth more than the screen. */
+static volatile bool g_console_enabled = true;
 /* Real gap found in an audit, 2026-08-24: this function had no printf
  * format attribute, so GCC did no format/argument checking on it at all
  * -- on the single most important diagnostic function in the project,
@@ -169,9 +194,11 @@ static void checkpoint(const char *fmt, ...) {
     // "clear line before printing a fresh one" convention -- without
     // it, a checkpoint line landing mid-spin would visibly concatenate
     // onto the spinner's leftover text instead of starting clean.
-    mutexLock(&g_console_mutex);
-    printf("\r\x1b[K%s%s\x1b[0m\n", checkpoint_color(buf), buf);
-    mutexUnlock(&g_console_mutex);
+    if (g_console_enabled) {
+        mutexLock(&g_console_mutex);
+        printf("\r\x1b[K%s%s\x1b[0m\n", checkpoint_color(buf), buf);
+        mutexUnlock(&g_console_mutex);
+    }
 
     if (!g_log) return;
     fprintf(g_log, "%s\n", buf);
@@ -794,38 +821,15 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
     if (n == 0) snprintf(out, out_size, "<empty>");
 }
 
-/* libnx reserves ALL remaining process memory as the malloc heap unless a
- * program overrides __libnx_initheap. This program is an extreme case of why
- * that default hurts: g_shared above is 1GB of .bss and the recompiled game
- * is another 159MB of .text, so the image alone is ~1.19GB, and libnx then
- * committed everything left. Every run reported:
- *
- *     process memory: total=3189MB used=3185MB
- *
- * -- 4MB of headroom, from the very first line of the log.
- *
- * The graphics driver allocates lazily, outside that heap, so it dies later
- * rather than at init: three consecutive runs on 2026-08-29 aborted with
- * libnx result 2345-0020 (LibnxError_BadGfxQueueBuffer) inside
- * framebufferEnd, called from the main thread's own consoleUpdate. The
- * recompiled game was not involved -- guest stores are masked with
- * (PPC_MEM_SIZE - 1) and cannot touch host memory at all.
- *
- * A fixed inner heap means libnx never calls svcSetHeapSize for "everything
- * available", so the rest stays uncommitted and the graphics driver can
- * actually allocate. 128MB is far more than this harness needs: the guest
- * arena is .bss, not malloc, so host heap use is only newlib stdio, the FS
- * shim's own bookkeeping and Bink's host-side buffers. */
-#define ARKCHEMY_HOST_HEAP_SIZE (128u * 1024u * 1024u)
-static char g_inner_heap[ARKCHEMY_HOST_HEAP_SIZE];
-
-void __libnx_initheap(void);
-void __libnx_initheap(void) {
-    extern char *fake_heap_start;
-    extern char *fake_heap_end;
-    fake_heap_start = g_inner_heap;
-    fake_heap_end   = g_inner_heap + sizeof(g_inner_heap);
-}
+/* No __libnx_initheap override here, deliberately. One was tried on
+ * 2026-08-29 to leave the graphics driver room to allocate, on the theory
+ * that libnx's default heap was starving it. It was removed the same day:
+ * "used" stayed at exactly 3185MB with the override in place, because
+ * hbloader commits that memory before this NRO ever runs, and a fixed inner
+ * heap only adds its own size to .bss inside that same committed region --
+ * spending 128MB to fix nothing. The starvation theory itself was refuted
+ * separately: an earlier run survived 81 seconds of continuous console
+ * updates on the identical 3MB of headroom. */
 
 static PpcSharedMemory g_shared;
 
@@ -1490,6 +1494,10 @@ static void game_thread_func(void *arg) {
      * argc = 0 is the honest value here -- this harness genuinely has no
      * command line to pass -- and it makes setAppCommandLine skip the scan
      * on its own bounds check rather than by accident. */
+    checkpoint("[game thread] on-screen console going quiet now -- everything "
+               "from here is in this log file only (see g_console_enabled)");
+    g_console_enabled = false;
+
     g_ctx.r[3] = 0; /* argc */
     g_ctx.r[4] = 0; /* argv */
 
@@ -1858,12 +1866,14 @@ int main(int argc, char *argv[]) {
                                  : g_globals_init_done ? "\x1b[35m" : "\x1b[33m";
         const char *phase_name = g_game_thread_done ? "STEALTH ELF" : g_static_init_done ? "GILL GRUNT"
                                 : g_globals_init_done ? "SPYRO" : "TRIGGER HAPPY";
+        if (g_console_enabled) {
         mutexLock(&g_console_mutex);
         printf("\r\x1b[K%s%c\x1b[0m  phase=%-13s frame=%d/%d  calls=%llu",
                phase_color, spinner_frames[(frame / 4) % 4], phase_name, frame, GAME_TEST_AUTO_EXIT_FRAMES,
                (unsigned long long)g_ppc_fn_call_count);
         consoleUpdate(NULL);
         mutexUnlock(&g_console_mutex);
+        }
 
         if (frame % 300 == 0) {
             /* Host-side headroom over time. If the graphics abort really is
