@@ -1154,10 +1154,29 @@ static void game_thread_func(void *arg) {
      *       field list built, so nothing can instantiate _handleList.
      *   >0 with instantiateFromPool=0 -> fields are appended but never
      *       instantiated for this object. */
-    g_ppc_watch[4].pc = 0x21616d0u; /* igMetaObject::instantiateAndAppendFields */
-    g_ppc_watch[5].pc = 0x21c1f8cu; /* igMetaObject::instantiateFromPool */
-    g_ppc_watch[6].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
-    g_ppc_watch[7].pc = 0x2165878u; /* igHandlePool::setCapacity (expect 1) */
+    /* 2026-08-28, ninth round. The append call is correct:
+     *
+     *   [PROBE HP_APPENDFIELDS] meta=0x300552c meta_0xC=0x3
+     *                           arg_r4=0x115248 arg_r5=0x0
+     *   21b1b84: li r5, 0    start index
+     *   21b1b88: li r6, 2    count -- both fields
+     *
+     * instantiateAndAppendFields is handed a real metaobject, the real
+     * instFuncs array, and a count of 2. Nothing is wrong with it.
+     *
+     * And _freeHandle=0xffff is now explained: its metafield is an
+     * igIntMetaField with setDefault, so 0xffff is a DEFAULT applied at
+     * construction. _handleList is an igObjectRefMetaField, whose default
+     * is legitimately null -- something else has to populate it.
+     *
+     * So a null _handleList may not be a fault at all. The fault may be
+     * that setCapacity is called before whatever assigns it. These are
+     * its four possible callers; the one that fires identifies the
+     * context, and therefore what was supposed to have run first. */
+    g_ppc_watch[4].pc = 0x2178b00u; /* igMemoryContext::activate */
+    g_ppc_watch[5].pc = 0x2172900u; /* igMemoryContext::appendMemoryPool */
+    g_ppc_watch[6].pc = 0x214f6ccu; /* igMemoryHandleContext::createLabel */
+    g_ppc_watch[7].pc = 0x214ea3cu; /* igMemoryHandleContext::userInstantiate */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1871,10 +1890,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(instantiateAndAppendFields) hits=%u"
-                       " w5(igMetaObject::instantiateFromPool) hits=%u"
-                       " w6(appendToArkCore) hits=%u"
-                       " w7(igHandlePool::setCapacity) hits=%u"
+                       " -- w4(igMemoryContext::activate) hits=%u"
+                       " w5(appendMemoryPool) hits=%u"
+                       " w6(igMemoryHandleContext::createLabel) hits=%u"
+                       " w7(igMemoryHandleContext::userInstantiate) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"

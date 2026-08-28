@@ -1,0 +1,44 @@
+Jouster game harness, build "Aug 28 2026 19:04:38".
+
+  [PROBE HP_APPENDFIELDS] meta=0x300552c meta_0xC=0x3
+                          arg_r4=0x115248 arg_r5=0x0  at calls=69142
+
+  w4(instantiateAndAppendFields)  hits=20
+  w5(instantiateFromPool)         hits=45
+  w6(appendToArkCore)             hits=36
+  w7(igHandlePool::setCapacity)   hits=1
+
+THE APPEND IS CORRECT, AND THE NULL MAY NOT BE A FAULT
+
+igHandlePool does get its field list built -- the probe fires once with a
+real metaobject. Reading the argument set-up shows the call is entirely
+well-formed:
+
+  21b1b7c: lwz  r31, 0x4cac(r31)   metaobject from .bss
+  21b1b80: addi r4, r4, -0x2138    instFuncs array
+  21b1b84: li   r5, 0              start index
+  21b1b88: li   r6, 2              count: both fields
+
+So the sixteen-classes-without-field-lists guess from the previous run
+was wrong, and it is as well it was measured rather than believed.
+
+More importantly, _freeHandle=0xffff is now explained. Its metafield is
+an igIntMetaField and arkRegisterInitialize calls setDefault on it, so
+0xffff is a DEFAULT VALUE applied at construction, not evidence of
+successful initialisation. _handleList is an igObjectRefMetaField, and
+the default for an object reference is null.
+
+That reframes the whole thing: a null _handleList immediately after
+construction may be completely normal. The fault would then be that
+igHandlePool::setCapacity runs before whatever is supposed to populate
+it -- an ordering problem, not a missing-construction one.
+
+NEXT
+
+setCapacity has exactly four possible callers. Whichever fires names the
+context, and therefore what should have run first:
+
+  w4  0x2178b00  igMemoryContext::activate
+  w5  0x2172900  igMemoryContext::appendMemoryPool
+  w6  0x214f6cc  igMemoryHandleContext::createLabel
+  w7  0x214ea3c  igMemoryHandleContext::userInstantiate
