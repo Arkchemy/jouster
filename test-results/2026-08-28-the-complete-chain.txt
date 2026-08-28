@@ -1,0 +1,67 @@
+Jouster game harness, build "Aug 28 2026 20:58:39". This run closes the
+chain end to end.
+
+  w4(igArkCore::initBootstrap)        hits=1   <- ENTERED
+  w5(igMemoryContext::systemActivate) hits=1
+  w6(igArkCore::init)                 hits=0   <- never reached
+  w7(appendToArkCore)                 hits=36  <- control
+
+  last_pc = 0x21a6b5c = Core::igStringBuf::append
+
+initBootstrap is entered and never returns. Execution ends inside
+igStringBuf::append, which is where the 2026-08-24 notes already put it.
+
+THE COMPLETE CAUSAL CHAIN
+
+  igMemoryContext::systemActivate
+    -> igMemoryContext::activate
+      -> igHandlePool::setCapacity on a pool whose _handleList (+0x18) is
+         null, two instructions after the object was created
+        -> igDataList::setCapacity with this = NULL
+          -> reallocateFieldMemory(obj=0), this = 0 + 9
+            -> "igMemory::Properties" read from address 9 is garbage
+              -> a foreign pointer (0x7000000) is freed into pool 0
+                -> TLSF links a block it does not own into its free list
+  igArkCore::igArkCore            runs
+  igArkCore::initBootstrap        entered
+    -> the corrupted pool's own walker reports the heap inconsistent
+      -> "Memory pool (index %d) failed integrity check."
+        -> igReportHandler::reportVaList -> igStringBuf::append
+          -> a strlen scan over a pointer with no terminator, and because
+             guest loads are address-masked it wraps instead of faulting
+            -> INFINITE LOOP; initBootstrap never returns
+  igArkCore::init                 NEVER RUNS
+    -> no object loaders registered
+    -> the config path is never read
+    -> no file is ever opened, not even alchemy.xml
+    -> reflection keeps only the 36 self-registering classes
+
+Every arrow is measured on hardware or read directly from the
+regenerated C.
+
+A CORRECTION MADE WHILE WRITING THIS
+
+The strlen loop at 21a6b88 was briefly recorded as a recompiler bug --
+`lbzu` loading without performing its register update. It is not. The
+update is emitted on the following line:
+
+  ctx->r[12] = ppc_load_u8(ctx, ctx->r[11] + (int32_t)1);
+  ctx->r[11] = ctx->r[11] + (int32_t)1;
+
+The claim came from reading one line of a two-line translation. That is
+the third time today a suspected recompiler bug turned out to be correct
+code read too quickly.
+
+TWO CANDIDATE FIXES, IN ORDER
+
+1. The root: why _handleList is null when activate uses it. Fixing this
+   removes the corruption, so there is no error to report and nothing to
+   hang on.
+
+2. The reporter hang itself. The 2026-08-24 notes argued this is worth
+   doing first, because it makes every future engine error readable
+   instead of freezing the game. That reasoning still holds and the work
+   was never done.
+
+The second is smaller and unblocks diagnosis permanently; the first is
+the actual defect.
