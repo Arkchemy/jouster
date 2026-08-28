@@ -271,6 +271,18 @@ static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0xf0000003u, "storewatch_bytevalue", 0xFFFFFFFFu, 0, 0},
     {0xf0000004u, "storewatch_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
 
+    /* Positive control for the four slots above. Armed on an address a
+     * literal store in init_globals writes unconditionally, so these
+     * MUST show hits>0 on any run that gets past globals init. If they
+     * do and the suspect slots stay at 0, the suspect really is never
+     * written. If these are 0 too, the instrument is broken and the
+     * whole result is void -- which is the failure mode that already
+     * cost one run. */
+    {0xf0000005u, "control_value", 0xFFFFFFFFu, 0, 0},
+    {0xf0000006u, "control_writer_pc", 0xFFFFFFFFu, 0, 0},
+    {0xf0000007u, "control_bytevalue", 0xFFFFFFFFu, 0, 0},
+    {0xf0000008u, "control_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
+
     {0x21aa648u, "sp_container_alloc", 0xFFFFFFFFu, 0, 0},
     {0xFFFFFFFEu, "dispatch_userInstantiate", 0xFFFFFFFFu, 0, 0},
     {0x215bf24u, "singleton_needs_ctx_flag", 0xFFFFFFFFu, 0, 0},
@@ -947,6 +959,11 @@ static void game_thread_func(void *arg) {
      * bootstrapInitialize bug described further up -- a global that a
      * bootstrap function is supposed to write, read while still NULL. */
     g_ppc_watch_store_addr = 435928u;
+
+    /* Control address: generated_0071.c's init_globals does
+     * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
+     * slots above come back empty, the measurement is void. */
+    g_ppc_watch_store_addr2 = 4359280u;
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
