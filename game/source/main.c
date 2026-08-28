@@ -1042,10 +1042,28 @@ static void game_thread_func(void *arg) {
      * meta-object descriptor is never even read. This run finds which
      * rung the sequence stops on. The first zero going down the ladder
      * is the answer. */
-    g_ppc_watch[4].pc = 0x2002bf0u; /* main */
-    g_ppc_watch[5].pc = 0x21486a0u; /* Core::igRefAlchemy */
-    g_ppc_watch[6].pc = 0x2146ffcu; /* Core::igArkCore::igArkCore (ctor) */
-    g_ppc_watch[7].pc = 0x2154d74u; /* Core::igArkCore::beginArkRegister */
+    /* 2026-08-28, second correction. The boot ladder came back
+     * main=1, igRefAlchemy=1, igArkCore::ctor=1, beginArkRegister=23.
+     * Registration is NOT missing -- it runs twenty-three times. The
+     * earlier reading of "registration never runs" was wrong: what was
+     * measured was igRegistry's own three arkRegister* methods never
+     * being entered, and that was generalised further than the evidence
+     * allowed.
+     *
+     * So the question narrows again: the phase runs, and the classes we
+     * need are not reached by it. This set follows the walk itself.
+     *
+     *   call=0            -> begin runs but the walk never does.
+     *   call>0, add=0     -> the walk runs and registers nothing.
+     *   add>0, end=0      -> registration is entered and never completes,
+     *                        i.e. it dies partway through the class list.
+     *   igRegistry's own arkRegisterInternal is the specific class whose
+     *   absence starts the failure chain, so it is worth a slot of its
+     *   own to see whether the walk simply never gets that far. */
+    g_ppc_watch[4].pc = 0x2154c08u; /* igArkCore::callClassRegistrationFunctions */
+    g_ppc_watch[5].pc = 0x21545f0u; /* igArkCore::addObjectMeta */
+    g_ppc_watch[6].pc = 0x2154d94u; /* igArkCore::endArkRegister */
+    g_ppc_watch[7].pc = 0x21bdb88u; /* Core::igRegistry::arkRegisterInternal */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1759,10 +1777,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(main) hits=%u"
-                       " w5(igRefAlchemy) hits=%u"
-                       " w6(igArkCore::ctor) hits=%u"
-                       " w7(beginArkRegister) hits=%u"
+                       " -- w4(callClassRegistrationFunctions) hits=%u"
+                       " w5(addObjectMeta) hits=%u"
+                       " w6(endArkRegister) hits=%u"
+                       " w7(igRegistry::arkRegisterInternal) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"

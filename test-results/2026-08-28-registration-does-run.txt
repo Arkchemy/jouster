@@ -1,0 +1,56 @@
+Jouster game harness, build "Aug 28 2026 17:05:42", full run on real
+hardware. Same deterministic failure state as every run since 08-27.
+
+RESULT: registration is not missing. It runs.
+
+  w4(main)             hits=1
+  w5(igRefAlchemy)     hits=1
+  w6(igArkCore::ctor)  hits=1
+  w7(beginArkRegister) hits=23
+
+Validated in the same run by the four watches that have fired before:
+w0=1, w1=1, w2=1, w3=311.
+
+THIS CORRECTS AN EARLIER CONCLUSION IN THIS DIRECTORY
+
+2026-08-28-registration-never-runs.txt states that "Core::igRegistry's
+registration never runs" and, worse, generalises it to the whole
+registration phase. The first half is accurate and remains so: igRegistry's
+own three arkRegister* methods are never entered. The generalisation was
+wrong, and nothing in that run supported it -- watching three methods of
+one class says nothing about whether the phase that should call them runs.
+
+It does run. The whole boot chain is intact:
+
+  arkchemy_game_entry -> main -> igRefAlchemy -> igArkCore::igArkCore
+    -> beginArkRegister (23 times)
+
+So the fault is narrower and more interesting than "the engine never
+starts registering". Registration is entered twenty-three times and the
+classes whose absence breaks igDataList::setCapacity are still never
+reached.
+
+WHAT SURVIVES FROM THE EARLIER RUNS
+
+Both measurements stand; only the interpretation was overreaching.
+
+  - The per-class cached igMetaObject* slot at synthetic 435928 is read
+    9 times, always 0, never written.
+  - igRegistry's meta-object descriptor at 0x119f08 is never read.
+  - No class's arkRegisterMetaValidate is reached.
+  - The engine opens no file of its own, not even alchemy.xml.
+
+NEXT
+
+Watches follow the walk rather than its entry:
+
+  w4  0x2154c08  igArkCore::callClassRegistrationFunctions
+  w5  0x21545f0  igArkCore::addObjectMeta
+  w6  0x2154d94  igArkCore::endArkRegister
+  w7  0x21bdb88  Core::igRegistry::arkRegisterInternal
+
+  call=0         -> begin runs, the walk never does.
+  call>0, add=0  -> the walk runs and registers nothing.
+  add>0, end=0   -> registration dies partway through the class list,
+                    which given 23 begins would mean it fails the same
+                    way every time.
