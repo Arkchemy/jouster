@@ -1195,9 +1195,32 @@ static void game_thread_func(void *arg) {
      *   init>0, loadRef=0 -> init runs and stops before loading.
      *   loadRef>0  -> loading is attempted and fails, which points at the
      *                 filesystem shim rather than at ordering. */
-    g_ppc_watch[4].pc = 0x2147e98u; /* Core::igArkCore::init */
-    g_ppc_watch[5].pc = 0x21906bcu; /* Core::igDirectory::loadRef */
-    g_ppc_watch[6].pc = 0x21b98acu; /* Core::igIGZObjectLoader::arkRegister */
+    /* 2026-08-28, and this pins it to four consecutive calls.
+     * igArkCore::init has hits=0 while appendToArkCore=36 controls the
+     * run, so init genuinely never executes. Reading igRefAlchemy shows
+     * why that is such a tight result -- init is the last of four direct
+     * calls in a row:
+     *
+     *   2148750: bl igMemoryContext::systemActivate
+     *   2148758: bl igArkCore::igArkCore       measured, hits=1
+     *   2148760: bl igArkCore::initBootstrap
+     *   2148768: bl igArkCore::init            hits=0
+     *
+     * The constructor runs and init does not, so execution stops in
+     * initBootstrap -- which is exactly where this project's own
+     * 2026-08-24 notes had the engine stuck, before the investigation
+     * moved on to the handle pool. It also means the handle-pool null
+     * chased all evening is downstream scenery: systemActivate is called
+     * BEFORE the constructor, so that failure happens first and the
+     * engine keeps going regardless.
+     *
+     *   initBootstrap=0 -> it is never entered, and the gap is between
+     *       two adjacent instructions.
+     *   initBootstrap=1 with init=0 -> it is entered and never returns,
+     *       and everything downstream follows from that one call. */
+    g_ppc_watch[4].pc = 0x214726cu; /* Core::igArkCore::initBootstrap */
+    g_ppc_watch[5].pc = 0x217bc24u; /* Core::igMemoryContext::systemActivate */
+    g_ppc_watch[6].pc = 0x2147e98u; /* Core::igArkCore::init (expect 0) */
     g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
@@ -1912,9 +1935,9 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igArkCore::init) hits=%u"
-                       " w5(igDirectory::loadRef) hits=%u"
-                       " w6(igIGZObjectLoader::arkRegister) hits=%u"
+                       " -- w4(igArkCore::initBootstrap) hits=%u"
+                       " w5(igMemoryContext::systemActivate) hits=%u"
+                       " w6(igArkCore::init) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"

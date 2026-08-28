@@ -1,0 +1,55 @@
+Jouster game harness, build "Aug 28 2026 20:52:36".
+
+  w4(igArkCore::init)                hits=0
+  w5(igDirectory::loadRef)           hits=0
+  w6(igIGZObjectLoader::arkRegister) hits=0
+  w7(appendToArkCore)                hits=36  <- control
+
+igArkCore::init NEVER RUNS.
+
+That single fact explains the whole shape of the failure. init() is the
+only function that reads the config-path global, it registers all three
+object loaders, and it calls igDirectory::loadRef. Since it never
+executes: no loaders exist, no config is read, no file is ever opened,
+and the reflection system is left with only the 36 classes that register
+themselves from static init.
+
+LOCALISED TO FOUR CONSECUTIVE CALLS
+
+Core::igRefAlchemy does this, with no branching between them:
+
+  2148750: bl igMemoryContext::systemActivate
+  2148758: bl igArkCore::igArkCore        measured earlier, hits=1
+  2148760: bl igArkCore::initBootstrap
+  2148768: bl igArkCore::init             hits=0
+
+The constructor runs. init does not. So execution stops inside
+initBootstrap, one call short.
+
+THIS IS WHERE THE PROJECT ALREADY WAS
+
+The 2026-08-24 notes recorded the engine stalling inside initBootstrap,
+added INITBOOT TRACE points around its calls, and traced a hang into
+igStringPool's own bootstrap. The investigation then followed the
+memory-pool integrity error outward and spent the following days on the
+handle pool. This run says the original location was right.
+
+IT ALSO DEMOTES TONIGHT'S CHASE
+
+systemActivate is called BEFORE the igArkCore constructor, so the
+igHandlePool::_handleList null traced all evening happens earlier in the
+sequence and does not stop the engine -- the constructor still runs after
+it. That null is downstream scenery, not the blocker. Six probes and
+several hardware runs went into characterising it.
+
+NEXT
+
+  w4  0x214726c  igArkCore::initBootstrap
+  w5  0x217bc24  igMemoryContext::systemActivate
+  w6  0x2147e98  igArkCore::init (expect 0)
+  w7  0x21608ec  appendToArkCore (control)
+
+  initBootstrap=0 -> never entered; the gap is between two adjacent
+      instructions and something is wrong with the call itself.
+  initBootstrap=1, init=0 -> entered and never returns, and every
+      downstream symptom follows from that one call.
