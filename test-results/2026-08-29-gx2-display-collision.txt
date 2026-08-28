@@ -1,0 +1,77 @@
+2026-08-29 (run 4) — root cause found: two owners of the same display
+=====================================================================
+
+RUN 4 CONFIRMED THE CONSOLE WAS THE VICTIM, THEN NAMED THE CULPRIT
+-------------------------------------------------------------------
+Disabling on-screen output took the run from dying in under a second to
+surviving ~11 seconds (frame 660), and produced a crash report whose stack
+finally reached guest code:
+
+    Result: 0x367 (2359-0001)   -- a DkResult, raised by deko3d itself
+
+    dk::detail::RaiseError
+    dkSwapchainCreate
+    arkchemy_gx2_create_framebuffers   conquertron/include/cafeos_gx2.h:407
+    ppc_import_gx2_GX2Init             conquertron/include/cafeos_gx2.h:458
+    igCafeSystemMemory::activate       generated_0156.c:29300
+    igMemoryContext::systemActivate    generated_0158.c:30024
+
+THE BOOT REACHED GRAPHICS INITIALISATION. That also explains the run's other
+new number: w5(igMemoryContext::systemActivate) hits=1, the first time that
+watch has ever fired.
+
+ROOT CAUSE
+----------
+cafeos_gx2.h:405 builds the game's swapchain on nwindowGetDefault():
+
+    dkSwapchainMakerDefaults(&maker, device, nwindowGetDefault(), ...);
+    g_arkchemy_gx2.swapchain = dkSwapchainCreate(&maker);
+
+main.c's consoleInit(NULL) already owns that exact window and never released
+it. Two owners of one display; dkSwapchainCreate loses and deko3d aborts.
+
+This also retro-explains the three BadGfxQueueBuffer aborts before it. Those
+were the same collision seen from the other side: the game took the window
+and the console's next framebufferEnd had nothing to queue to. Run 4 only
+silenced the console -- it released nothing -- so the failure moved from the
+console into deko3d, which is precisely why the crash stack got useful.
+
+MY ERROR, RECORDED SO IT IS NOT REPEATED
+-----------------------------------------
+I raised "a GX2 shim fighting for the display" as a candidate in run 3 and
+then dismissed it, having grepped only game/source and game/include for
+nwindowGetDefault/deko3d and concluded "consoleInit is the only thing in the
+whole tree that touches the display". The shim lives in
+conquertron/include/cafeos_gx2.h. The grep was wrong, so a correct theory was
+discarded on the strength of a negative result that never covered the code in
+question. A negative grep is only as good as its search path, and "the whole
+tree" was a claim about the command I actually ran, which it did not support.
+
+I also proposed host-memory starvation with more confidence than the evidence
+carried; run 3 refuted it (81 seconds of console updates on the same 3MB).
+
+FIX
+---
+main.c now calls consoleExit(NULL) when it hands over, not just
+g_console_enabled = false, so the window is genuinely released before
+GX2Init asks for it.
+
+The flag is now tested INSIDE g_console_mutex by both checkpoint() and the
+frame loop, and the handover takes the same mutex. Without that, the main
+thread could pass an `if (g_console_enabled)` check, block on the lock while
+the game thread ran consoleExit, and then draw into a destroyed console.
+
+STATE OF THE BOOT
+-----------------
+  114/114 static initialisers          done
+  Bink open/decode/next/close          works on a real retail .mov
+  main(argc, argv)                     reached, argv scan no longer bogus
+  igMemoryContext::systemActivate      REACHED (w5=1, new)
+  igCafeSystemMemory::activate         reached
+  GX2Init                              reached -- died here, now fixed
+  igArkCore::initBootstrap (w4)        not yet
+  igArkCore::init (w6)                 not yet -- still the real target
+  alchemy.xml                          never opened yet
+
+EXPECT ON SCREEN: black, for the whole run. The console is gone by design and
+the game does not draw yet. game-results.log is the only output.

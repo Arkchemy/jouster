@@ -194,11 +194,11 @@ static void checkpoint(const char *fmt, ...) {
     // "clear line before printing a fresh one" convention -- without
     // it, a checkpoint line landing mid-spin would visibly concatenate
     // onto the spinner's leftover text instead of starting clean.
+    mutexLock(&g_console_mutex);
     if (g_console_enabled) {
-        mutexLock(&g_console_mutex);
         printf("\r\x1b[K%s%s\x1b[0m\n", checkpoint_color(buf), buf);
-        mutexUnlock(&g_console_mutex);
     }
+    mutexUnlock(&g_console_mutex);
 
     if (!g_log) return;
     fprintf(g_log, "%s\n", buf);
@@ -1494,9 +1494,32 @@ static void game_thread_func(void *arg) {
      * argc = 0 is the honest value here -- this harness genuinely has no
      * command line to pass -- and it makes setAppCommandLine skip the scan
      * on its own bounds check rather than by accident. */
-    checkpoint("[game thread] on-screen console going quiet now -- everything "
-               "from here is in this log file only (see g_console_enabled)");
+    /* Hand the display over to the game.
+     *
+     * GX2Init's shim builds a deko3d swapchain on nwindowGetDefault()
+     * (conquertron/include/cafeos_gx2.h:405) -- the very same window
+     * consoleInit(NULL) took at startup. Two owners, and dkSwapchainCreate
+     * loses: run 4 aborted with DkResult 2359-0001 raised out of
+     * dk::detail::RaiseError, on this stack:
+     *
+     *   igMemoryContext::systemActivate -> igCafeSystemMemory::activate
+     *     -> GX2Init -> arkchemy_gx2_create_framebuffers -> dkSwapchainCreate
+     *
+     * The three earlier BadGfxQueueBuffer aborts were the same collision
+     * seen from the other side: the game took the window and the console's
+     * next framebufferEnd had nothing left to queue to. Silencing the
+     * console (run 4) stopped it dying first but did not release anything,
+     * which is why the failure simply moved into deko3d.
+     *
+     * consoleExit releases the window, so GX2Init can have it. Everything
+     * from here on is in game-results.log; the screen belongs to the game
+     * now, and will stay black until it actually draws. */
+    checkpoint("[game thread] releasing the display to the game -- console off, "
+               "everything from here is in this log file only");
+    mutexLock(&g_console_mutex);
     g_console_enabled = false;
+    consoleExit(NULL);
+    mutexUnlock(&g_console_mutex);
 
     g_ctx.r[3] = 0; /* argc */
     g_ctx.r[4] = 0; /* argv */
@@ -1866,14 +1889,14 @@ int main(int argc, char *argv[]) {
                                  : g_globals_init_done ? "\x1b[35m" : "\x1b[33m";
         const char *phase_name = g_game_thread_done ? "STEALTH ELF" : g_static_init_done ? "GILL GRUNT"
                                 : g_globals_init_done ? "SPYRO" : "TRIGGER HAPPY";
-        if (g_console_enabled) {
         mutexLock(&g_console_mutex);
+        if (g_console_enabled) {
         printf("\r\x1b[K%s%c\x1b[0m  phase=%-13s frame=%d/%d  calls=%llu",
                phase_color, spinner_frames[(frame / 4) % 4], phase_name, frame, GAME_TEST_AUTO_EXIT_FRAMES,
                (unsigned long long)g_ppc_fn_call_count);
         consoleUpdate(NULL);
-        mutexUnlock(&g_console_mutex);
         }
+        mutexUnlock(&g_console_mutex);
 
         if (frame % 300 == 0) {
             /* Host-side headroom over time. If the graphics abort really is
