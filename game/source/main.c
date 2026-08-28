@@ -1060,10 +1060,33 @@ static void game_thread_func(void *arg) {
      *   igRegistry's own arkRegisterInternal is the specific class whose
      *   absence starts the failure chain, so it is worth a slot of its
      *   own to see whether the walk simply never gets that far. */
-    g_ppc_watch[4].pc = 0x2154c08u; /* igArkCore::callClassRegistrationFunctions */
-    g_ppc_watch[5].pc = 0x21545f0u; /* igArkCore::addObjectMeta */
-    g_ppc_watch[6].pc = 0x2154d94u; /* igArkCore::endArkRegister */
-    g_ppc_watch[7].pc = 0x21bdb88u; /* Core::igRegistry::arkRegisterInternal */
+    /* 2026-08-28, third round. The walk answered:
+     *
+     *   beginArkRegister  23    endArkRegister 23   -> brackets balance
+     *   addObjectMeta     36                        -> 36 classes register
+     *   callClassRegistrationFunctions 0            -> the bulk walk never runs
+     *
+     * So registration works and is simply tiny. Tracing the two paths in
+     * the generated C explains the split: addObjectMeta's caller is
+     * igMetaObject::appendToArkCore, which is how a class registers
+     * itself from static init -- that is the 36. The bulk path is
+     * igIGBFile::processMetaObjectList -> callClassRegistrationFunctions,
+     * reached from igIGBFile::readFile. In other words the rest of the
+     * class list is supposed to arrive by READING A METADATA FILE, and
+     * this engine has never opened a file of its own in any run.
+     *
+     * So the question is now about file loading, not registration:
+     *
+     *   readFile=0  -> nothing ever tries to read the metadata file, and
+     *                  the fault is upstream in whatever should ask for it.
+     *   readFile>0, processMetaObjectList=0 -> the read is attempted and
+     *                  fails or returns early, which points at the FS shim.
+     *
+     * appendToArkCore is kept as an in-run control: it should read 36. */
+    g_ppc_watch[4].pc = 0x21989a4u; /* Core::igIGBFile::readFile */
+    g_ppc_watch[5].pc = 0x2194a20u; /* Core::igIGBFile::processMetaObjectList */
+    g_ppc_watch[6].pc = 0x21608ecu; /* Core::igMetaObject::appendToArkCore (control, expect 36) */
+    g_ppc_watch[7].pc = 0x2154c08u; /* callClassRegistrationFunctions (expect 0 unless the read lands) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1777,10 +1800,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(callClassRegistrationFunctions) hits=%u"
-                       " w5(addObjectMeta) hits=%u"
-                       " w6(endArkRegister) hits=%u"
-                       " w7(igRegistry::arkRegisterInternal) hits=%u"
+                       " -- w4(igIGBFile::readFile) hits=%u"
+                       " w5(processMetaObjectList) hits=%u"
+                       " w6(appendToArkCore) hits=%u"
+                       " w7(callClassRegistrationFunctions) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"

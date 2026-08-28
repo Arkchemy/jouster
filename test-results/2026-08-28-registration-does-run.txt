@@ -54,3 +54,34 @@ Watches follow the walk rather than its entry:
   add>0, end=0   -> registration dies partway through the class list,
                     which given 23 begins would mean it fails the same
                     way every time.
+
+--- FOLLOW-UP RUN, build 17:17:18 -------------------------------------
+
+  w4(callClassRegistrationFunctions) hits=0
+  w5(addObjectMeta)                  hits=36
+  w6(endArkRegister)                 hits=23
+  w7(igRegistry::arkRegisterInternal) hits=0
+
+beginArkRegister ran 23 times in the previous run and endArkRegister runs
+23 times here: the registration brackets balance. Thirty-six classes are
+registered. The bulk walker is never called, and igRegistry is not among
+the thirty-six.
+
+Tracing both paths in the generated C explains the split:
+
+  addObjectMeta       <- igMetaObject::appendToArkCore
+                         (a class registering itself from static init)
+  callClassRegistration <- igIGBFile::processMetaObjectList
+                         <- igIGBFile::readFile
+
+So the 36 are the classes that self-register during static
+initialisation, and the entire rest of the class list is supposed to
+arrive by READING A METADATA FILE. This engine has never opened a file of
+its own in any run -- the only FSOpenFile in any log is the movie the
+harness itself tests.
+
+That reframes the whole investigation. The fault is not in registration
+and not in the recompiler's dispatch; it is that the engine never gets to
+its own file loading. Watches now sit on igIGBFile::readFile and
+processMetaObjectList, with appendToArkCore kept as an in-run control
+that should read 36.
