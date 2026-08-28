@@ -1,0 +1,59 @@
+The NULL member is Core::igHandlePool::_handleList, at offset 0x18.
+
+HOW IT WAS ESTABLISHED, FOUR WAYS
+
+1. The probe. REGISTRY_LOOKUP's fatal line reported datalist=0x0, so
+   igDataList::setCapacity was called on a null `this`, and the "missing
+   registry table" of the four previous runs was just *(0 + 0x14).
+
+2. The caller. igHandlePool::setCapacity makes two calls into
+   igDataList::setCapacity; the failing caller_lr (0x21658c8) is the
+   return address of the second, which does `lwz r3, 0x18(r31)`. So the
+   null is *(pool + 0x18).
+
+3. The game's own field metadata. igHandlePool::arkRegisterInitialize
+   passes a names array and a u16 offsets array. Reconstructing the
+   .rodata bytes those point at, out of init_globals' literal byte
+   stores:
+
+     _handleList    offset 0x18
+     _freeHandle..  offset 0x1c
+     (class name string "igHandlePool" alongside them)
+
+   Metafield storage for the two sits at 0x10134cb0 / 0x10134cb4, in the
+   same .bss region as the slot chased in earlier runs -- that region is
+   metafield storage, which is why it is written by registration rather
+   than by any statically-resolvable store.
+
+4. blaster's own extract_field_schema.py, run against the dump, returns
+   Core::igHandlePool -> _handleList independently. That tool has been in
+   the repository the whole time and would have answered step 3 directly;
+   it was rediscovered by hand first, which was avoidable.
+
+WHAT OTHER PEOPLE'S WORK SAYS
+
+  - Skylanders RE Discord: zero mentions of igHandlePool. igObjectHandleManager
+    is discussed, and someone recorded a crash in
+    igObjectHandleManager::add+0x8c -- adjacent subsystem, different fault.
+  - NefariousTechSupport's AlchemyMetadataDumper: gives igObjectHandleManager's
+    layout, including `igObject* _handlePool` as a member. It stops short of
+    igHandlePool's own layout.
+  - NefariousTechSupport's igRewrite8 / igCauldron: igDataList is
+    _count/_capacity/_data. igHandlePool appears only as a commented-out
+    field (`//public igHandlesPool _handlePool;`) -- not implemented.
+
+So igHandlePool's internals are unmapped by the community, and this is
+new ground rather than something already answered elsewhere.
+
+WHAT IT MEANS
+
+_handleList is a reflected field. Fields are constructed by the
+reflection system from the instFuncs that arkRegisterInitialize supplies.
+A null _handleList means that construction never happened for this
+object, which is why the pool's own setCapacity then walks into a null
+igDataList.
+
+The build already on the card watches igHandlePool::arkRegisterInternal
+and ::arkRegisterInitialize, which separates the two remaining cases:
+the class is not registered at all, or it is registered and its fields
+are not being instantiated.
