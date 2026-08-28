@@ -1,0 +1,38 @@
+Next question: does the field-reset loop run at all?
+
+constructInstance does three things -- callocUntracked (allocate),
+igObject::commission (vtable), igObject::internalResetFields (fields).
+So internalResetFields is where _handleList should come from.
+
+Its loop, read out of the generated C:
+
+  215bc18: lwz r12, 0x4560(r12)   r12 = *(435792)   another metaobject
+  215bc1c: lwz r9,  0xc(r4)       count = this metaobject's field count
+  215bc20: lwz r0,  0xc(r12)      START = that other metaobject's count
+  215bc24: lwz r10, 0x14(r4)      the field array
+  215bc30: add r28, r10, r0<<2    begin = fields + start*4
+  215bc34: add r30, r10, r9<<2    end   = fields + count*4
+  215bc38: cmplw r28, r30
+  215bc3c: beq  0x215bc78         equal -> skip the body entirely
+  215bc40: lwz r31, 0(r28)        field = *begin
+  215bc48: lwz r0, 0x234(r10)     field->vtable[0x234]
+  215bc54: bctrl                  ...called to reset/build it
+
+The start index is not zero. It is the field count of a DIFFERENT
+metaobject held in a .bss global, which is how the loop skips a base
+class's fields and resets only the ones this class adds. That is a
+sensible design and also a single value that, if wrong, silently turns
+the loop into a no-op: start == count means the body never executes, and
+every field is left exactly as calloc left it -- zero.
+
+That would fit everything measured: a metaobject that genuinely knows
+about five fields, an object with a correct vtable, a scalar field
+holding its default (applied elsewhere), and one object-typed field that
+is simply never touched.
+
+The probe reports base_meta, start_idx, count and the object, right
+where the bounds are computed.
+
+  start == count  -> the loop is a no-op and this is the bug.
+  start <  count  -> the loop runs and the fault is inside the per-field
+                     reset call, one level further down.

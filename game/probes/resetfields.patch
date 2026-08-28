@@ -1,0 +1,20 @@
+--- generated_0156.c	2026-08-28 19:51:28.003410850 +0100
++++ generated_0156.c	2026-08-28 19:51:28.016410773 +0100
+@@ -33464,6 +33464,17 @@
+   ctx->r[9] = ppc_load_u32(ctx, ctx->r[4] + (int32_t)12);
+   /* 215bc20: lwz r0, 0xc(r12) */
+   ctx->r[0] = ppc_load_u32(ctx, ctx->r[12] + (int32_t)12);
++  /* ARKCHEMY PROBE (patch, see ../probes): the bounds of the field-reset
++     loop. start comes from another metaobject entirely -- *(435792),
++     &.bss+320864 -- and count from the object's own. If start == count
++     the loop body never runs and no field is ever built, which would
++     explain a null object-ref field on a metaobject that demonstrably
++     knows about it. */
++  arkchemy_probe4("RESETFIELDS",
++                  "base_meta", ctx->r[12],
++                  "start_idx", ctx->r[0],
++                  "count", ctx->r[9],
++                  "obj", ctx->r[29]);
+   /* 215bc24: lwz r10, 0x14(r4) */
+   ctx->r[10] = ppc_load_u32(ctx, ctx->r[4] + (int32_t)20);
+   /* 215bc28: slwi r0, r0, 2 */
