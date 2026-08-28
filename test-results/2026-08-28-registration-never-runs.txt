@@ -1,0 +1,83 @@
+Jouster game harness, build "Aug 28 2026 14:50:54", full 120s / 7200
+frame run on real hardware. Same dump, same deterministic failure state
+as every run since 2026-08-27 (sti_idx=113, calls=78154, fail=2268
+free=47 reuse=42).
+
+RESULT: Core::igRegistry's registration never runs.
+
+  w4(igRegistry::arkRegisterInitialize)   hits=0
+  w5(igRegistry::arkRegisterInternal)     hits=0
+  w6(igRegistry::arkRegisterMetaValidate) hits=0
+
+Validated in the same run, which is the only reason the zeros mean
+anything:
+
+  w0(igStringBufAppend) hits=1   w1(userInstantiate) hits=1
+  w2(reportVaList)      hits=1   w3(reallocCommon)   hits=311
+  loopwatch(control_bytevalue) hits=4
+
+Four other entry watches fire and the store-watch control fires, so the
+mechanism works and the three zeros are real.
+
+THE FULL CHAIN, NOW MEASURED END TO END
+
+  igRegistry registration never runs
+    -> the registry .bss slots it would populate stay zero, including
+       synthetic 435928 / guest 0x101345e8 (measured: never written,
+       2026-08-28-registry-global-never-written.txt)
+      -> Core::igDataList::setCapacity reads a NULL table and index 0
+        -> reallocateFieldMemory(obj=0), this = 0 + fieldOffset = 9
+          -> "igMemory::Properties" read from address 9 is garbage
+             (_flagsAndSize=0x5ffff00, _buffer=0x7000000)
+            -> reallocCommon(pool 0, ptr=0x7000000, size=0) is a free
+              -> tlsf_free links a foreign block into pool 0's free list
+                -> the pool's own walker reports the heap inconsistent
+                  -> "Memory pool (index %d) failed integrity check."
+
+Every arrow above is now either measured on hardware or read directly
+out of the regenerated C. The 2026-08-24 framing -- "which type failed
+to register" -- is retired: nothing failed to register because
+registration never started.
+
+STATIC ANALYSIS OF WHY
+
+All three registration functions have exactly one call site each in
+~8.7M lines of generated C, and it is ppc_dispatch -- the recompiler's
+indirect-call dispatcher. No recompiled function calls them directly;
+they are reachable only through a function pointer.
+
+Scanning init_globals' literal byte stores for their addresses finds
+exactly one table entry: arkRegisterMetaValidate (0x021c39c8) sits at
+0x119f08. Reconstructing the words around it shows what that table is:
+
+  0x119ec8: 0x021c2a0c   code
+  0x119ecc: 0x021b8cac   code
+  0x119ed0: 0x10062b58
+  0x119ed8: "_rootElementName"
+  0x119eec: "_document"
+  0x119ef8: 0x101349b4   .bss slot
+  0x119efc: 0x101349b8   .bss slot
+  0x119f04: 0x021be158   code
+  0x119f08: 0x021c39c8   arkRegisterMetaValidate
+  0x119f10: "igRegist[ry]"
+
+That is igRegistry's own meta-object descriptor: field-name strings,
+method pointers, and pointers to the .bss slots the registration is
+supposed to fill. Those slots sit at 0x101349b4/0x101349b8, in the same
+region as the never-written 0x101345e8.
+
+So the metadata is present and correct in .rodata. What is missing is
+whatever walks it.
+
+NEXT
+
+The open question is narrow and specific: what invokes the meta
+registration? It is an indirect call, so the useful next measurement is
+a load-watch (the mirror of g_ppc_watch_store_addr, which does not exist
+yet) armed on 0x119f08 -- does anything ever READ the table entry?
+
+  - never read  -> the walk itself never starts; find its trigger.
+  - read, not called -> the dispatch fails to resolve, which would be a
+    recompiler-side problem rather than an engine-order problem.
+
+Both are cheap to distinguish and neither needs another guess.
