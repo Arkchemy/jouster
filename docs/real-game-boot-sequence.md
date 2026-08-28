@@ -60,3 +60,37 @@ RPX's address range, so that route needs a positive control (break on
 something that must execute, such as `main` at `0x2002bf0`) before
 anything measured through it can be trusted. `--force-interpreter`, which
 that route needs, also makes the game nearly unplayable.
+
+## What this trace can and cannot tell us
+
+Cemu's logging is partial. The capture contains only 46 distinct
+coreinit functions, and just three MEM ones:
+
+  MEMGetBaseHeapHandle, MEMAllocFromFrmHeapEx,
+  MEMGetAllocatableSizeForFrmHeapEx
+
+`MEMAllocFromDefaultHeapEx`, `MEMAllocFromExpHeapEx` and
+`MEMCreateExpHeapEx` do not appear anywhere in the log -- not because the
+game does not call them, but because Cemu does not instrument them for
+logging. An earlier reading of this trace nearly recorded "the real game
+performs almost no heap allocation before opening its config, while ours
+burns 116MB", which would have been a false finding drawn from missing
+instrumentation rather than from behaviour.
+
+So this trace is authoritative about what it does log -- FSOpenFile is
+instrumented, and the file sequence is real -- and silent about
+everything else. Comparisons of allocation behaviour need a different
+instrument.
+
+## Standing method
+
+  Questions about the REAL game  -> Cemu, with <logflag> set. Minutes,
+      no rebuild, full speed. Check first whether the API in question is
+      actually instrumented before drawing conclusions from its absence.
+
+  Questions about OUR build      -> the hardware probe loop. Slower, but
+      it is the only thing that observes what we actually produce.
+
+  The gdbstub route needs a positive control before it can be trusted;
+  a breakpoint on a known-executing address should be verified to fire
+  before any result from it is believed.
