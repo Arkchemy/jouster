@@ -1,0 +1,20 @@
+--- generated_0156.c	2026-08-28 20:11:34.567036412 +0100
++++ generated_0156.c	2026-08-28 20:11:34.577613556 +0100
+@@ -33498,6 +33498,17 @@
+   ctx->r[0] = ppc_load_u32(ctx, ctx->r[10] + (int32_t)564);
+   /* 215bc4c: mtctr r0 */
+   ctx->ctr = ctx->r[0];
++  /* ARKCHEMY PROBE (patch, see ../probes): the per-field reset dispatch.
++     field is the igMetaField, target is what its vtable slot 0x234
++     actually resolves to, and obj_0x18 is _handleList as it stands going
++     in. A target of 0 would mean ppc_dispatch is being handed a null and
++     silently doing nothing, which is exactly how a field would end up
++     never being built while every count and flag upstream looks right. */
++  arkchemy_probe4("FIELD_RESET",
++                  "field", ctx->r[31],
++                  "vtable_target", ctx->r[0],
++                  "obj", ctx->r[29],
++                  "obj_0x18", ppc_load_u32(ctx, ctx->r[29] + 24));
+   /* 215bc50: mr r3, r31 */
+   ctx->r[3] = ctx->r[31];
+   /* 215bc54: bctrl  */

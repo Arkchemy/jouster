@@ -1,0 +1,42 @@
+Jouster game harness, build "Aug 28 2026 19:58:00".
+
+  [PROBE AFTER_RESET] obj=0x300565c handleList@0x18=0x0
+                      freeHandle@0x1c=0xffff vtable=0x11f0b0
+
+CONSTRUCTION IS CORRECT.
+
+At the exit of the field-reset loop the scalar field already holds its
+metafield default (0xffff) and the vtable is set. So the reset does run
+and does work. The object reference is left null, which is the right
+thing for a reference.
+
+So the object is fine, and the question that has been chased all evening
+-- "why is this field null" -- has the boring answer: because nothing has
+assigned it yet, and references start null.
+
+WHAT THAT LEAVES
+
+igHandlePool::setCapacity reads pool+0x18 and uses it immediately,
+without a null check, and it is called two instructions after the object
+is created. Static reading shows setCapacity does contain a store to
++0x18, so it is capable of populating the field itself -- but on this
+path it reads before it writes.
+
+Neither igHandlePool nor igMemoryPoolHandlePool defines a
+userInstantiate, the constructor-equivalent virtual the Discord
+describes as the sixth vtable method. Decoding the object's vtable
+(0x11f0b0) shows several slots reading as zero.
+
+That matters, because the per-field reset in internalResetFields is an
+indirect call through field->vtable[0x234]. If that slot resolves to
+zero, ppc_dispatch is handed a null and returns silently -- a field would
+simply never be built, while every count, flag and pointer upstream
+continues to look correct. Which is precisely the shape of this bug.
+
+The next probe reports, for every field reset: the metafield, the
+resolved vtable target, and the object's +0x18 going in.
+
+  target 0 -> a silently-skipped virtual call, and the fault is a vtable
+      slot the recompiler never populated.
+  target sane -> the reset really is being called and correctly nulls the
+      reference, and the missing assignment is somewhere else entirely.
