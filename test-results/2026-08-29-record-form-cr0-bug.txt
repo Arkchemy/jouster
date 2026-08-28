@@ -1,0 +1,105 @@
+2026-08-29 — Recompiler bug: record-form instructions never updated CR0
+=====================================================================
+
+WHAT WAS WRONG
+--------------
+In PowerPC, a `.` suffix (the Rc bit) means the instruction also compares its
+result against zero and writes that into CR0. conquertron's codegen.cpp had
+the `if (ppc.update_cr0)` block on some instruction cases (or., and., subf.,
+addic., rlwinm., ...) but was missing it entirely on ten others.
+
+Every dotted form of those ten therefore left CR0 holding a STALE flag from
+whatever earlier instruction last wrote it. Conditional branches after them
+branched on the wrong condition.
+
+HOW IT WAS FOUND
+----------------
+The boot hang was traced to igStringBuf's string-terminator loop at 21a6b88:
+
+    lbzu  r12, 1(r11)
+    extsb. r12, r12         <- sets CR0 on real hardware
+    bne   0x21a6b88         <- exits when the byte is 0
+
+Bounding the loop by force (strscan-bound.patch, forcing r12 = 0 after 8192
+bytes) did NOT stop it. That was the tell: if forcing the terminator value
+changes nothing, the branch is not reading that value. It was reading a stale
+CR0 from `or. r31, r4, r4` at 21a6b74 (r4 non-null -> not-equal), so the `bne`
+was taken unconditionally, forever.
+
+MEASUREMENT
+-----------
+Attributing each record-form instruction's emitted C by bounding it with the
+next disassembly comment (so no neighbour's compare can be miscredited):
+
+    insn        no-CR0    has-CR0
+    or.              0       8683
+    addic.           0       8280
+    rlwinm.          0       6912
+    clrlwi.       5971          0
+    subf.            0       1353
+    extsb.         340          0
+    subfe.         153          0
+    srawi.         146          0
+    rlwnm.          53          0
+    addze.          44          0
+    extsh.          31          0
+    rlwimi.          3          0
+    adde.            2          0
+    addme.           2          0
+    (+ every other handled case: 0 missing)
+
+Perfectly bimodal — each instruction is either always right or always wrong,
+never mixed. That is the signature of a per-case codegen gap rather than a
+data-dependent fault, and it matches the ten `case` blocks in codegen.cpp that
+lacked the update_cr0 check.
+
+stwcx. (3015 sites) looks missing to a naive `ppc_cmpw` search but is already
+correct: it sets ctx->cr0_* directly, since its CR0 reflects store-conditional
+success rather than a compare against zero.
+
+Total genuinely broken sites in the game: 6745.
+
+TWO FALSE READINGS ALONG THE WAY (both mine, both corrected by measurement)
+--------------------------------------------------------------------------
+1. First pass counted a site as "correct" if `cr0_` appeared in the next few
+   lines. That matches `if (ctx->cr0_eq) goto ...` in the FOLLOWING branch,
+   which READS the flag rather than writing it. It reported 4974 clrlwi. as
+   fine; the true number is 0.
+2. Second pass checked only the line immediately after the comment — but the
+   assignment sits there and the compare lands one line further down, so it
+   reported everything as broken, including or., which is fine.
+   Only the third method (bound by the next disassembly comment) is sound.
+
+THE FIX
+-------
+conquertron/src/codegen.cpp — added the standard
+
+    if (ppc.update_cr0) {
+        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+    }
+
+to all ten cases: CLRLWI, EXTSB, EXTSH, SRAWI, SUBFE, ADDZE, RLWIMI, RLWNM,
+ADDE, ADDME.
+
+`recomp` could not be rebuilt on this machine (no cmake, no capstone headers —
+only libcapstone.so.5, no -devel), so the identical transformation was applied
+to the already-generated C by game/tools/fix_record_forms.py. It is idempotent
+and inserts nothing where a CR0 update already exists, so it is safe to re-run
+after a future regeneration. Once recomp is rebuilt it becomes a no-op.
+
+TEST COVERAGE GAP
+-----------------
+Running the same script over jouster/native/source inserted 0 lines: the 23
+on-hardware recompiler test programs contain NO record-form instructions at
+all. That is why the suite passed 25/25 on host throughout the period this bug
+was live. A blaster test covering dotted forms would have caught it.
+
+WHAT THIS RUN ANSWERS
+---------------------
+strscan-bound is deliberately left in as a safety net AND as a clean signal:
+  - probe STRSCAN_BOUNDED silent  -> CR0 was the whole problem
+  - probe STRSCAN_BOUNDED fires   -> the string really is unterminated, a
+                                     separate bug upstream
+Watches to read: w4 initBootstrap (was 1, never returned), w6 igArkCore::init
+(was 0 — the thing that must become non-zero), w7 appendToArkCore (control,
+expect 36).
