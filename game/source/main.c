@@ -1173,10 +1173,32 @@ static void game_thread_func(void *arg) {
      * that setCapacity is called before whatever assigns it. These are
      * its four possible callers; the one that fires identifies the
      * context, and therefore what was supposed to have run first. */
-    g_ppc_watch[4].pc = 0x2178b00u; /* igMemoryContext::activate */
-    g_ppc_watch[5].pc = 0x2172900u; /* igMemoryContext::appendMemoryPool */
-    g_ppc_watch[6].pc = 0x214f6ccu; /* igMemoryHandleContext::createLabel */
-    g_ppc_watch[7].pc = 0x214ea3cu; /* igMemoryHandleContext::userInstantiate */
+    /* 2026-08-28, after Cemu gave us the real boot order. The retail
+     * title opens /vol/content/alchemy.xml first, then bootstrap.bld.
+     * Ours opens no file at all, and every step around the failing
+     * pointer has been measured as working -- so the fault is upstream,
+     * in never reaching the engine's own file loading.
+     *
+     * Tracing the config path backwards through the recompiled C finds
+     * the step: the alchemy.xml string is stored into a .data global by
+     * __sti___22_tfbCafeApplication_cpp (which does run), and exactly one
+     * function reads that global -- Core::igArkCore::init (0x2147e98).
+     *
+     * init() is called directly by Core::igRefAlchemy, which we have
+     * already measured running. It registers the three object loaders
+     * (igIGB/igIGX/igIGZObjectLoader) and calls igDirectory::loadRef.
+     * That is both the loaders whose absence we traced AND the start of
+     * file loading.
+     *
+     *   init=0     -> igRefAlchemy runs but does not reach init, and the
+     *                 gap is inside igRefAlchemy: small and specific.
+     *   init>0, loadRef=0 -> init runs and stops before loading.
+     *   loadRef>0  -> loading is attempted and fails, which points at the
+     *                 filesystem shim rather than at ordering. */
+    g_ppc_watch[4].pc = 0x2147e98u; /* Core::igArkCore::init */
+    g_ppc_watch[5].pc = 0x21906bcu; /* Core::igDirectory::loadRef */
+    g_ppc_watch[6].pc = 0x21b98acu; /* Core::igIGZObjectLoader::arkRegister */
+    g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1890,10 +1912,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igMemoryContext::activate) hits=%u"
-                       " w5(appendMemoryPool) hits=%u"
-                       " w6(igMemoryHandleContext::createLabel) hits=%u"
-                       " w7(igMemoryHandleContext::userInstantiate) hits=%u"
+                       " -- w4(igArkCore::init) hits=%u"
+                       " w5(igDirectory::loadRef) hits=%u"
+                       " w6(igIGZObjectLoader::arkRegister) hits=%u"
+                       " w7(appendToArkCore) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"

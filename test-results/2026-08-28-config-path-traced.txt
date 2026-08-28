@@ -1,0 +1,48 @@
+Static trace, no hardware run needed: what should open alchemy.xml.
+
+Cemu says the retail engine opens /vol/content/alchemy.xml first. Ours
+opens nothing. Following that path backwards through the recompiled C:
+
+1. The literal "alchemy.xml" appears three times in .rodata. The copy at
+   synthetic 756800 is the one referenced by code.
+
+2. It is loaded and stored by __sti___22_tfbCafeApplication_cpp:
+
+     200687c: lis  r0, 0x1000     folded to 756800 (&.rodata+6336)
+     2006888: addic r0, r0, 0x18c0  emits as a copy; the displacement is
+                                    already folded in
+     2006884: lis  r12, 0x100d    folded to 13312 (&.data+5120)
+     2006890: stw  r0, -0x2dc0(r12)  *(13312) = the path
+
+   That static initialiser is one of the 114 that do run, so the config
+   path is set correctly in our build.
+
+3. Exactly one function reads that global: Core::igArkCore::init
+   (0x2147e98). Its body registers the three object loaders --
+   igIGBObjectLoader, igIGXObjectLoader, igIGZObjectLoader -- and calls
+   Core::igDirectory::loadRef (0x21906bc).
+
+4. init() is called DIRECTLY by Core::igRefAlchemy, not only through
+   dispatch. And igRefAlchemy has already been measured running, once.
+
+So this single function is where the config path, the object loaders and
+the start of file loading all live, and it sits one direct call inside a
+function we know executes. If it does not run, the gap is inside
+igRefAlchemy and is very small.
+
+Watches for the next run:
+
+  w4  0x2147e98  igArkCore::init
+  w5  0x21906bc  igDirectory::loadRef
+  w6  0x21b98ac  igIGZObjectLoader::arkRegister
+  w7  0x21608ec  appendToArkCore (control, expect 36)
+
+  init=0            -> igRefAlchemy runs but never reaches init.
+  init>0, loadRef=0 -> init runs and stops before loading.
+  loadRef>0         -> loading is attempted and fails, pointing at the
+                       filesystem shim rather than at ordering.
+
+Note the ADDIC at 2006888 emitting as a plain copy is correct, not a bug:
+the lis was folded to the fully resolved address, so the displacement is
+already included. This is the behaviour the project's own earlier ADDIC
+relocation-folding fix put in place.
