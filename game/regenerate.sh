@@ -1,6 +1,6 @@
 #!/bin/sh
-# Regenerates switch/game/source/generated_*.c and
-# switch/game/include/generated_decls.h from a real, legally-dumped
+# Regenerates game/source/generated_*.c and
+# game/include/generated_decls.h from a real, legally-dumped
 # tfbGame_cafe.rpx via the recomp tool -- these are real, machine-
 # generated game output (not this project's own source), deliberately
 # excluded from git (see .gitignore and LICENSE's own "no
@@ -20,17 +20,32 @@
 #
 # Usage: ./regenerate.sh <path-to-tfbGame_cafe.rpx>
 set -e
-cd "$(dirname "$0")/../.."
+# Paths are relative to this repository, not to the parent of an old
+# monorepo's switch/ subdirectory. Fixed 2026-08-28 -- the sixth and last
+# instance of the same pre-split breakage already repaired in
+# game/Makefile, gx2_test/Makefile, build.sh, native/regenerate.sh and
+# blaster's verify.sh. Until now this script, the one that produces the
+# game's C in the first place, could not run from a clean clone at all.
+cd "$(dirname "$0")"
+GAME_ROOT="$PWD"
 
-RECOMP="${RECOMP:-recomp/build/recomp}"
+# Where conquertron is checked out; defaults to a side-by-side clone.
+CONQUERTRON="${CONQUERTRON:-$GAME_ROOT/../../conquertron}"
+RECOMP="${RECOMP:-$CONQUERTRON/build/recomp}"
+if [ ! -x "$RECOMP" ]; then
+    echo "error: recomp not found/executable at $RECOMP" >&2
+    echo "       build it: cmake -S \"$CONQUERTRON\" -B \"$CONQUERTRON/build\" && cmake --build \"$CONQUERTRON/build\"" >&2
+    exit 1
+fi
 RPX="$1"
 if [ -z "$RPX" ]; then
     echo "usage: $0 <path-to-tfbGame_cafe.rpx>" >&2
     exit 1
 fi
 
-OUT_SOURCE="switch/game/source"
-OUT_INCLUDE="switch/game/include"
+OUT_SOURCE="$GAME_ROOT/source"
+OUT_INCLUDE="$GAME_ROOT/include"
+mkdir -p "$OUT_INCLUDE"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

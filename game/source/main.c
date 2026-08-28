@@ -900,6 +900,32 @@ static void game_thread_func(void *arg) {
      * both -- if r4 is 0, or points outside anything sane, that says
      * whether this is a failed allocation being passed as a string or a
      * genuinely corrupt pointer. */
+    /* Write-watch on the registry-table global, armed 2026-08-28.
+     *
+     * The 2026-08-27 run reported "NULL REGISTRY ENTRY: table=0x0
+     * index=0" from Core::igDataList::setCapacity. Reading the freshly
+     * regenerated C for that function shows where both halves come
+     * from:
+     *
+     *     215db80: lis  r12, 0x1013      -> folded to 435928 (&.bss+321000)
+     *     215db84: lwz  r12, 0x45e8(r12) -> r12 = *(that global)
+     *     215db88: lha  r6, 0xc(r12)     -> index  = *(int16*)(r12+0xC)
+     *     215db8c: lwz  r0,  0x14(r3)    -> table  = *(r3+0x14)
+     *     215db94: lwzx r27, r10, r0     -> entry  = table[index]
+     *
+     * Synthetic address 435928 occurs exactly ONCE in all ~8.7M lines of
+     * generated C -- this read. No statically-resolved store writes it,
+     * and it lives in .bss, so it is zero unless something writes it
+     * through a computed address at runtime. That is what this watch
+     * settles: if nothing ever fires, nothing writes it at all, and the
+     * fault is a registration step that never runs rather than one that
+     * runs too late.
+     *
+     * Structurally identical to the igStringPool::getDefault /
+     * bootstrapInitialize bug described further up -- a global that a
+     * bootstrap function is supposed to write, read while still NULL. */
+    g_ppc_watch_store_addr = 435928u;
+
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the

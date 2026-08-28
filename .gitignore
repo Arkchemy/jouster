@@ -12,3 +12,7 @@ build/
 # native/source/generated_t*.c are the small recompiler test programs
 # and *are* committed, since they're what native/'s .nro actually tests.
 game/source/generated_*.c
+
+# The recompiler's generated declarations header, same reasoning as
+# game/source/generated_*.c above: an artefact of regenerate.sh.
+game/include/generated_decls.h
