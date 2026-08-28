@@ -1,0 +1,22 @@
+--- generated_0156.c	2026-08-28 17:44:52.545171359 +0100
++++ generated_0156.c	2026-08-28 17:45:08.730355951 +0100
+@@ -1,4 +1,5 @@
+ #include "ppc_runtime.h"
++void arkchemy_probe4(const char *label, const char *n0, uint32_t v0, const char *n1, uint32_t v1, const char *n2, uint32_t v2, const char *n3, uint32_t v3);
+ #include "cafeos_coreinit.h"
+ #include "cafeos_coreinit_atomic.h"
+ #include "cafeos_coreinit_dynload.h"
+@@ -38168,6 +38169,13 @@
+   ctx->r[10] = ctx->r[6] << 2;
+   /* 215db94: lwzx r27, r10, r0 */
+   ctx->r[27] = ppc_load_u32(ctx, ctx->r[10] + ctx->r[0]);
++  /* ARKCHEMY PROBE (patch, see ../probes): names the failing registry
++     lookup. table is the base the entry is read from, index is the
++     halfword taken from *(435928)+0xC, datalist is the igDataList whose
++     +0x14 supplies the table, and entry is what came back. */
++  arkchemy_probe4("REGISTRY_LOOKUP",
++                  "table", ctx->r[0], "byteoff", ctx->r[10],
++                  "datalist", ctx->r[3], "entry", ctx->r[27]);
+   /* 215db98: lwz r3, 0x30(r27) */
+   ctx->r[3] = ppc_load_u32(ctx, ctx->r[27] + (int32_t)48);
+   /* 215db9c: lwz r11, 0(r3) */

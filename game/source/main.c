@@ -585,7 +585,10 @@ static void debug_watch_sink(uint32_t pc, uint32_t value) {
  * committed harness, or in a patch that is re-applied after regenerating
  * (see docs/game-probe-reconstruction.md for the eight hook sites and
  * the values each one should report). */
-static void arkchemy_probe4(const char *label,
+/* Not static: probe patches call this from generated_*.c (see
+   game/probes/). Declared in ppc_runtime.h-adjacent scope by the patch
+   itself would be fragile, so it is a plain external symbol. */
+void arkchemy_probe4(const char *label,
                             const char *n0, uint32_t v0,
                             const char *n1, uint32_t v1,
                             const char *n2, uint32_t v2,
