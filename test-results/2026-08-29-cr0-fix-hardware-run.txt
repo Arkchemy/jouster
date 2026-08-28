@@ -1,0 +1,87 @@
+2026-08-29 — First hardware run with the record-form CR0 fix
+============================================================
+
+RESULT: the boot advanced. The old hang is gone, and two new things are
+known. Neither was reachable before today.
+
+1. THE STRING-TERMINATOR HANG IS FIXED
+--------------------------------------
+STRSCAN_BOUNDED fired 0 times (it fired 2083 times on 2026-08-28). The
+igStringBuf terminator loop at 21a6b88 now exits normally, because `extsb.`
+finally writes CR0 instead of leaving the `bne` reading a stale flag from an
+unrelated `or.`.
+
+2. BINK VIDEO DECODES END TO END
+--------------------------------
+    [FSOpenFile] movies/bash.mov -> sdmc:/switch/Jouster/content/movies/bash.mov (found) handle=1
+    BinkOpen succeeded, real HBINK handle=0xb400040
+    BinkDoFrame returned r3=0x1
+    BinkNextFrame call completed
+    BinkClose completed -- real decoder round-trip successful
+
+A real retail .mov, opened, decoded and closed by the recompiled decoder on
+real hardware. This is the milestone that does not need shader translation.
+
+3. NEW FINDING: argc WAS NEVER SET, AND THE OLD BUG WAS HIDING IT
+-----------------------------------------------------------------
+Every watch read 0, including w7(appendToArkCore), which was a control that
+read 36 the day before. That looked like a regression. It was not.
+
+last_pc sat at 0x21a6238 across every frame from at least 4740 to 4860, with
+the call count climbing ~2.3M per 60 frames:
+
+    frame 4740  pc=0x21a6238  lr=0x2112aa8  calls=182784013
+    frame 4800  pc=0x21a6238  lr=0x2112aa8  calls=185100890
+    frame 4860  pc=0x21a6238  lr=0x2112aa8  calls=187456867
+
+0x21a6238 is Core::igStringHelper::comparei. 0x2112aa8 is inside
+tfbCore::tfbApplication::setAppCommandLine, whose loop is:
+
+    2112a7c: cmpw r26, r3        ; r3 = argc
+    2112a8c: bge 0x2112af4       ; skip the scan if index >= argc
+    2112a98: lwzx r3, r30, r25   ; argv[i]
+    2112aa4: bl 0x21a6238        ; comparei(argv[i], "<switch>")
+    2112ab0..ab8: r26 += 2
+    2112ac8: blt 0x2112a98
+
+The game entry point IS the real main(argc, argv) — r3 is argc, r4 is argv
+(saved to r30/r31 immediately after __main at 2002c14). The harness never set
+them, so argc was whatever was left in r3: the Bink test's own HBINK handle,
+0xb400040 = 188,743,744.
+
+So the game walked a 188-million-entry argv comparing garbage pointers.
+
+It was NOT a hang. The loop is bounded by argc and ran to completion — proved
+by MEM EVENT #1 (MEMAllocFromExpHeapEx, 4MB) appearing at call 189,611,248,
+which is PAST the loop. It simply consumed ~80 of the 120 test seconds, so
+the run ended before reaching initBootstrap. That is why every watch read 0.
+
+WHY THIS ONLY APPEARED TODAY
+----------------------------
+The `bge` at 2112a8c is guarded by the `cmpw` at 2112a7c. Before the CR0 fix
+that comparison was fine, but the surrounding control flow reached it
+differently: the stale-CR0 branches upstream skipped this scan entirely, so a
+nonsense argc cost nothing and stayed invisible. Fixing CR0 made the game
+follow the real path for the first time, and the real path reads argc.
+
+A latent harness bug that only becomes reachable once a recompiler bug is
+fixed is worth noting as a pattern: correctness fixes expose the next layer,
+and a watch going from 36 to 0 can mean "ran out of time before getting
+there", not "broke".
+
+FIX
+---
+game/source/main.c now sets r3 = 0 (argc) and r4 = 0 (argv) before calling
+ppc_arkchemy_game_entry. argc = 0 is honest — this harness has no command
+line — and makes setAppCommandLine skip the scan on its own bounds check.
+
+WHAT THE NEXT RUN SHOULD SHOW
+-----------------------------
+With ~80 seconds returned to the budget:
+  w4 (igArkCore::initBootstrap) — expected to become non-zero
+  w6 (igArkCore::init)          — the real target; 0 every run so far
+  w7 (appendToArkCore)          — control, expected 36 again
+  MEM EVENT #N                  — more than one allocation
+  FSOpenFile                    — alchemy.xml is what the retail game opens
+                                  first (established in Cemu); ours has never
+                                  opened a game file yet

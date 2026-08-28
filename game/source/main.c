@@ -1438,7 +1438,29 @@ static void game_thread_func(void *arg) {
         }
     }
 
-    checkpoint("[game thread] calling ppc_arkchemy_game_entry...");
+    /* The game entry point is the real main(argc, argv): r3 is argc and r4
+     * is argv, and tfbCore::tfbApplication::setAppCommandLine scans argv[0
+     * .. argc) comparing each entry against its known switches.
+     *
+     * Nothing set them before 2026-08-29, so argc was whatever happened to
+     * be left in r3 -- after the Bink test above, the HBINK handle
+     * (0xb400040 = 188,743,744). The game then walked a 188-million-entry
+     * argv, calling igStringHelper::comparei on garbage pointers, and burned
+     * ~80 seconds of a 120-second test doing it. It was not a hang: the loop
+     * is bounded by argc and did run to completion, which is why the first
+     * MEMAllocFromExpHeapEx only appears at call 189,611,248.
+     *
+     * This was invisible until the record-form CR0 fix landed the same day.
+     * Before it, the `bge` guarding that loop tested a stale flag and
+     * skipped the scan entirely, so the wrong argc never cost anything.
+     *
+     * argc = 0 is the honest value here -- this harness genuinely has no
+     * command line to pass -- and it makes setAppCommandLine skip the scan
+     * on its own bounds check rather than by accident. */
+    g_ctx.r[3] = 0; /* argc */
+    g_ctx.r[4] = 0; /* argv */
+
+    checkpoint("[game thread] calling ppc_arkchemy_game_entry (argc=0, argv=NULL)...");
     void ppc_arkchemy_game_entry(PpcContext *ctx);
     ppc_arkchemy_game_entry(&g_ctx);
     checkpoint("[game thread] ppc_arkchemy_game_entry returned");
