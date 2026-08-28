@@ -1134,8 +1134,28 @@ static void game_thread_func(void *arg) {
      *       self-register rather than about the file that never loads.
      *   internal>0 -> it is registered and something else leaves the
      *       member null, which points at instantiation instead. */
-    g_ppc_watch[4].pc = 0x21b1c1cu; /* igHandlePool::arkRegisterInternal */
-    g_ppc_watch[5].pc = 0x21b1b58u; /* igHandlePool::arkRegisterInitialize */
+    /* 2026-08-28, seventh round. igHandlePool IS registered
+     * (arkRegisterInternal=1, arkRegisterInitialize=1), and the probe
+     * shows the failing object is genuinely constructed:
+     *
+     *   pool=0x300565c vtable=0x11f0b0
+     *   _handleList@0x18=0x0  _freeHandle@0x1c=0xffff
+     *
+     * A real vtable, and the scalar field holding a sensible 0xffff
+     * sentinel. So construction ran. What did not happen is the
+     * instantiation of the one OBJECT-typed field: _handleList is an
+     * igDataList that something has to allocate and attach.
+     *
+     * That is the metafield instFuncs step. igMetaObject has
+     * instantiateAndAppendFields (0x21616d0), and each metafield type has
+     * its own instantiateFromPool. This asks whether either ever runs:
+     *
+     *   instantiateAndAppendFields=0 -> the metaobject never gets its
+     *       field list built, so nothing can instantiate _handleList.
+     *   >0 with instantiateFromPool=0 -> fields are appended but never
+     *       instantiated for this object. */
+    g_ppc_watch[4].pc = 0x21616d0u; /* igMetaObject::instantiateAndAppendFields */
+    g_ppc_watch[5].pc = 0x21c1f8cu; /* igMetaObject::instantiateFromPool */
     g_ppc_watch[6].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
     g_ppc_watch[7].pc = 0x2165878u; /* igHandlePool::setCapacity (expect 1) */
 
@@ -1851,8 +1871,8 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igHandlePool::arkRegisterInternal) hits=%u"
-                       " w5(igHandlePool::arkRegisterInitialize) hits=%u"
+                       " -- w4(instantiateAndAppendFields) hits=%u"
+                       " w5(igMetaObject::instantiateFromPool) hits=%u"
                        " w6(appendToArkCore) hits=%u"
                        " w7(igHandlePool::setCapacity) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"

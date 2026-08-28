@@ -1,0 +1,54 @@
+Jouster game harness, build "Aug 28 2026 18:51:59".
+
+  [PROBE HANDLEPOOL] pool=0x300565c vtable=0x11f0b0
+                     _handleList@0x18=0x0 _freeHandle@0x1c=0xffff
+                     at calls=69754
+
+  w4(igHandlePool::arkRegisterInternal)   hits=1
+  w5(igHandlePool::arkRegisterInitialize) hits=1
+  w6(appendToArkCore)                     hits=36  <- control
+  w7(igHandlePool::setCapacity)           hits=1
+
+THE OBJECT IS FINE. ONE FIELD IS NOT.
+
+The vtable word is a real pointer (0x11f0b0), so this is a properly
+constructed igObject rather than raw zeroed memory. _freeHandle, the
+scalar field, holds 0xffff -- a sensible "none" sentinel, so
+initialisation ran and did something deliberate.
+
+_handleList, the one OBJECT-typed field, is null. It is an igDataList
+that something has to allocate and attach.
+
+So the fault is not allocation, not construction, not registration, and
+not the recompiler's dispatch. It is specifically the instantiation of a
+reflected object-typed field.
+
+WHY THIS MATTERS BEYOND THIS ONE FIELD
+
+If object-typed metafields are not being instantiated in general, then
+every engine class with an object-typed member is in the same state, and
+this single null is the first one that happened to be dereferenced. That
+would explain the shape of the whole boot failure far better than any of
+the registration theories it replaced.
+
+NEXT
+
+  w4  0x21616d0  igMetaObject::instantiateAndAppendFields
+  w5  0x21c1f8c  igMetaObject::instantiateFromPool
+
+  appendFields=0 -> the metaobject never gets its field list built, so
+      nothing can instantiate _handleList.
+  appendFields>0, instantiateFromPool=0 -> fields exist on the metaobject
+      but are never instantiated for this object.
+
+TRAIL OF DISCARDED THEORIES, FOR THE RECORD
+
+  registration never runs                  -- wrong, it runs 23 times
+  the bulk class walk never runs           -- true but not the cause
+  the metadata file is never read          -- true but not the cause
+  a class was never registered             -- wrong, igHandlePool is
+  the registry table is missing            -- wrong, it was a null `this`
+
+Each was replaced by a measurement, and every one of the wrong ones was
+believed on the strength of a probe that could not distinguish the case
+it was actually in.
