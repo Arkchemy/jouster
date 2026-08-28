@@ -57,3 +57,30 @@ The build already on the card watches igHandlePool::arkRegisterInternal
 and ::arkRegisterInitialize, which separates the two remaining cases:
 the class is not registered at all, or it is registered and its fields
 are not being instantiated.
+
+--- FOLLOW-UP, build 17:52:44 -----------------------------------------
+
+  w4(igHandlePool::arkRegisterInternal)   hits=1
+  w5(igHandlePool::arkRegisterInitialize) hits=1
+  w6(appendToArkCore)                     hits=36  <- control
+  w7(igHandlePool::setCapacity)           hits=1
+
+igHandlePool IS registered, and its field metadata IS defined. So the
+class being unregistered is ruled out, and with it the last version of
+the "something never registered" story that has been driving this
+investigation since 2026-08-24.
+
+What remains: the object exists, the class is known to the reflection
+system, and the instance's reflected field is still null. Either the
+instance was allocated without its fields being constructed, or the
+construction ran and did not populate this field.
+
+A second probe now reports, at the failing call site, the pool pointer,
+its vtable word, and both reflected fields. The vtable is the
+discriminator:
+
+  vtable = 0     -> raw zeroed allocation; the object was never
+                    constructed as an igObject at all.
+  vtable != 0    -> a properly constructed object whose reflected fields
+                    were not instantiated, which points at the
+                    instantiation path rather than at allocation.
