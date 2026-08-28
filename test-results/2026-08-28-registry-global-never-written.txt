@@ -1,0 +1,67 @@
+Jouster game harness, build stamp "Aug 28 2026 14:38:52", run on real
+hardware for the full 120s / 7200 frames. Built from the owner's own
+decrypted dump (tfbGame_cafe.rpx sha256 8be8316c...7dd3).
+
+RESULT: the registry global at synthetic address 435928 (guest
+0x101345e8, &.bss+321000) is NEVER WRITTEN during a full run.
+
+This is a measurement, not an inference, because the same run carried a
+positive control.
+
+  loopwatch(control_bytevalue)      hits=4  changed=4  last=0x3f0
+  loopwatch(control_bytewriter_pc)  hits=4  changed=1
+  loopwatch(storewatch_value)       hits=0
+  loopwatch(storewatch_writer_pc)   hits=0
+  loopwatch(storewatch_bytevalue)   hits=0
+  loopwatch(storewatch_bytewriter_pc) hits=0
+
+The control was armed on 4359280, which generated_0071.c's init_globals
+writes unconditionally with four literal byte stores. It fired exactly
+four times, and its last recorded value decodes to offset 3, value 0xF0
+-- byte-for-byte `ppc_store_u8(ctx, 4359283u, 240)` at
+generated_0071.c:34198. The instrument demonstrably works; the suspect
+address demonstrably receives nothing.
+
+WHY THIS MATTERS
+
+The previous run (build 14:29:52) reported the same four zeros for the
+suspect, but that was worthless: the store-watch had never been observed
+to fire in any run, so "nothing writes it" and "the mechanism does not
+work" were indistinguishable. The run before that (14:14:23) produced no
+watch field at all, because the sink had no slot for the watch's tags.
+Three runs to get one trustworthy bit, two of them lost to
+instrumentation that was not verified before being believed.
+
+WHAT IT MEANS
+
+Core::igDataList::setCapacity reads:
+
+    215db84: lwz  r12, 0x45e8(r12)   -> r12 = *(435928)
+    215db88: lha  r6,  0xc(r12)      -> index = *(int16*)(r12+0xC)
+    215db8c: lwz  r0,  0x14(r3)      -> table = *(r3+0x14)
+    215db94: lwzx r27, r10, r0       -> entry = table[index]
+
+435928 is in .bss, so it is zero at load, and nothing writes it. Both
+halves of the failing lookup are therefore null for the same underlying
+reason: a registration step that never happens. The NULL entry is a
+consequence, not a cause -- which retires the "which type failed to
+register" framing from 2026-08-24 for good.
+
+NEXT
+
+Watch slots raised 4 -> 8 (four was forcing every new question to evict
+one of the watches that recovers the engine's own error text), and slots
+4-6 armed on Core::igRegistry's three registration entry points:
+
+    w4  0x21bdadc  igRegistry::arkRegisterInitialize
+    w5  0x21bdb88  igRegistry::arkRegisterInternal
+    w6  0x21c39c8  igRegistry::arkRegisterMetaValidate
+
+hits=0 on all three means registration never runs. hits>0 means it runs
+without writing this global, which points elsewhere. Either answer
+narrows it.
+
+UNCHANGED
+
+Same deterministic failure state as every run since 2026-08-27:
+sti_idx=113, calls=78154, fail=2268 free=47 reuse=42.
