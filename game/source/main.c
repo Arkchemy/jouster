@@ -1008,9 +1008,28 @@ static void game_thread_func(void *arg) {
      * means it runs and does not write this global, which points
      * somewhere else entirely -- either answer narrows the search a lot,
      * which is the point of asking. */
-    g_ppc_watch[4].pc = 0x21bdadcu; /* Core::igRegistry::arkRegisterInitialize */
-    g_ppc_watch[5].pc = 0x21bdb88u; /* Core::igRegistry::arkRegisterInternal */
-    g_ppc_watch[6].pc = 0x21c39c8u; /* Core::igRegistry::arkRegisterMetaValidate */
+    /* Answered 2026-08-28: all three came back hits=0 in a run where four
+     * other entry watches fired, so registration never runs. The
+     * load-watch then showed igRegistry's meta-object table entry is
+     * never even read, which makes this engine ordering rather than a
+     * dispatch-resolution fault. Slots re-pointed at the machinery that
+     * is supposed to drive registration, to find where the sequence
+     * stops:
+     *
+     *   beginArkRegister / endArkRegister bracket the phase.
+     *   callClassRegistrationFunctions is the walker that should reach
+     *   every class's own arkRegister* function -- there is one per
+     *   class across the whole binary, not just igRegistry's.
+     *   addObjectMeta is what registers each meta-object.
+     *
+     * begin=0 means the registration phase never starts at all.
+     * begin>0 with call=0 means it starts and the walk never happens.
+     * call>0 with addObjectMeta=0 means the walk runs and registers
+     * nothing, which would point at an empty or unbuilt meta list. */
+    g_ppc_watch[4].pc = 0x2154d74u; /* Core::igArkCore::beginArkRegister */
+    g_ppc_watch[5].pc = 0x2154c08u; /* Core::igArkCore::callClassRegistrationFunctions */
+    g_ppc_watch[6].pc = 0x21545f0u; /* Core::igArkCore::addObjectMeta */
+    g_ppc_watch[7].pc = 0x2154d94u; /* Core::igArkCore::endArkRegister */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1724,9 +1743,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igRegistry::arkRegisterInitialize) hits=%u"
-                       " w5(igRegistry::arkRegisterInternal) hits=%u"
-                       " w6(igRegistry::arkRegisterMetaValidate) hits=%u"
+                       " -- w4(beginArkRegister) hits=%u"
+                       " w5(callClassRegistrationFunctions) hits=%u"
+                       " w6(addObjectMeta) hits=%u"
+                       " w7(endArkRegister) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"
@@ -1746,7 +1766,7 @@ int main(int argc, char *argv[]) {
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
                        (unsigned long long)g_arkchemy_mem_alloc_fail_total, (unsigned long long)g_arkchemy_mem_free_total,
                        (unsigned long long)g_arkchemy_mem_reuse_total,
-                       g_ppc_watch[4].hit_count, g_ppc_watch[5].hit_count, g_ppc_watch[6].hit_count,
+                       g_ppc_watch[4].hit_count, g_ppc_watch[5].hit_count, g_ppc_watch[6].hit_count, g_ppc_watch[7].hit_count,
                        g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4, g_ppc_watch[0].r5, g_ppc_watch[0].r6,
                        g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3, g_ppc_watch[1].r4,
                        g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count, g_ppc_watch[2].r3, g_ppc_watch[2].r4,

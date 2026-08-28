@@ -1,0 +1,58 @@
+Jouster game harness, build "Aug 28 2026 15:03:56", full 7200-frame run
+on real hardware. Same deterministic failure state as every run since
+2026-08-27.
+
+RESULT: igRegistry's meta-object descriptor is never read, and the
+registry global is read constantly while never being written.
+
+  loopwatch(tableentry_loadvalue) hits=0
+  loopwatch(tableentry_reader_pc) hits=0
+  loopwatch(regglobal_loadvalue)  hits=9  changed=1  last=0x0
+  loopwatch(regglobal_reader_pc)  hits=9  changed=5  last=0x215db1c
+
+The control is emphatic. The registry global at synthetic 435928 is read
+nine times, every read returns 0, and the last reader PC is 0x215db1c --
+Core::igDataList::setCapacity, exactly the function the static reading
+predicted. Combined with the store-watch measurement from earlier today
+(never written, with its own control firing), that location is now
+characterised from both sides: read constantly, written never.
+
+WHICH FAULT THIS IS
+
+The table entry at 0x119f08, which holds arkRegisterMetaValidate's
+address inside igRegistry's meta-object descriptor, is never read at
+all. That separates the two candidates cleanly:
+
+  - Not a dispatch-resolution bug in the recompiler. If ppc_dispatch
+    were failing to resolve an indirect call, the table entry would
+    still have been READ before the call was attempted. It was not.
+  - It is engine ordering: the walk that consumes meta-object
+    descriptors never starts.
+
+WHAT IS ACTUALLY MISSING
+
+Searching the 20,704 recompiled function names shows the scale of what
+is not happening. There is an arkRegisterMetaValidate per class --
+igObjectDirectoryLoadCallback, tfbNetFeed's script objects,
+tfbHardware's RedOctane peripheral objects, and so on across the whole
+binary -- and none of them is being reached. igRegistry was simply the
+one the failure happened to surface through.
+
+The machinery that should drive them is all present and recovered:
+
+  0x2154d74  Core::igArkCore::beginArkRegister
+  0x2154c08  Core::igArkCore::callClassRegistrationFunctions
+  0x21545f0  Core::igArkCore::addObjectMeta
+  0x2154d94  Core::igArkCore::endArkRegister
+
+NEXT
+
+Watch slots 4-7 re-pointed at those four, which localises the stop:
+
+  begin=0                    -> the registration phase never starts.
+  begin>0, call=0            -> it starts and the walk never happens.
+  call>0, addObjectMeta=0    -> the walk runs and registers nothing,
+                                pointing at an empty or unbuilt meta list.
+
+Slots were raised 4 -> 8 earlier today precisely so this could be asked
+without evicting the watches that recover the engine's own error text.
