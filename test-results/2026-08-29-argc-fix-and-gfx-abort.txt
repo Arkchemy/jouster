@@ -1,0 +1,93 @@
+2026-08-29 (run 2) — argc fix confirmed; run now ends in a graphics abort
+=========================================================================
+
+THE ARGC FIX WORKED, AND THE MARGIN IS ENORMOUS
+-----------------------------------------------
+Same allocation, both runs:
+
+    before:  MEM EVENT #1 ... calls=189611248
+    after:   MEM EVENT #1 ... calls=4081
+
+The 188-million-entry argv scan is gone. The game reaches its first real
+ExpHeap allocation in 4,081 function calls instead of 189.6 million, in well
+under a second instead of ~80 of the run's 120 seconds.
+
+Bink still completes its full round trip (open/DoFrame/NextFrame/close) on a
+real retail movies/bash.mov.
+
+THE RUN NOW DIES IN OUR OWN CONSOLE, NOT IN THE GAME
+-----------------------------------------------------
+The log stops immediately after MEM EVENT #1, with no frame line past frame 0.
+Atmosphere crash report (atmosphere/crash_reports):
+
+    Result:      0x2959 (2345-0020)  = libnx LibnxError_BadGfxQueueBuffer
+    Type:        User Break          (svcBreak -- an explicit abort)
+
+Symbolised against Jouster.elf with addr2line:
+
+    PC          svcBreak
+    LR          diagAbortWithResult
+    RA[00]      framebufferEnd
+    RA[01]      ConsoleSwRenderer_flushAndSwap   console_sw.c:195
+    RA[02]      main                             main.c:1833   <- consoleUpdate
+    RA[03]      _start
+
+So: the main thread's own consoleUpdate failed inside the graphics driver and
+libnx aborted the process. The recompiled game is not on this stack.
+
+The same signature appears in the three most recent crash reports, at
+near-identical addresses (0x97397a8 / 0x97397b8 / 0x97397b8). The 82-frame run
+earlier the same day ended this way too -- it did not simply run out of time.
+
+RULED OUT BY MEASUREMENT, NOT BY ARGUMENT
+------------------------------------------
+- Guest memory corrupting the host: impossible. Every guest access masks with
+  & (PPC_MEM_SIZE - 1) (ppc_runtime.h:384 and :451), so a wild guest pointer
+  cannot leave the 1GB arena.
+- Unlocked console race between the two threads: no. Both the game thread's
+  checkpoint() and the main thread's consoleUpdate take g_console_mutex; a
+  previous race there was already fixed and commented.
+- Ignored applet suspend messages: no. The frame loop is driven by
+  appletMainLoop() (main.c:1738).
+
+LEADING CAUSE: NO MEMORY LEFT FOR THE GRAPHICS DRIVER
+------------------------------------------------------
+Every run has reported, from its very first line:
+
+    process memory: total=3189MB used=3185MB
+
+4MB of headroom at startup. The cause is structural:
+
+    .text  159,534,181   the recompiled game
+    .bss 1,073,788,120   static PpcSharedMemory g_shared (the 1GB guest arena)
+
+~1.19GB of image, and libnx's default __libnx_initheap then commits ALL
+remaining process memory as the malloc heap. The graphics driver allocates
+lazily and outside that heap, which is exactly why it fails partway into a
+run rather than at consoleInit, and why the timing moves between runs.
+
+This is a strong candidate, not a proven cause. It fits every observation --
+the abort is in an allocation path, the process is at 99.9% utilisation, and
+the failure point varies -- but one log cannot distinguish it from a graphics
+fault that merely happens to allocate.
+
+CHANGES
+-------
+1. main.c now overrides __libnx_initheap with a fixed 128MB inner heap, so
+   libnx never commits "everything available" and the driver has room. Host
+   heap use is only newlib stdio, the FS shim and Bink's host buffers -- the
+   guest arena is .bss, not malloc -- so 128MB is generous.
+   Verified linked: nm resolves __libnx_initheap to main.c:826, and .bss grew
+   by exactly 134,217,712 bytes.
+2. main.c logs host headroom every 300 frames:
+       host mem @frame N: used=..MB total=..MB free=..MB
+   If the theory is right, free shrinks toward zero before the abort. If it
+   stays flat, the theory is wrong and the next run says so in one number.
+
+WHAT THE NEXT RUN SHOULD SHOW
+-----------------------------
+  free= should now start in the hundreds of MB rather than 4MB
+  frame lines should continue past frame 0 instead of stopping
+  w4 (initBootstrap), w6 (igArkCore::init), w7 (appendToArkCore = 36 control)
+  FSOpenFile for alchemy.xml -- the retail game's first file, never yet
+  reached by ours

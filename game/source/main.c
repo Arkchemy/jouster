@@ -794,6 +794,39 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
     if (n == 0) snprintf(out, out_size, "<empty>");
 }
 
+/* libnx reserves ALL remaining process memory as the malloc heap unless a
+ * program overrides __libnx_initheap. This program is an extreme case of why
+ * that default hurts: g_shared above is 1GB of .bss and the recompiled game
+ * is another 159MB of .text, so the image alone is ~1.19GB, and libnx then
+ * committed everything left. Every run reported:
+ *
+ *     process memory: total=3189MB used=3185MB
+ *
+ * -- 4MB of headroom, from the very first line of the log.
+ *
+ * The graphics driver allocates lazily, outside that heap, so it dies later
+ * rather than at init: three consecutive runs on 2026-08-29 aborted with
+ * libnx result 2345-0020 (LibnxError_BadGfxQueueBuffer) inside
+ * framebufferEnd, called from the main thread's own consoleUpdate. The
+ * recompiled game was not involved -- guest stores are masked with
+ * (PPC_MEM_SIZE - 1) and cannot touch host memory at all.
+ *
+ * A fixed inner heap means libnx never calls svcSetHeapSize for "everything
+ * available", so the rest stays uncommitted and the graphics driver can
+ * actually allocate. 128MB is far more than this harness needs: the guest
+ * arena is .bss, not malloc, so host heap use is only newlib stdio, the FS
+ * shim's own bookkeeping and Bink's host-side buffers. */
+#define ARKCHEMY_HOST_HEAP_SIZE (128u * 1024u * 1024u)
+static char g_inner_heap[ARKCHEMY_HOST_HEAP_SIZE];
+
+void __libnx_initheap(void);
+void __libnx_initheap(void) {
+    extern char *fake_heap_start;
+    extern char *fake_heap_end;
+    fake_heap_start = g_inner_heap;
+    fake_heap_end   = g_inner_heap + sizeof(g_inner_heap);
+}
+
 static PpcSharedMemory g_shared;
 
 // void ppc_arkchemy_game_entry(PpcContext *ctx) -- the real, complete,
@@ -1831,6 +1864,20 @@ int main(int argc, char *argv[]) {
                (unsigned long long)g_ppc_fn_call_count);
         consoleUpdate(NULL);
         mutexUnlock(&g_console_mutex);
+
+        if (frame % 300 == 0) {
+            /* Host-side headroom over time. If the graphics abort really is
+             * memory starvation, this shrinks toward zero before it fires;
+             * if it stays flat, the cause is elsewhere and this line says so
+             * in one number instead of another round of theorising. */
+            u64 t = 0, u = 0;
+            svcGetInfo(&t, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+            svcGetInfo(&u, InfoType_UsedMemorySize,  CUR_PROCESS_HANDLE, 0);
+            checkpoint("host mem @frame %d: used=%lluMB total=%lluMB free=%lluMB",
+                       frame, (unsigned long long)(u / (1024*1024)),
+                       (unsigned long long)(t / (1024*1024)),
+                       (unsigned long long)((t - u) / (1024*1024)));
+        }
 
         if (frame % 60 == 0) {
             // Real, best-effort (racy, same as reading g_ppc_current_pc
