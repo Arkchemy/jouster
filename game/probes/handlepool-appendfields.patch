@@ -1,0 +1,23 @@
+--- generated_0161.c	2026-08-28 19:04:38.346224837 +0100
++++ generated_0161.c	2026-08-28 19:04:38.358556376 +0100
+@@ -1,4 +1,5 @@
+ #include "ppc_runtime.h"
++void arkchemy_probe4(const char *label, const char *n0, uint32_t v0, const char *n1, uint32_t v1, const char *n2, uint32_t v2, const char *n3, uint32_t v3);
+ #include "cafeos_coreinit.h"
+ #include "cafeos_coreinit_atomic.h"
+ #include "cafeos_coreinit_dynload.h"
+@@ -36218,6 +36219,14 @@
+   ctx->r[3] = ctx->r[31];
+   /* 21b1b90: lwz r28, 0xc(r31) */
+   ctx->r[28] = ppc_load_u32(ctx, ctx->r[31] + (int32_t)12);
++  /* ARKCHEMY PROBE (patch, see ../probes): igHandlePool's own call into
++     instantiateAndAppendFields. meta is the igMetaObject being given its
++     field list, r28 is *(meta+0xC) read immediately before the call, and
++     r4/r5 are the arrays it is handed. If this fires with a sane meta
++     and the field still ends up null, the append is not the problem. */
++  arkchemy_probe4("HP_APPENDFIELDS",
++                  "meta", ctx->r[3], "meta_0xC", ctx->r[28],
++                  "arg_r4", ctx->r[4], "arg_r5", ctx->r[5]);
+   /* 21b1b94: bl 0x21616d0 */
+   ctx->lr = 0x21b1b98u;
+   ppc_instantiateAndAppendFields__Q2_4Core12igMetaObjectFPCPFPQ2_4Core12igMemoryPool_PQ2_4Core8igObjectiT2(ctx);

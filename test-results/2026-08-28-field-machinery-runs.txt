@@ -1,0 +1,35 @@
+Jouster game harness, build "Aug 28 2026 18:59:07".
+
+  w4(instantiateAndAppendFields)         hits=20
+  w5(igMetaObject::instantiateFromPool)  hits=45
+  w6(appendToArkCore)                    hits=36   <- control
+  w7(igHandlePool::setCapacity)          hits=1
+
+  [PROBE HANDLEPOOL] pool=0x300565c vtable=0x11f0b0
+                     _handleList@0x18=0x0 _freeHandle@0x1c=0xffff
+
+BOTH MECHANISMS RUN
+
+Field lists are built 20 times and metaobjects are instantiated 45 times,
+so neither step is missing. The machinery works; it is not working for
+this object.
+
+The asymmetry worth noting: 36 classes register themselves, and only 20
+get instantiateAndAppendFields. So sixteen registered classes never have
+their field lists built, and igHandlePool may be one of them.
+
+That is not a safe inference from counts alone, which is the mistake this
+investigation has already made repeatedly, so it gets measured instead.
+Static reading confirms igHandlePool::arkRegisterInitialize does contain
+a call to instantiateAndAppendFields:
+
+  21b1b8c: mr   r3, r31          metaobject
+  21b1b90: lwz  r28, 0xc(r31)
+  21b1b94: bl   0x21616d0        instantiateAndAppendFields
+
+A third probe now sits immediately before that call and reports the
+metaobject pointer and the arguments. If it fires with a sane metaobject
+and _handleList is still null afterwards, the append is not the problem
+and the fault is in what instantiates the field value on the instance.
+If it never fires, igHandlePool is one of the sixteen and the question
+becomes why its own registration path stops short.
