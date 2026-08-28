@@ -1,0 +1,47 @@
+Jouster game harness, build "Aug 28 2026 20:11:34".
+
+  [PROBE FIELD_RESET] 1227 dispatches, targets:
+      654 -> 0x214de4c
+      510 -> 0x2184118
+       63 -> 0x2188e68
+  No null targets anywhere.
+
+  For the failing object, all five fields reset with real targets and
+  obj_0x18 stays 0 throughout.
+
+THE NULL-VTABLE-SLOT THEORY IS DEAD TOO.
+
+Every per-field reset resolves to a real function. ppc_dispatch is never
+handed a null, so nothing is being silently skipped. That would have been
+a recompiler bug affecting the whole binary; it is not happening.
+
+A CORRECTION
+
+The previous entry said "setCapacity does contain a store to +0x18, so it
+is capable of populating the field itself". That was wrong. The store is
+`ctx->r[1] + 24` -- a stack-frame save from `stmw r27, 0xc(r1)` -- and the
+grep behind the claim matched any register plus 24, not the pool. It was
+never a store to the object. setCapacity only ever reads pool+0x18.
+
+WHERE THIS ACTUALLY STANDS
+
+Confirmed by measurement, not argument:
+
+  the object is allocated, commissioned and reset correctly
+  its vtable is real, its scalar field carries its metafield default
+  its metaobject knows about five fields, inherited base included
+  every field reset dispatches to a real function
+  the reference field is left null, which is correct for a reference
+  igHandlePool::setCapacity reads that reference without a null check,
+    two instructions after the object is created
+  nothing between those two points assigns it
+
+So the remaining question is genuinely narrow: in the real game, what
+assigns igHandlePool::_handleList before igMemoryContext::activate uses
+it? Neither igHandlePool nor igMemoryPoolHandlePool defines a
+userInstantiate, so the answer is either a vtable entry that belongs to a
+base class, or a step in activate's own path that is not being reached.
+
+Fourteen hardware runs today. Eight theories killed by measurement, two
+probe bugs caught by results that did not make internal sense, and one
+claim above corrected. The search space is now small enough to enumerate.
