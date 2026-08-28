@@ -1,0 +1,54 @@
+Jouster game harness, build "Aug 28 2026 19:13:09".
+
+  w4(igMemoryContext::activate)              hits=1   <- the caller
+  w5(appendMemoryPool)                       hits=0
+  w6(igMemoryHandleContext::createLabel)     hits=0
+  w7(igMemoryHandleContext::userInstantiate) hits=0
+
+THE FULL PATH, READ OUT OF THE GENERATED C
+
+  igMemoryContext::activate
+    2178b54: bl 0x21c6480   Core::igMemoryPoolHandlePool::instantiateFromPool
+    2178b58: stw r3, 0x1c(r31)
+    2178b64: bl 0x2165878   igHandlePool::setCapacity(pool, 128, 4)
+
+So the object is created one instruction before it is used, and it is an
+igMemoryPoolHandlePool -- a SUBCLASS of igHandlePool. _handleList is a
+base-class field.
+
+  igMemoryPoolHandlePool::instantiateFromPool
+    21c64a8: bl getClassMetaSafeInternal(&metaSlot, arkRegisterInternal)
+    21c64b4: bl igMetaObject::createInstance(pool)
+
+That is the lazy get-or-register chain, and this project already
+documented it. From findings.json, "The lazy metaobject registration
+chain, and the single flag byte that gates it":
+
+  "...calls igArkCore::beginArkRegister, which reads a flag byte at
+   offset +0x16 on the igArkCore singleton; only if the flag passes does
+   it invoke the class's own arkRegisterInitialize... If reflection
+   appears to be missing wholesale rather than for one class, that byte
+   is the thing to look at first."
+
+beginArkRegister confirms it exactly:
+
+  2154d74: lbz   r0, 0x16(r3)     flag
+  2154d78: cmpwi r0, 0
+  2154d7c: beq   0x2154d8c        flag == 0 -> do nothing
+  2154d80: lwz   r12, 0x18(r3)    otherwise depth++
+  2154d8c: mr    r3, r0           returns the flag
+
+It has been measured firing 23 times, but the hit count says nothing
+about the RETURN VALUE, and the return value is what decides whether a
+class registers. That distinction was never measured.
+
+A fourth probe now reports the igArkCore pointer, the flag byte, the
+nesting depth and the caller, on every one of those 23 calls.
+
+PROCESS NOTE
+
+This finding was already written down, and it is on the project's own
+website as of this afternoon -- rendered there by the same session that
+then spent several hardware runs circling the same mechanism without
+consulting it. Reading the project's own recorded findings before
+chasing a symptom would have been faster than any of the probes.

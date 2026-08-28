@@ -1,0 +1,18 @@
+--- generated_0156.c	2026-08-28 19:23:02.487136920 +0100
++++ generated_0156.c	2026-08-28 19:23:02.497842085 +0100
+@@ -24935,6 +24935,15 @@
+   for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }
+   /* 2154d74: lbz r0, 0x16(r3) */
+   ctx->r[0] = ppc_load_u8(ctx, ctx->r[3] + (int32_t)22);
++  /* ARKCHEMY PROBE (patch, see ../probes): the flag byte that gates all
++     lazy metaobject registration. Recorded in findings.json as "the
++     single flag byte that gates it" -- if it reads 0 here, the class's
++     arkRegisterInitialize is skipped and its fields never exist. */
++  arkchemy_probe4("ARKREGISTER_GATE",
++                  "arkcore", ctx->r[3],
++                  "flag@0x16", ctx->r[0],
++                  "depth@0x18", ppc_load_u32(ctx, ctx->r[3] + 24),
++                  "caller_lr", ctx->lr);
+   /* 2154d78: cmpwi r0, 0 */
+   ppc_cmpw(ctx, (int32_t)ctx->r[0], 0);
+   /* 2154d7c: beq 0x2154d8c */
