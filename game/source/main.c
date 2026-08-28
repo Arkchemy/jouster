@@ -1898,6 +1898,27 @@ int main(int argc, char *argv[]) {
         }
         mutexUnlock(&g_console_mutex);
 
+        /* consoleUpdate() blocks until vsync, and until 2026-08-29 that was
+         * the ONLY thing pacing this loop -- there is no sleep anywhere else
+         * in it. Handing the display to the game therefore did two invisible
+         * things at once: the "120 second" run collapsed into a couple of
+         * seconds because 7200 unpaced iterations take almost no time, and
+         * this thread free-ran flat out on its core, starving the game
+         * thread it exists to observe.
+         *
+         * That is what made run 5 look pathologically slow. The game managed
+         * ~31 function calls per second, against 2.3M/sec measured earlier
+         * the same day, and I read it as the engine grinding through a
+         * garbage-sized loop. It was not: the game was simply not being
+         * given any time, for not very long. The owner spotted this from the
+         * outside -- "maybe your game frames are much faster than how fast
+         * they would run at actual runtime" -- before I did.
+         *
+         * So pace explicitly whenever the console is not doing it for us. */
+        if (!g_console_enabled) {
+            svcSleepThread(16666667ULL); /* 60Hz, matching consoleUpdate */
+        }
+
         if (frame % 300 == 0) {
             /* Host-side headroom over time. If the graphics abort really is
              * memory starvation, this shrinks toward zero before it fires;

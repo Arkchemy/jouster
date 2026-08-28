@@ -1,0 +1,67 @@
+2026-08-29 (run 5) — display handover worked; boot reaches class registration
+==============================================================================
+
+RUN 5 DID NOT CRASH
+-------------------
+No new Atmosphere crash report was written (newest is still run 4's,
+01787960425). The run reached "exiting after 7200 main frames" on its own.
+The error dialog the owner saw is an untidy shutdown -- the process exits
+while the game thread is still mid-execution (done=0) -- not a fault in the
+game. Cosmetic, still open.
+
+FURTHEST THE BOOT HAS EVER GOT
+------------------------------
+  w5 igMemoryContext::systemActivate   hits=1
+  w4 igArkCore::initBootstrap          hits=1
+  w7 appendToArkCore                   hits=9
+  w6 igArkCore::init                   hits=0   <- still the target
+  GX2Init                              PASSED (consoleExit released the window)
+  111 probe lines: ARKREGISTER_GATE x6, RESETFIELDS x7, FIELD_RESET x92,
+                   AFTER_RESET x6
+
+So the engine is now inside igArkCore::initBootstrap, walking registered
+classes and resetting their metadata fields. It has never been here before.
+
+THE "PATHOLOGICAL SLOWNESS" WAS AN ARTEFACT OF MY OWN FIX
+----------------------------------------------------------
+Measured rate: calls 5114 -> 8248 between frames 1140 and 7140, i.e. ~31
+guest function calls per second, against 2.3M/sec measured earlier the same
+day. I started reading that as the engine grinding through a garbage-sized
+loop driven by the known NULL _handleList (every FIELD_RESET line does show
+obj+0x18 = 0).
+
+It was not. consoleUpdate() blocks until vsync, and it was the ONLY thing
+pacing the main loop -- there is no sleep anywhere else in it (grep for
+svcSleepThread in main.c returned nothing). Handing the display to the game
+in run 4's fix therefore did two invisible things:
+
+  1. 7200 unpaced iterations take a couple of seconds, not 120, so the run
+     was never 120 seconds long;
+  2. the main thread free-ran flat out, starving the game thread it exists
+     to observe.
+
+The game was not slow. It was given almost no CPU, for not very long. The
+owner called this from the outside -- "maybe your game frames are much
+faster than how fast they would run at actual runtime" -- before I did, while
+I was busy attributing it to a loop.
+
+Two lessons, both mine:
+  - removing something also removes its side effects. consoleUpdate was
+    load-bearing as a *clock*, which is nowhere in its name.
+  - "calls/sec collapsed" is a statement about the observer as much as the
+    observed. I should have checked how long the run actually lasted before
+    concluding anything about the rate.
+
+FIX
+---
+main.c now calls svcSleepThread(16666667) per iteration whenever the console
+is not pacing the loop. 7200 frames means 120 seconds again, and the game
+thread gets the core.
+
+STILL UNKNOWN, DELIBERATELY NOT CLAIMED
+----------------------------------------
+Whether the NULL _handleList actually costs time is now an OPEN question
+again -- the evidence I was about to attribute to it has evaporated. It is
+still a real anomaly (obj+0x18 = 0 on every FIELD_RESET), but nothing in this
+run shows it is slow. The next run, properly paced, is the first honest
+measurement of how far initBootstrap gets in 120 real seconds.
