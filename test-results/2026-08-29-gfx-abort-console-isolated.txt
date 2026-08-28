@@ -1,0 +1,73 @@
+2026-08-29 (run 3) — memory theory refuted; console isolated as the victim
+==========================================================================
+
+WHAT RUN 3 SETTLED
+------------------
+The 128MB inner-heap cap changed nothing:
+
+    run 2:  process memory: total=3189MB used=3185MB     (.bss 1.07GB)
+    run 3:  process memory: total=3189MB used=3185MB     (.bss 1.20GB)
+            host mem @frame 0: used=3185MB total=3189MB free=3MB
+
+Identical to the megabyte, despite .bss growing by 128MB. hbloader commits
+that memory before this NRO runs, so the figure is not ours to move and
+__libnx_initheap cannot affect it.
+
+More importantly, the memory theory is dead on its own evidence, not merely
+unhelped: run 2 survived 81 seconds of continuous consoleUpdate on exactly
+the same 3MB of headroom. If 3MB were fatal to the graphics driver it could
+not have done that. I proposed that theory too confidently; the number was
+an anomaly, not a cause.
+
+WHAT IS ACTUALLY DIFFERENT BETWEEN A SURVIVING RUN AND A DYING ONE
+-------------------------------------------------------------------
+    run 2 (survived 81s): game thread stuck in igStringHelper::comparei,
+                          calling one leaf function 2.3M times a second and
+                          touching nothing else
+    run 3 (died <1s):     game thread past setAppCommandLine, executing real
+                          engine code, dead within a second of MEM EVENT #1
+
+The crash is on the MAIN thread, in our own diagnostic console:
+libnx 2345-0020 (BadGfxQueueBuffer) in framebufferEnd via consoleUpdate. The
+game is never on that stack. So the game thread does something, once it
+reaches real engine code, that takes the console's framebuffer with it.
+
+REFUTED BY MEASUREMENT, NOT ARGUMENT
+-------------------------------------
+- Guest memory corrupting the host: impossible. Every guest access masks with
+  & (PPC_MEM_SIZE - 1) (ppc_runtime.h:384, :451).
+- Lost log tail: no. checkpoint() calls fflush(g_log) per line, so MEM EVENT
+  #1 really is the last event, not the last flushed event.
+- Unlocked console race: no. Both threads take g_console_mutex.
+- Ignored applet suspend: no. appletMainLoop() drives the loop (main.c:1738).
+- A GX2 shim fighting for the display: no. grep shows main.c's consoleInit is
+  the only thing in the whole tree that touches nwindowGetDefault /
+  framebufferCreate / deko3d.
+- Host memory starvation: no, per run 2 above.
+
+CHANGE: REMOVE THE VICTIM
+--------------------------
+main.c now sets g_console_enabled = false immediately before calling
+ppc_arkchemy_game_entry. checkpoint() and the per-frame spinner still write
+to game-results.log; neither touches printf or consoleUpdate after that
+point. The screen simply stops updating.
+
+This is an experiment with two useful outcomes, not a fix:
+  - run survives  -> the console/graphics path was the thing dying, and we
+                     finally get to watch the boot for a full 120 seconds
+  - run still dies -> the fault is in the game thread itself, and the crash
+                     report will point at guest code instead of at libnx's
+                     graphics path, which is a far better place to start
+
+EXPECT ON SCREEN: the display freezes on the last drawn frame for the whole
+run. That is the intended behaviour, not a hang. game-results.log is the
+output.
+
+WHAT TO READ IN THE NEXT LOG
+-----------------------------
+  frame lines continuing past frame 0 at all
+  last_pc / caller_lr on those lines -- where the game thread actually is
+  w4 (initBootstrap), w6 (igArkCore::init), w7 (appendToArkCore, control=36)
+  MEM EVENT #2 and beyond
+  FSOpenFile for alchemy.xml -- the retail game's first file, never yet
+  reached by ours
