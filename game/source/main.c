@@ -283,6 +283,26 @@ static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0xf0000007u, "control_bytevalue", 0xFFFFFFFFu, 0, 0},
     {0xf0000008u, "control_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
 
+    /* Load-side watches, 2026-08-28. The store side has now measured
+     * that the registry global is never written; this asks whether the
+     * meta-object table entry holding arkRegisterMetaValidate's address
+     * is ever READ, which separates two very different faults:
+     *
+     *   never read -> the walk that consumes igRegistry's metadata never
+     *                 starts, and the bug is engine ordering.
+     *   read, but the function still never runs -> the indirect dispatch
+     *                 fails to resolve, and the bug is ours.
+     *
+     * The control is the registry global itself: setCapacity demonstrably
+     * reads it (that read is what returns NULL and starts the whole
+     * failure chain), so these slots MUST fire. Their firing alongside a
+     * silent table-entry slot is also the cleanest possible statement of
+     * the finding: read constantly, written never. */
+    {0xf0000009u, "tableentry_loadvalue", 0xFFFFFFFFu, 0, 0},
+    {0xf000000au, "tableentry_reader_pc", 0xFFFFFFFFu, 0, 0},
+    {0xf000000bu, "regglobal_loadvalue", 0xFFFFFFFFu, 0, 0},
+    {0xf000000cu, "regglobal_reader_pc", 0xFFFFFFFFu, 0, 0},
+
     {0x21aa648u, "sp_container_alloc", 0xFFFFFFFFu, 0, 0},
     {0xFFFFFFFEu, "dispatch_userInstantiate", 0xFFFFFFFFu, 0, 0},
     {0x215bf24u, "singleton_needs_ctx_flag", 0xFFFFFFFFu, 0, 0},
@@ -964,6 +984,13 @@ static void game_thread_func(void *arg) {
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
      * slots above come back empty, the measurement is void. */
     g_ppc_watch_store_addr2 = 4359280u;
+
+    /* 0x119f08 -- the meta-object table slot holding
+     * arkRegisterMetaValidate's address, found by scanning init_globals'
+     * literal byte stores. Control on the registry global, which is read
+     * every time setCapacity runs. */
+    g_ppc_watch_load_addr  = 1154824u;
+    g_ppc_watch_load_addr2 = 435928u;
 
     /* Slots 4-6, armed 2026-08-28: does registration run at all?
      *
