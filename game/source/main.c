@@ -1026,10 +1026,26 @@ static void game_thread_func(void *arg) {
      * begin>0 with call=0 means it starts and the walk never happens.
      * call>0 with addObjectMeta=0 means the walk runs and registers
      * nothing, which would point at an empty or unbuilt meta list. */
-    g_ppc_watch[4].pc = 0x2154d74u; /* Core::igArkCore::beginArkRegister */
-    g_ppc_watch[5].pc = 0x2154c08u; /* Core::igArkCore::callClassRegistrationFunctions */
-    g_ppc_watch[6].pc = 0x21545f0u; /* Core::igArkCore::addObjectMeta */
-    g_ppc_watch[7].pc = 0x2154d94u; /* Core::igArkCore::endArkRegister */
+    /* The boot ladder, 2026-08-28. Community reverse-engineering of
+     * Alchemy (NefariousTechSupport and others, Skylanders RE Discord)
+     * describes the registration architecture: every class has an
+     * arkRegisterInternal that calls Core::igArkRegister with its name,
+     * metaobject, parent's arkRegisterInternal, size, vtable and a
+     * pointer to its arkRegisterInitialize. Reading the regenerated C
+     * gives the chain that is supposed to reach those:
+     *
+     *   arkchemy_game_entry -> main -> Core::igRefAlchemy
+     *     -> Core::igArkCore::__ct -> beginArkRegister
+     *       -> callClassRegistrationFunctions -> per-class registration
+     *
+     * Measured already: registration never runs, and igRegistry's
+     * meta-object descriptor is never even read. This run finds which
+     * rung the sequence stops on. The first zero going down the ladder
+     * is the answer. */
+    g_ppc_watch[4].pc = 0x2002bf0u; /* main */
+    g_ppc_watch[5].pc = 0x21486a0u; /* Core::igRefAlchemy */
+    g_ppc_watch[6].pc = 0x2146ffcu; /* Core::igArkCore::igArkCore (ctor) */
+    g_ppc_watch[7].pc = 0x2154d74u; /* Core::igArkCore::beginArkRegister */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1743,10 +1759,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(beginArkRegister) hits=%u"
-                       " w5(callClassRegistrationFunctions) hits=%u"
-                       " w6(addObjectMeta) hits=%u"
-                       " w7(endArkRegister) hits=%u"
+                       " -- w4(main) hits=%u"
+                       " w5(igRefAlchemy) hits=%u"
+                       " w6(igArkCore::ctor) hits=%u"
+                       " w7(beginArkRegister) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"
