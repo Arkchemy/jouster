@@ -1106,10 +1106,38 @@ static void game_thread_func(void *arg) {
      *       loaded, and the ordering is the bug.
      *   igz>0 -> loading does start, and it is failing rather than being
      *       skipped, which points at the filesystem shim. */
-    g_ppc_watch[4].pc = 0x2165878u; /* Core::igHandlePool::setCapacity (the demander) */
-    g_ppc_watch[5].pc = 0x21a2d8cu; /* Core::igIGZLoader::load */
+    /* 2026-08-28, fifth round -- and the probe changed the question
+     * completely.
+     *
+     * REGISTRY_LOOKUP fired five times. Three succeeded with real tables
+     * and real entries. The fatal one reported
+     *
+     *   table=0x0 byteoff=0x0 datalist=0x0 entry=0x0
+     *
+     * datalist is r3, the igDataList `this`. It is NULL. The table then
+     * reads as *(0 + 0x14) = 0, so the registry was never the problem --
+     * setCapacity was called on a null object.
+     *
+     * igHandlePool::setCapacity makes two calls. The first passes the
+     * pool itself; the second does `lwz r3, 0x18(r31)` and passes
+     * *(pool + 0x18). The failing call's caller_lr (0x21658c8) is the
+     * return address of that second one, so *(pool + 0x18) is NULL.
+     *
+     * Nothing in igHandlePool writes +0x18, and the class has no
+     * recovered constructor -- its fields are built by the reflection
+     * system from the metafields its own arkRegisterInitialize defines.
+     * So the question is whether igHandlePool is itself registered:
+     *
+     *   internal=0 -> igHandlePool is not among the 36, so instantiating
+     *       one leaves its members unconstructed, and +0x18 stays NULL.
+     *       That is the whole bug, and it is about which classes
+     *       self-register rather than about the file that never loads.
+     *   internal>0 -> it is registered and something else leaves the
+     *       member null, which points at instantiation instead. */
+    g_ppc_watch[4].pc = 0x21b1c1cu; /* igHandlePool::arkRegisterInternal */
+    g_ppc_watch[5].pc = 0x21b1b58u; /* igHandlePool::arkRegisterInitialize */
     g_ppc_watch[6].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
-    g_ppc_watch[7].pc = 0x21989a4u; /* igIGBFile::readFile (expect 0) */
+    g_ppc_watch[7].pc = 0x2165878u; /* igHandlePool::setCapacity (expect 1) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1823,10 +1851,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igHandlePool::setCapacity) hits=%u"
-                       " w5(igIGZLoader::load) hits=%u"
+                       " -- w4(igHandlePool::arkRegisterInternal) hits=%u"
+                       " w5(igHandlePool::arkRegisterInitialize) hits=%u"
                        " w6(appendToArkCore) hits=%u"
-                       " w7(igIGBFile::readFile) hits=%u"
+                       " w7(igHandlePool::setCapacity) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"

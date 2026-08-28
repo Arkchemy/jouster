@@ -1,0 +1,42 @@
+Jouster game harness, build "Aug 28 2026 17:45:08". First run with a
+probe re-applied from game/probes/, and it overturns the reading the
+previous four runs were built on.
+
+PROBE OUTPUT (REGISTRY_LOOKUP, inside igDataList::setCapacity)
+
+  calls=66035  table=0x3004fec  byteoff=0x00  datalist=0x3004c28  entry=0x3004d20
+  calls=66045  table=0x3004fec  byteoff=0x00  datalist=0x3004c28  entry=0x3004d20
+  calls=69747  table=0x3005640  byteoff=0x00  datalist=0x30054e0  entry=0x3004d20
+  calls=69755  table=0x0        byteoff=0x00  datalist=0x0        entry=0x0
+  calls=70256  table=0x300572c  byteoff=0x1c  datalist=0x3005680  entry=0x0
+
+Three lookups succeed with real tables and real entries. The registry
+works. The fatal call at 69755 has datalist=0 -- that is r3, the
+igDataList `this` pointer. The "missing registry table" seen in every
+earlier log is just *(0 + 0x14) read off a null object.
+
+So "a class was never registered" was the wrong reading, and it survived
+four runs because the earlier probes only reported the table and index,
+never the object they were read from.
+
+WHERE THE NULL COMES FROM
+
+igHandlePool::setCapacity makes two calls into igDataList::setCapacity:
+
+  216589c: bl 0x215db1c          first call, r3 still the pool itself
+  21658b8: lwz r3, 0x18(r31)     r3 = *(pool + 0x18)
+  21658c4: bl 0x215db1c          second call
+
+The failing entry's caller_lr is 0x21658c8, the return address of the
+second call. So *(pool + 0x18) is NULL.
+
+igHandlePool has no recovered constructor and nothing in it writes
++0x18. Its fields are built by the reflection system from the metafields
+its own arkRegisterInitialize defines -- so the next question is whether
+igHandlePool is itself one of the 36 registered classes. Watches 4 and 5
+now sit on its arkRegisterInternal and arkRegisterInitialize.
+
+Also note the separate case at 70256: a real table with a real byteoff
+of 0x1c returning entry=0. That one IS a genuinely missing entry, and it
+is a different fault from the null-object one. Worth not conflating them
+again.
