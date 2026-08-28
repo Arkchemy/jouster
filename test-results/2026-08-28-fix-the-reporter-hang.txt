@@ -1,0 +1,50 @@
+FIX ATTEMPT: bound the strlen that stops initBootstrap returning.
+
+WHAT IS BEING FIXED
+
+The measured chain ends in Core::igStringBuf::append scanning for a
+terminator that is not there. Guest loads mask the address
+(PPC_MEM_SIZE in ppc_runtime.h), so the scan wraps the arena rather than
+faulting, and never ends. That one spin is why igArkCore::initBootstrap
+never returns, why igArkCore::init never runs, why no object loader is
+registered, and why the engine never opens a file.
+
+WHAT THE FIX DOES
+
+game/probes/strscan-bound.patch adds a bound to that loop. r4 still holds
+the original pointer, so the distance scanned is r11 - r4; past 8192
+bytes it forces the terminator and logs STRSCAN_BOUNDED with the pointer,
+the distance and the buffer.
+
+The instruction translation itself is correct and untouched -- lbzu emits
+both its load and its register update. Only the runaway argument is
+handled.
+
+WHAT THIS IS NOT
+
+It is a diagnostic workaround, not a correctness fix. The real defect is
+whatever hands the reporter an unterminated pointer, which traces back to
+the null igHandlePool::_handleList and the foreign-pointer free that
+corrupts pool 0. That is untouched.
+
+The 2026-08-24 notes argued this workaround was worth doing first, on the
+grounds that it makes every future engine error readable instead of
+fatal. That reasoning is why it is being done now.
+
+WHAT TO EXPECT FROM THE NEXT RUN
+
+  STRSCAN_BOUNDED appears -> the bound fired, and the reporter completed
+      instead of spinning. Then watch whether initBootstrap returns and
+      igArkCore::init finally runs.
+
+  init hits>0 -> the object loaders register and the engine should start
+      opening files. The Cemu trace says the first will be
+      /vol/content/alchemy.xml, then permanent/bootstrap.bld. Matching
+      that order is the measure of success.
+
+  There is also a real possibility the null _handleList resolves itself
+      once loading runs, since nothing has yet been found that assigns it
+      before the loading path that never executed.
+
+  init still 0 -> initBootstrap is stuck on something else as well, and
+      the next stop will be visible in last_pc.

@@ -1,0 +1,36 @@
+--- generated_0161.c	2026-08-28 21:06:55.019583533 +0100
++++ generated_0161.c	2026-08-28 21:06:55.035410379 +0100
+@@ -9881,6 +9881,33 @@
+   /* 21a6b88: lbzu r12, 1(r11) */
+   ctx->r[12] = ppc_load_u8(ctx, ctx->r[11] + (int32_t)1);
+   ctx->r[11] = ctx->r[11] + (int32_t)1;
++  /* ARKCHEMY FIX (patch, see ../probes/README.md): bound this strlen.
++   *
++   * The instruction translation above is correct -- lbzu loads and
++   * updates, both emitted. The problem is the argument: when the engine
++   * reports an error it can hand this a pointer with no terminator, and
++   * because guest loads mask the address (see PPC_MEM_SIZE in
++   * ppc_runtime.h) the scan wraps the whole arena instead of faulting,
++   * so it never ends. That single spin is what stops
++   * igArkCore::initBootstrap returning, which is why igArkCore::init
++   * never runs, no object loaders are registered, and the engine never
++   * opens a file.
++   *
++   * r4 still holds the original pointer (the loop only touches r11 and
++   * r12), so the distance scanned so far is r11 - r4. Past a sane
++   * maximum, force the terminator: the engine gets a truncated string,
++   * the reporter completes, and initBootstrap returns instead of
++   * hanging. The engine's own error text is then readable rather than
++   * fatal, which is what the 2026-08-24 notes argued for doing first.
++   *
++   * This is a diagnostic workaround, not a correctness fix. The real
++   * defect is whatever produces the unterminated pointer. */
++  if ((uint32_t)(ctx->r[11] - ctx->r[4]) > 8192u) {
++      arkchemy_probe4("STRSCAN_BOUNDED",
++                      "str", ctx->r[4], "scanned", ctx->r[11] - ctx->r[4],
++                      "buf", ctx->r[3], "byte", ctx->r[12]);
++      ctx->r[12] = 0;
++  }
+   /* 21a6b8c: extsb. r12, r12 */
+   ctx->r[12] = (uint32_t)(int32_t)(int8_t)ctx->r[12];
+   /* 21a6b90: bne 0x21a6b88 */
