@@ -1,0 +1,47 @@
+Jouster game harness, build "Aug 28 2026 17:28:16", full run on real
+hardware. Same deterministic failure state throughout.
+
+  w4(igIGBFile::readFile)             hits=0
+  w5(processMetaObjectList)           hits=0
+  w6(appendToArkCore)                 hits=36   <- control
+  w7(callClassRegistrationFunctions)  hits=0
+
+The control fires at exactly the predicted count, so the zeros are real:
+nothing ever tries to read the metadata file. The fault is upstream of
+the read, not inside it.
+
+WHO IS ASKING, AND FOR WHAT
+
+The 2026-08-27 probe log recorded the failing lookup's caller as
+0x21658c8. Locating that address in the regenerated C names it:
+
+  Core::igHandlePool::setCapacity (0x2165878)
+    -> Core::igDataList::setCapacity (0x215db1c)
+      -> reads a per-class cached igMetaObject* that is NULL
+
+So the handle pool grows, needs the metaobject for whatever type it
+holds, and that type is not one of the 36 classes that register
+themselves during static initialisation. It was supposed to arrive with
+the rest of the class list, by reading a metadata file.
+
+WHERE THAT FILE PROBABLY IS
+
+The dump's content/permanent/ holds bootstrap.bld (198KB) alongside
+global.bld (16MB) and global.arc (134MB). alchemy.xml is configuration
+only -- heap sizes, gamma, tripleBuffer, startLevel "Title" -- not
+metadata, so it is not the file in question. bootstrap.bld is the
+obvious candidate for what should be read at boot.
+
+THE SHAPE OF THE BUG
+
+Two possibilities remain, and they need different fixes:
+
+  - The handle pool is used before any loading has happened, in which
+    case the ordering is wrong and the fix is upstream of the loader.
+  - Loading does start and fails silently, in which case the filesystem
+    shim is the problem.
+
+Watches now separate them: igHandlePool::setCapacity for when the demand
+first appears, igIGZLoader::load for whether any loading starts at all,
+appendToArkCore kept as the control, and readFile kept to confirm it
+stays at zero.

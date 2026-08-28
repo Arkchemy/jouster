@@ -1083,10 +1083,30 @@ static void game_thread_func(void *arg) {
      *                  fails or returns early, which points at the FS shim.
      *
      * appendToArkCore is kept as an in-run control: it should read 36. */
-    g_ppc_watch[4].pc = 0x21989a4u; /* Core::igIGBFile::readFile */
-    g_ppc_watch[5].pc = 0x2194a20u; /* Core::igIGBFile::processMetaObjectList */
-    g_ppc_watch[6].pc = 0x21608ecu; /* Core::igMetaObject::appendToArkCore (control, expect 36) */
-    g_ppc_watch[7].pc = 0x2154c08u; /* callClassRegistrationFunctions (expect 0 unless the read lands) */
+    /* 2026-08-28, fourth round. Nothing tries to read the metadata file:
+     * readFile=0, processMetaObjectList=0, with appendToArkCore=36 as a
+     * working control in the same run. So the fault is upstream of the
+     * file read, not in it.
+     *
+     * Tracing the failing lookup upward names the demander:
+     * Core::igHandlePool::setCapacity (0x2165878) is what calls the
+     * igDataList::setCapacity that reads a NULL metaobject. So the handle
+     * pool grows, needs the metaobject for its element type, and that
+     * type is not among the 36 that self-register -- it was supposed to
+     * arrive in the metadata file that never loads. permanent/bootstrap.bld
+     * (198KB) in the dump is the obvious candidate for that file.
+     *
+     * This set asks when the handle pool is first used, and whether any
+     * loading machinery starts at all:
+     *
+     *   handlePool>0 with igz=0 -> the pool is used before anything has
+     *       loaded, and the ordering is the bug.
+     *   igz>0 -> loading does start, and it is failing rather than being
+     *       skipped, which points at the filesystem shim. */
+    g_ppc_watch[4].pc = 0x2165878u; /* Core::igHandlePool::setCapacity (the demander) */
+    g_ppc_watch[5].pc = 0x21a2d8cu; /* Core::igIGZLoader::load */
+    g_ppc_watch[6].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
+    g_ppc_watch[7].pc = 0x21989a4u; /* igIGBFile::readFile (expect 0) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
@@ -1800,10 +1820,10 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igIGBFile::readFile) hits=%u"
-                       " w5(processMetaObjectList) hits=%u"
+                       " -- w4(igHandlePool::setCapacity) hits=%u"
+                       " w5(igIGZLoader::load) hits=%u"
                        " w6(appendToArkCore) hits=%u"
-                       " w7(callClassRegistrationFunctions) hits=%u"
+                       " w7(igIGBFile::readFile) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
                        " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"
