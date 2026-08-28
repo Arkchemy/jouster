@@ -1,25 +1,28 @@
 --- generated_0163.c	2026-08-28 19:29:06.528304339 +0100
-+++ generated_0163.c	2026-08-28 19:29:43.422615510 +0100
++++ generated_0163.c	2026-08-28 19:35:35.546038075 +0100
 @@ -1,4 +1,5 @@
  #include "ppc_runtime.h"
 +void arkchemy_probe4(const char *label, const char *n0, uint32_t v0, const char *n1, uint32_t v1, const char *n2, uint32_t v2, const char *n3, uint32_t v3);
  #include "cafeos_coreinit.h"
  #include "cafeos_coreinit_atomic.h"
  #include "cafeos_coreinit_dynload.h"
-@@ -16491,6 +16492,18 @@
+@@ -16491,6 +16492,21 @@
    /* 21c64b4: bl 0x215befc */
    ctx->lr = 0x21c64b8u;
    ppc_createInstance__Q2_4Core12igMetaObjectCFPQ2_4Core12igMemoryPool(ctx);
 +  /* ARKCHEMY PROBE (patch, see ../probes): the subclass metaobject and
-+     the object createInstance just produced. 456780 is the synthetic
++     the object createInstance just produced. 438096 is the synthetic
 +     address of the igMemoryPoolHandlePool metaobject slot (guest
-+     0x10134e60, reached in this function as r30 + 0x4e60 with r30 folded
-+     to &.bss+321788). meta_fieldcount is meta+0xC, the same word
++     0x10134e60, loaded as `lis r30, 0x1013` folded straight to
++     438096 (&.bss+323168); the following `addi r3, r30, 0x4e60` emits as
++     a plain copy because the displacement is already folded in. An
++     earlier revision added 0x4e60 a second time, read an unrelated
++     zeroed .bss word and reported meta=0 -- a probe bug, not a finding. meta_fieldcount is meta+0xC, the same word
 +     igHandlePool's own append call reads. obj_handleList is _handleList
 +     on the brand-new instance. */
 +  arkchemy_probe4("MPHP_CREATE",
-+                  "meta", ppc_load_u32(ctx, 456780u),
-+                  "meta_fieldcount", ppc_load_u32(ctx, ppc_load_u32(ctx, 456780u) + 12),
++                  "meta", ppc_load_u32(ctx, 438096u),
++                  "meta_fieldcount", ppc_load_u32(ctx, ppc_load_u32(ctx, 438096u) + 12),
 +                  "obj", ctx->r[3],
 +                  "obj_handleList@0x18", ppc_load_u32(ctx, ctx->r[3] + 24));
    /* 21c64b8: lwz r0, 0x14(r1) */
