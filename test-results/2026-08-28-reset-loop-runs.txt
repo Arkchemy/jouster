@@ -1,0 +1,34 @@
+Jouster game harness, build "Aug 28 2026 19:51:28".
+
+  [PROBE RESETFIELDS] x106. For the failing object:
+      base_meta=0x3002374 start_idx=0x0 count=0x5 obj=0x300565c
+
+  Across all 106 calls, start_idx is 0x0 every time, with counts ranging
+  from 2 to 0x13.
+
+THE LOOP RUNS. THE NO-OP THEORY IS DEAD.
+
+start_idx comes from *(435792)+0xC, and it reads 0 -- the base metaobject
+genuinely has no reflected fields, so the loop covers all five of this
+object's fields rather than skipping them. The "start == count silently
+skips the body" idea was wrong.
+
+So the per-field reset runs five times and _handleList is still null
+afterwards. That may well be correct behaviour: resetting an object
+REFERENCE means setting it to null. References are null until something
+assigns them.
+
+If that is what is happening, the whole framing of the last several runs
+has been slightly off. A null _handleList straight out of construction
+would not be a fault at all, and the real question becomes what is
+supposed to assign it between igMemoryPoolHandlePool::instantiateFromPool
+and igMemoryContext::activate calling setCapacity on it -- two
+instructions apart, with nothing in between.
+
+The probe now reports the object, both named fields and the vtable at
+the loop exit, which settles whether the reset leaves it null.
+
+  handleList null at loop exit -> reset nulls references, correctly, and
+      the missing step is whatever assigns it.
+  handleList non-null at loop exit -> something later clears it, which
+      would be a very different and much nastier bug.

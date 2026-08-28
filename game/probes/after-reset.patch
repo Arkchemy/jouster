@@ -1,0 +1,20 @@
+--- generated_0156.c	2026-08-28 19:57:59.981297185 +0100
++++ generated_0156.c	2026-08-28 19:57:59.993952802 +0100
+@@ -33522,6 +33522,17 @@
+   /* 215bc74: bne 0x215bc40 */
+   if (!ctx->cr0_eq) goto L_215bc40;
+   L_215bc78: ;
++  /* ARKCHEMY PROBE (patch, see ../probes): state of the object once the
++     whole field-reset loop has finished. The loop demonstrably runs
++     (start 0, count 5 for the pool), so if +0x18 is still null here then
++     resetting an object-REFERENCE field legitimately means nulling it,
++     and whatever assigns _handleList is a separate step that never ran.
++     r29 is the object; 0x18 and 0x1c are its two named fields. */
++  arkchemy_probe4("AFTER_RESET",
++                  "obj", ctx->r[29],
++                  "handleList@0x18", ppc_load_u32(ctx, ctx->r[29] + 24),
++                  "freeHandle@0x1c", ppc_load_u32(ctx, ctx->r[29] + 28),
++                  "vtable", ppc_load_u32(ctx, ctx->r[29]));
+   /* 215bc78: lwz r11, 0(r29) */
+   ctx->r[11] = ppc_load_u32(ctx, ctx->r[29] + (int32_t)0);
+   /* 215bc7c: lwz r12, 0x44(r11) */
