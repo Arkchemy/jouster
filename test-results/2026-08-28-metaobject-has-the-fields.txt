@@ -1,0 +1,34 @@
+Jouster game harness, build "Aug 28 2026 19:35:35".
+
+  [PROBE MPHP_CREATE] meta=0x30054e0 meta_fieldcount=0x5
+                      obj=0x300565c obj_handleList@0x18=0x0
+  [PROBE HP_APPENDFIELDS] meta=0x300552c meta_0xC=0x3
+
+THE METAOBJECT HAS THE FIELDS. createInstance IS NOT BUILDING THEM.
+
+igMemoryPoolHandlePool's metaobject is real (0x30054e0) and carries five
+fields -- more than the base igHandlePool's three, so it does inherit the
+base's fields and add its own. Field inheritance works.
+
+And _handleList is null on the returned object at the moment
+createInstance returns, before anything else has touched it.
+
+So every upstream explanation is now closed by measurement:
+
+  registration runs                         yes, 23 times
+  the gate byte at igArkCore+0x16           open, 1 on all 23 calls
+  igHandlePool registers                    yes
+  its append call is well formed            yes, count 2, real instFuncs
+  the subclass metaobject exists            yes
+  it inherits the base class's fields       yes, 5 of them
+  the object is constructed                 yes, real vtable
+  its scalar field gets its default         yes, 0xffff
+
+What is left is a single step: igMetaObject::createInstance produces an
+object without instantiating the object-typed metafields the metaobject
+knows about. Scalar defaults are applied; object references are not.
+
+NEXT
+
+Probe inside createInstance: does it walk the field list at all, and what
+happens when it reaches the igObjectRefMetaField for _handleList.
