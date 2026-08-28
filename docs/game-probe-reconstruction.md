@@ -22,6 +22,30 @@ initialiser 87 exhausting the 116MB ExpHeap through ~927 unfreed 128KB
 allocations — is reproducible today with no new code at all.** Build,
 run, read the `sti_idx=87` lines.
 
+## Why they were lost, which changes how to put them back
+
+The probes were not misplaced. They lived at specific points *inside*
+`game/source/generated_*.c`, and `regenerate.sh` overwrites those files
+wholesale from the recompiler. Any edit to generated code is destroyed by
+the next regeneration -- that is the design, not a mistake.
+
+So re-typing them once solves nothing: the next regeneration deletes them
+again. Two things have to be true instead.
+
+1. **The reporting mechanism lives in the committed harness.**
+   `game/source/main.c` now has `arkchemy_probe4()`, which prints four
+   *named* values rather than smuggling them through
+   `mem_alloc_fail_log_sink`'s `requested`/`heap_base`/`heap_size`/
+   `heap_used` parameters. That is how the original log came to record
+   values under names none of them had, and why reading it needed a
+   decoding step and a confirmation experiment. New probes should call
+   this and get `table=0x0 index=0` in the log directly.
+
+2. **The probe call sites live in a patch that is re-applied after every
+   regeneration**, not in the generated files themselves. One call per
+   hook site, each a single `arkchemy_probe4(...)` line, kept next to
+   `regenerate.sh` and applied by it.
+
 ## What IS lost, and how to put it back
 
 Eight ad-hoc probes from that investigation. Each was a call into the

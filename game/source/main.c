@@ -505,6 +505,51 @@ static void debug_watch_sink(uint32_t pc, uint32_t value) {
  * about the malloc/realloc spin loop found via g_ppc_current_pc: is the
  * real game's own memory-pool code genuinely out of real (shim-provided)
  * heap space, or something else entirely. */
+/* Named diagnostic probe, for tracing engine faults from inside
+ * recompiled code.
+ *
+ * Written 2026-08-28 after decoding the 2026-08-27 game log. The eight
+ * probes that produced that log (NULL TABLE, NULL REGISTRY ENTRY,
+ * BADBUF, FOREIGN FREE, INTEGRITY, ...) each carried four values, and
+ * they were smuggled through mem_alloc_fail_log_sink's own parameters --
+ * so the log recorded them under the names `requested`, `heap_base`,
+ * `heap_size` and `heap_used`, which is not what any of them were. The
+ * label carried the real names as free text ("table / index / byteoff /
+ * caller_lr") and a reader had to line the two up by position. That cost
+ * a decoding step on every read and one confirmation experiment to be
+ * sure the order was even right.
+ *
+ * This prints the names with the values instead. Same budget-free,
+ * flush-after-every-line path as checkpoint(), because a probe that is
+ * lost when the app dies is worth nothing.
+ *
+ * WHY THIS IS HERE AND THE PROBES ARE NOT: the probes themselves live at
+ * specific points *inside* generated_*.c, which regenerate.sh overwrites
+ * wholesale from the recompiler. They were not lost by accident -- any
+ * edit to generated code is destroyed by the next regeneration, by
+ * design. Anything meant to survive has to live either here, in the
+ * committed harness, or in a patch that is re-applied after regenerating
+ * (see docs/game-probe-reconstruction.md for the eight hook sites and
+ * the values each one should report). */
+static void arkchemy_probe4(const char *label,
+                            const char *n0, uint32_t v0,
+                            const char *n1, uint32_t v1,
+                            const char *n2, uint32_t v2,
+                            const char *n3, uint32_t v3) {
+    checkpoint("[PROBE %s] %s=0x%x %s=0x%x %s=0x%x %s=0x%x"
+               " -- at last_pc=0x%x caller_lr=0x%x sti_idx=%u calls=%llu",
+               label, n0, v0, n1, v1, n2, v2, n3, v3,
+               g_ppc_current_pc, g_ppc_last_caller_lr, g_ppc_static_init_index,
+               (unsigned long long)g_ppc_fn_call_count);
+}
+
+/* Kept reachable so the compiler cannot drop it while no generated file
+ * is calling it yet -- the probes are re-applied per regeneration. */
+void arkchemy_probe4_keepalive(void);
+void arkchemy_probe4_keepalive(void) {
+    arkchemy_probe4("keepalive", "a", 0u, "b", 0u, "c", 0u, "d", 0u);
+}
+
 static void mem_alloc_fail_log_sink(const char *what, uint32_t requested, uint32_t heap_base, uint32_t heap_size, uint32_t heap_used) {
     // Throttled: if a real allocation failure really is a real retry-
     // loop-on-OOM, it could fire billions of times same as the malloc
