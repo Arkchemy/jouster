@@ -952,6 +952,7 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     void ppc_BinkRegisterFrameBuffers(PpcContext *ctx);
     void ppc_BinkDoFrame(PpcContext *ctx);
     void ppc_BinkNextFrame(PpcContext *ctx);
+    void ppc_BinkWait(PpcContext *ctx);
 
     uint32_t info = ARKCHEMY_VID_SCRATCH;             /* the struct itself */
     uint32_t pool = ARKCHEMY_VID_SCRATCH + 0x1000u;   /* plane storage after it */
@@ -1027,8 +1028,41 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     while (played < frames_to_play) {
         uint32_t cur, set, y_addr, y_pitch, cr_addr, cb_addr, c_pitch;
 
+        /* Mimic the game's own loop (igFrameBufferBinkMovieCodec, 22982a4):
+           BinkWait first, and only decode when it says it is time. We were
+           calling BinkDoFrame unconditionally, and it answered 1 -- which in
+           RAD's API means "frame skipped", i.e. no decompression happened.
+           That is consistent with the planes staying all zero, which is
+           exactly what a green screen means once BT.601 turns Y=0,U=0,V=0
+           into RGB(0,135,0). */
+        {
+            int waits = 0;
+            g_ctx.r[3] = hbink;
+            ppc_BinkWait(&g_ctx);
+            while (g_ctx.r[3] != 0 && waits < 200) {
+                svcSleepThread(1000000ULL); /* 1ms */
+                g_ctx.r[3] = hbink;
+                ppc_BinkWait(&g_ctx);
+                waits++;
+            }
+            if (played < 3) checkpoint("[video] frame %d: BinkWait settled after %d ms", played, waits);
+        }
+
         g_ctx.r[3] = hbink;
         ppc_BinkDoFrame(&g_ctx);
+        if (played < 3) {
+            uint32_t ret = g_ctx.r[3], k, s0 = 0, s1 = 0;
+            uint32_t y0 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + 4u);
+            uint32_t y1 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + VID_PLANESET_SIZE + 4u);
+            /* Checksum BOTH frame sets: if the decode lands in the set we are
+               not reading, that shows up here rather than as a black screen. */
+            for (k = 0; k < 65536u; k += 4u) {
+                if (y0) s0 += ppc_load_u32(&g_ctx, y0 + k);
+                if (y1) s1 += ppc_load_u32(&g_ctx, y1 + k);
+            }
+            checkpoint("[video] frame %d: BinkDoFrame ret=%u (1 = SKIPPED) Ysum[set0]=0x%x Ysum[set1]=0x%x",
+                       played, (unsigned)ret, (unsigned)s0, (unsigned)s1);
+        }
 
         cur = ppc_load_u32(&g_ctx, info + VID_FB_FRAMENUM);
         if (cur >= total) cur = 0;
