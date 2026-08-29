@@ -1,0 +1,54 @@
+2026-08-29 — bash.mov plays flawlessly: picture and sound, in sync
+===================================================================
+
+    [ff] audio: binkaudio_dct 32000 Hz 2 ch -> 48000 Hz 2 ch
+    [ff] video: binkvideo 1280x720
+    [ff] pacing at 30000/1001 fps (33366666 ns per frame)
+    [ff] audio streaming: 843816 frames (17.6 s) at 48000 Hz
+    [ff] presented 526 frames (526 packets sent, 0 receive errors)
+
+526 frames at 29.97fps is 17.55 seconds, against 17.6 seconds of audio. Every
+packet decoded, nothing dropped, picture and sound in step. Confirmed on
+hardware by the owner: "the bash video played flawlessly".
+
+THE THREE FAULTS THAT GOT IT THERE, ALL MINE
+---------------------------------------------
+1. Sound stopped after a few seconds. Two separate causes: the clip is 32000
+   Hz and audout only runs at 48000, so the samples played at the wrong rate;
+   and the whole clip went in as ONE buffer when audout takes a queue. Fixed
+   with swresample (562,560 -> 843,816 frames, exactly 1.5x) and 0.256s
+   slices with four in flight, topped up from the video loop.
+2. Video ran at roughly 130fps. Not truncation -- all 526 frames were being
+   presented, just with nothing pacing them, because swscale made the
+   conversion fast enough to outrun real time. Now paced from the stream's own
+   avg_frame_rate.
+3. Frames were slow before that because the YUV to RGBA conversion was a
+   hand-written per-pixel loop over 921,600 pixels. swscale was already linked
+   and unused.
+
+BOOT MOVIE: THE DIAGNOSTIC PAID FOR ITSELF
+-------------------------------------------
+    [ff] presented 0 frames (0 packets sent, 0 receive errors)
+
+Zero PACKETS, not zero frames -- so the demuxer never yielded anything and the
+decoder was never at fault. The file is a valid Annex-B stream: SPS, PPS, SEI,
+one IDR and 61 non-IDR slices, 62 frames.
+
+The cause is av_seek_frame. Raw Annex-B has no index and no timestamps, and
+seeking one leaves the demuxer unable to read on. bash.mov survives the same
+call because Bink is a real container. With no audio stream the decode pass
+returns without reading anything, so there was nothing to rewind past: the
+seek was pure damage. Now only performed when the audio pass actually consumed
+packets, with a reopen if it fails.
+
+Worth noting: "presented 0 frames" alone could not tell those apart. Splitting
+the counter into packets-sent and receive-errors turned one ambiguous number
+into an unambiguous one, and it cost a single line.
+
+STILL TRUE
+----------
+This is ffmpeg decoding the game's movie, not the game doing it. The
+recompiled Bink decoder still truncates after 32-48 luma rows of 720. What has
+changed is that a known-good decode of the same file now runs immediately
+after the recompiled attempt, so the two can be compared directly -- which is
+the point of having it.

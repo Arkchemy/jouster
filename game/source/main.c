@@ -1603,8 +1603,29 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     checkpoint("[ff] %s: %d stream(s), video=%d audio=%d", path, (int)fmt->nb_streams, v_idx, a_idx);
     if (v_idx < 0) { avformat_close_input(&fmt); return; }
 
+    /* Only rewind if the audio pass actually consumed packets.
+     *
+     * bootMovie.h264 reported "0 packets sent": the demuxer never yielded a
+     * single video packet, so it was never a decoder fault. It is a RAW
+     * Annex-B stream with no index and no timestamps, and seeking one leaves
+     * the demuxer unable to read on. bash.mov survives the same call because
+     * Bink is a real container with an index.
+     *
+     * With no audio stream the decode pass returns immediately without
+     * reading anything, so there is nothing to rewind past in the first
+     * place -- the seek was pure damage. */
     pcm = arkchemy_ff_decode_audio(fmt, a_idx, &pcm_frames, 48000);
-    av_seek_frame(fmt, -1, 0, AVSEEK_FLAG_BACKWARD);
+    if (a_idx >= 0) {
+        int rc_seek = av_seek_frame(fmt, -1, 0, AVSEEK_FLAG_BACKWARD);
+        if (rc_seek < 0) {
+            char err[128];
+            av_strerror(rc_seek, err, sizeof(err));
+            checkpoint("[ff] rewind failed (%s) -- reopening", err);
+            avformat_close_input(&fmt);
+            if (avformat_open_input(&fmt, path[0] ? path : NULL, NULL, NULL) < 0) return;
+            avformat_find_stream_info(fmt, NULL);
+        }
+    }
 
     dec = avcodec_find_decoder(fmt->streams[v_idx]->codecpar->codec_id);
     if (!dec) { checkpoint("[ff] no decoder for this video stream"); goto cleanup; }
