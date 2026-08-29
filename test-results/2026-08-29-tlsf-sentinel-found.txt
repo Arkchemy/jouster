@@ -73,6 +73,34 @@ state we observe.
                         heads afterwards; neigh tells apart one lost slot from
                         a scribbled region
 
+GROUND TRUTH FOR tlsf_create ITSELF
+-----------------------------------
+Breaking at 0x21f0510 in the real game:
+
+    tlsf_create(mem = 0x115d9300, size = 0x100000)   called from lr 0x217cb04
+
+    size check: r31 = (0x100000 - 0xc7c) & ~3 = 0xff384
+                0xff384 is comfortably inside [0xc, 0x40000000] -> accepted
+
+Two things fall out. The mem argument is 0x115d9300 -- the exact control block
+dumped earlier with all sixteen heads holding its own address, so that block
+is the one this call produced, and the chain is consistent end to end. And the
+pool is 1 MiB, not some awkward size near a boundary, so on the real game this
+early-out is nowhere near being taken.
+
+0x217cb04 is inside Core::igHeapMemoryPool::activate(). So the sequence is
+igHeapMemoryPool::activate -> tlsf_create(mem, 1 MiB) -> every free-list head
+seeded with the control block address.
+
+That gives the 19:13 build's probe something exact to be compared against:
+
+    real:  calls>=1, bail=0, size=0x100000
+    ours:  tlsfc: calls=? bail=? mem=? size=?
+
+If ours reports calls=0, igHeapMemoryPool::activate is not reaching
+tlsf_create at all and the pool being walked was never a TLSF pool. If size
+differs from 0x100000, whatever computes it is the bug.
+
 CEMU ACCESS, WITHOUT DISTURBING ANYTHING
 ----------------------------------------
 Cemu's stub hardcodes port 1337 and arRPC holds it; Equibop respawns arRPC
