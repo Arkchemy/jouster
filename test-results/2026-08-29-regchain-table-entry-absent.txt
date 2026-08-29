@@ -1,0 +1,57 @@
+2026-08-29 — igFile's registration chain is never entered at any level
+=======================================================================
+
+Build 20:24 on hardware:
+
+    regchain=0x0c
+
+    bit0  arkRegister(igFile)                      never
+    bit1  arkRegisterInternal(igFile)              never
+    bit2  arkRegister(igStorageDevice)   CONTROL   ENTERED
+    bit3  arkRegisterInternal(igStorageDevice)     ENTERED
+
+The control's whole chain runs. igFile's is never entered at any level. So
+nothing inside those functions is failing -- the driver simply never dispatches
+to them, which is the first of the three outcomes written down before the run.
+
+WHAT THE STATIC SEARCH SAYS, AND WHERE IT RUNS OUT
+--------------------------------------------------
+Following the chain by address:
+
+    arkRegister_X -> takes &arkRegisterInternal_X
+    arkRegisterInternal_X -> takes &arkRegisterInitialize_X
+
+Every level, for the missing classes and the working control alike, exists in
+the output and is reachable only through ppc_dispatch. No direct call to any
+of them exists anywhere in 8.7 million lines.
+
+Then the trail stops, and this is the interesting part:
+
+    &arkRegister_igStorageDevice  materialised in code : 0 places
+    &arkRegister_igFile           materialised in code : 0 places
+    either value stored by ppc_init_globals            : 0 times
+
+Neither pointer is produced by any instruction, and neither is written by the
+globals initialiser -- yet the control is demonstrably entered. So the driver
+obtains these addresses by some route the static search does not cover:
+raw .data bytes copied one byte at a time by init_globals (which is how
+section content is loaded, so a value-level grep cannot see it), a vtable
+slot, or a computed address.
+
+Rather than widen the static search again -- three of the searches in this
+session have been defeated by exactly this kind of blind spot -- the control
+is now asked directly.
+
+THIS BUILD (20:31)
+------------------
+    regdrv: lr=0x... n=%u
+
+The control records the return address of whoever dispatched to it, on its
+first call. That names the driver outright, and from there the question
+becomes concrete: what list does it walk, and why does that list contain
+igStorageDevice (real #83) but not igFile (#80) or igMemoryStorageDevice
+(#98), when the driver clearly walks past all of them.
+
+BUILD
+-----
+20:31, links clean, 174,548,345 bytes.
