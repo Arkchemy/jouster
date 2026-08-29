@@ -1,0 +1,56 @@
+2026-08-29 — three of the five storage classes now register
+============================================================
+
+Build 21:18 (data relocations + 464MB ExpHeap) on hardware:
+
+    mem: fail=0                       (was fail=1)
+    ran the full 7200 frames          (was dying at 2760)
+    registration 96 -> 99
+
+and the three newest registrations are exactly the classes that never
+registered before:
+
+    #97  igMemoryStorageDevice     typeIndex=27
+    #98  igMemoryStorageEntryList  typeIndex=3
+    #99  igMemoryStorageEntry      typeIndex=3
+
+Of the five filesystem classes identified as missing, three now register.
+igFile (real #80) and igVirtualStorageDevice (real #101) still do not, and
+igVirtualStorageDevice is the very next class due after our last.
+
+The heap change did what it was meant to: the 180,355,080-byte request now
+succeeds against a 464MB ExpHeap, the run no longer exits early, and no
+allocation fails anywhere in 120 seconds.
+
+A NUMBER THAT LOOKS LIKE A REGRESSION AND IS NOT
+------------------------------------------------
+    dispatchmiss: n=277472 addr=0x700370 pc=0x2583d98
+
+Misses went from 6 to 277,472, but nothing got worse. The 20:55 build died at
+frame 2760; this one ran all 7200. The extra misses are a hot loop, reached
+only because the boot now survives long enough to get there, calling one
+address 277,472 times.
+
+pc=0x2583d98 is inside _savegpr_14_l, a register-save helper. That is not the
+caller -- it is just the innermost function entered, the same limitation that
+made the earlier low-memory probe blame _main. The probe now records
+g_ppc_last_caller_lr too, which survives into the callee and names the real
+site.
+
+0x700370 is a synthetic data address being called as code, so a vtable slot
+holds a pointer into data rather than a function. Which slot, and why, is the
+next question; lr should answer it in one run.
+
+A GUARD ADDED, NOT A FIX
+------------------------
+Relocations whose symbol section is .text are now resolved to real addresses
+rather than through a synthetic base, since text keeps real addresses in
+generated code while data does not. This matched ZERO sites in this title, so
+it fixed nothing here -- it is recorded as a guard because a binary that does
+use that form would fail in a way that is extremely hard to see, and the
+theory that it explained 0x700370 was wrong.
+
+BUILD
+-----
+21:29, links clean, 174,769,529 bytes. Regenerated with the loader guard and
+the lr-aware dispatch probe.
