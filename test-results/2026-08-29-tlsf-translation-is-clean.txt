@@ -1,0 +1,65 @@
+2026-08-29 — TLSF: the translation is clean, so the data is wrong
+==================================================================
+
+Ruling things out before guessing again.
+
+THE FUNCTION TRANSLATES CORRECTLY
+---------------------------------
+Every displacement in the failing loop survives into the emitted C:
+
+    /* 21f0450: lwz r10, 0x10(r3) */  -> ppc_load_u32(ctx, ctx->r[3] + 16)
+    /* 21f0480: lwz r12, 0x14(r9) */  -> ppc_load_u32(ctx, ctx->r[9] + 20)
+    /* 21f04b4: lwz r7, 0x74(r6) */   -> ppc_load_u32(ctx, ctx->r[6] + 116)
+
+This mattered: r6 and r9 are runtime-computed pointers, not folded constants,
+so they are exactly the shape that the dropped-displacement bug affects. A
+scan of every load and store across the whole tlsf_* family found zero dropped
+displacements. The recompiler is not at fault here.
+
+THE BITMAPS CANNOT BE EMPTY EITHER
+----------------------------------
+A zero first-level bitmap exits the function immediately:
+
+    21f0450: lwz r10, 0x10(r3)
+    21f0458: cmpwi r10, 0
+    21f0460: beq 0x21f046c        ; r11 stays 0
+    21f046c: addi r7, r11, -1     ; r7 = -1
+    21f0474: beq 0x21f04e8        ; done, no walk at all
+
+The walk is reached, so the bitmap has bits set. tlsf_create ran and blocks
+were inserted. The control block is therefore partially valid, which rules out
+"the allocator was never initialised" -- the theory that would otherwise have
+been the obvious next guess.
+
+So the bitmaps and the free lists disagree: a bit is set with no block linked
+at that size class, or a head was cleared without clearing its bit.
+
+THIS BUILD (19:04)
+------------------
+A second probe at 0x21f04b4 captures the control block the first time a null
+head is seen:
+
+    tlsfh: seen=N ctrl=0x... fl=0x... sl=0x... slot=0x... idx=N neigh=[...]
+
+  fl/sl bits set, neighbours populated  -> one slot lost its block; a linked
+                                           list operation dropped it
+  fl/sl set, neighbours all zero        -> a whole region of the table is
+                                           blank, so it looks scribbled rather
+                                           than mis-linked
+  slot address far from ctrl            -> the index computation is reaching
+                                           outside the table
+
+CEMU IS UNAVAILABLE RIGHT NOW
+-----------------------------
+Its gdb stub hardcodes port 1337 and cannot be moved from the command line.
+That port is currently held by arrpc-bun, the Discord rich-presence bridge, so
+Cemu's stub silently fails to bind and gdb ends up talking to arRPC instead --
+which is what "Remote connection closed" was.
+
+Not killing that process: it is a service the owner is running, and stopping
+it changes what other people see on their Discord. Freeing 1337 is a one-line
+thing for them to decide, not something to do quietly on their machine.
+
+BUILD
+-----
+19:04, links clean, 174,466,425 bytes.

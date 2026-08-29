@@ -1,5 +1,14 @@
 """Probe: is the TLSF free list circular, and how long is it?
 
+SECOND SITE (added after the first answered): the walk-counter below proved
+the head is simply 0, so a second capture at 0x21f04b4 records the control
+block state the first time a null head appears -- fl bitmap, sl bitmap, the
+slot address and index, and four neighbouring slots. That distinguishes a
+control block that was never initialised from one that was scribbled on, and
+shows whether neighbouring size classes are populated while this one is not.
+Applied directly to source rather than by this script; the script documents
+both sites.
+
 After the typeIndex-2 fix the boot advanced from class 54 to 61 and execution
 went from 34,487 calls to 150,839. The new stall is a leaf loop in
 tlsf_largest_free_block_size (0x21f0450), reached from
