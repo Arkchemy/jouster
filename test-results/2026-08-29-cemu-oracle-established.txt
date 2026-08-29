@@ -1,0 +1,67 @@
+2026-08-29 — Cemu established as a working oracle
+==================================================
+
+WHY THIS MATTERS
+----------------
+Every theory for the last three days was inferred from the recompiled C with
+nothing to check it against. That is precisely how two days went into the
+metaobject global, and how a "fifth recompiler bug" got written up this turn
+before a manual check showed the fold was correct all along. Cemu runs the
+real binary and can settle those questions with ground truth instead of
+inference.
+
+WHAT IS CONFIRMED WORKING
+-------------------------
+  Cemu 2.6 (flatpak info.cemu.Cemu), already pointed at the ROMs folder
+  Game loads: "Loaded module 'tfbgame_cafe' with checksum 0xc22a1809"
+  RPL link 30ms, HLE scan 17ms, title runs
+  THE REAL GAME BOOTS TO THE PRESS-A SCREEN
+
+That last point is the important one. The game itself is fine; everything
+still broken is on our side, and there is now a reference that gets past
+every wall jouster is stuck behind.
+
+  /usr/bin/gdb accepts "set architecture powerpc:750" -- the Espresso core
+  family -- so no separate PowerPC gdb is needed
+  Cemu's stub listens on port 1337, NOT the gdb default 1234
+  Launch: flatpak run info.cemu.Cemu -g <path to code/tfbGame_cafe.rpx> --enable-gdbstub
+
+Address spaces line up with the recompiled build: text 0x02000020..0x0258881C,
+data around 0x1013xxxx, so guest addresses can be used directly with no
+rebasing. Reading memory over the stub worked on the first connection.
+
+WHAT DID NOT WORK, AND THE LIKELY REASON
+-----------------------------------------
+Breakpoints at 0x2156958 and 0x215db84 never fired, even though the game ran
+far enough to reach the press-A screen and must have executed both. The log
+shows CPU-Mode: 3, the JIT recompiler. Cemu's gdbstub breakpoints are
+generally only reliable under the interpreter, so the next attempt should add:
+
+    --force-interpreter
+
+It will be much slower but breakpoints should actually hit.
+
+Two other operational notes:
+  - The stub does not implement detach ("Remote doesn't know how to detach").
+    A second gdb connection after the first exits fails with
+    'vMustReplyEmpty': timeout. Restart Cemu between debugging sessions.
+  - The game does not start executing on its own once the stub is enabled; it
+    waits. Either continue from gdb or start it in the GUI.
+
+THE QUESTIONS TO PUT TO IT
+--------------------------
+  0x10130C98 and 0x10130C9C  -- the string pool range bounds. Both read 0 in
+      jouster, which makes the range test in
+      igMemoryPoolFrameManager::setMemoryPool fail open and release a string
+      that was never pooled. What are they on a working boot?
+  0x101345E8  -- the metaobject global that nothing in the recompiled tree
+      writes. If Cemu shows it non-zero, conquertron folded that reference to
+      the wrong symbol, and that is a real recompiler bug worth fixing for
+      every future game.
+
+A SELF-INFLICTED ONE
+--------------------
+`pgrep -f 'Cemu-wrapper'` matched this session's own command line and killed
+the shell (exit 144) -- the identical mistake already recorded earlier in this
+session with pkill -f. Match process names exactly (pgrep -x) or exclude $$.
+Twice now; it belongs in the notes, not in memory.
