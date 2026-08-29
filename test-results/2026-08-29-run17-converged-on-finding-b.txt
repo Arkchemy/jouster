@@ -1,0 +1,86 @@
+2026-08-29 (run 17) — the chain closes back onto Finding B
+===========================================================
+
+THE MEASUREMENT
+---------------
+    list=0x4500fbc  count@8=0x80(128)
+    slot=0x0   oldval=0x4500f8c
+    slot=0x4   oldval=0x2fffc
+    slot=0x8   oldval=0x5ffff
+    slot=0xc   oldval=0x70000
+    slot=0x10  oldval=0x9000a
+    slot=0x14  oldval=0xb0008
+
+`slot` is r31, the pointer setAll walks. It reads 0, 4, 8, 0xc, 0x10, 0x14 --
+it is not a pointer at all, it is zero being incremented by 4. r31 comes from
+this->[0x14].
+
+So the list has count 128 and a NULL element array, and setAll walks guest
+addresses 0,4,8,... treating low-memory bytes as string pointers.
+
+FIELD LAYOUT CONFIRMED AGAINST COMMUNITY WORK
+----------------------------------------------
+NefariousTechSupport posted the exact layout in #alchemy (2025-04-17):
+
+    class igTDataList : public igContainer {
+        int32_t _count;                    // +0x08
+        int32_t _capacity;                 // +0x0C
+        igMemory::Properties<T> _data;     // +0x10 _flagsAndSize, +0x14 _buffer
+    };
+
+count@0x8 and _buffer@0x14 are exactly what this run measured, so the reads
+are interpreted correctly and not by guesswork. ("an igStringRefList is an
+igDataList" -- same source, #igcauldron 2024-09-07.)
+
+WHERE IT COMES FROM
+-------------------
+igMemoryPoolFrameManager::initDefault does, in order:
+
+    setCapacity(list, 128, 4)     <- asked for 128 elements of 4 bytes
+    setCount(list, 128)
+    setAll(list, ref)
+
+So setCapacity IS called, with correct arguments, and _buffer is still NULL
+afterwards. Then setCount happily records 128, and setAll walks the void.
+
+AND setCapacity FAILS AT FINDING B's EXACT SITE
+------------------------------------------------
+    215db7c: bctrl                  ; virtual call
+    215db84: lwz r12, 0x45e8(r12)   ; global
+    215db88: lha r6, 0xc(r12)       ; index
+    215db8c: lwz r0, 0x14(r3)       ; table base (r3 = vcall result)
+    215db94: lwzx r27, r10, r0      ; r27 = table[index]
+
+This is the same lookup recorded on 2026-08-24 as:
+
+    igDataList::setCapacity
+      r27 = *(table_base + index*4)  <- NULL entry in a global registry
+      reallocateFieldMemory(obj=0, ...)
+      reads igMemory::Properties at address 9 -> garbage
+      _flagsAndSize = 0x5ffff00, _buffer = 0x7000000
+
+Note 0x5ffff00 there against 0x5ffff read at slot 8 today: the same
+low-memory bytes, reached from the opposite end of the chain. Five days of
+separate symptoms -- the string pool, the null containers, the hang in
+igStringPool::remove -- are all downstream of this one NULL.
+
+WHY RE-MEASURE RATHER THAN ASSUME
+----------------------------------
+Finding B was measured on 2026-08-28: table=0, index=0. That predates today's
+record-form CR0 fix, which changed the outcome of 6,745 branches across the
+game, and the divw/divwu guard. Treating a pre-fix measurement as still true
+is exactly the mistake that has cost the most time today.
+
+Probe added at 215db94 reporting the vcall result, the table pointer, the
+index and the entry.
+
+PRIOR ART CONSULTED (as asked)
+-------------------------------
+- Discord #alchemy, #igcauldron, #general: igTDataList layout (above),
+  "an igStringRefList is an igDataList", igStringPoolContainer "lacks
+  metadata" and crashes an allocator in the community's own dumper --
+  the same class family failing for them in a different tool.
+- Notion Project Log: igMemoryHeader bit layout (pool id in the top 10 bits,
+  corroborated by consumers shifting >>23 and >>22), and "two free paths, one
+  unchecked" -- igObject::free trusts the object's pool index with no range
+  check, which is the mechanism behind the integrity-check message.
