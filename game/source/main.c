@@ -155,6 +155,13 @@ char g_arkchemy_ni_name[64] = {0};
  * still the true caller. */
 unsigned int g_arkchemy_ce_hits = 0, g_arkchemy_ce_lr = 0, g_arkchemy_ce_this = 0;
 unsigned int g_arkchemy_ce_buf = 0, g_arkchemy_ce_pool = 0;
+/* igPool::activate / igPool::grow -- see tools/probe_pool_activate.py.
+ * grow reads its memory pool from this->+0x20 and gets null; activate is what
+ * writes that member, and does so correctly, so either it never ran for this
+ * pool or it ran with a null argument. */
+unsigned int g_arkchemy_pa_acts = 0, g_arkchemy_pa_nullacts = 0;
+unsigned int g_arkchemy_pa_lr = 0, g_arkchemy_pa_this = 0, g_arkchemy_pa_pool = 0;
+unsigned int g_arkchemy_pg_hits = 0, g_arkchemy_pg_this = 0, g_arkchemy_pg_lr = 0;
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
  * no longer defined here. */
@@ -3432,6 +3439,8 @@ int main(int argc, char *argv[]) {
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
                        " -- ctorelem: hits=%u lr=0x%x this=0x%x buf=0x%x pool=0x%x"
+                       " -- poolact: acts=%u nullacts=%u lr=0x%x this=0x%x"
+                       " poolgrow: hits=%u this=0x%x lr=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3521,6 +3530,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_ni_pool, g_arkchemy_ni_name,
                        g_arkchemy_ce_hits, g_arkchemy_ce_lr, g_arkchemy_ce_this,
                        g_arkchemy_ce_buf, g_arkchemy_ce_pool,
+                       g_arkchemy_pa_acts, g_arkchemy_pa_nullacts, g_arkchemy_pa_lr, g_arkchemy_pa_this,
+                       g_arkchemy_pg_hits, g_arkchemy_pg_this, g_arkchemy_pg_lr,
                        loopwatch_buf);
         }
 

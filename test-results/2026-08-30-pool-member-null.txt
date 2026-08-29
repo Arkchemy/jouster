@@ -1,0 +1,59 @@
+2026-08-30 — the chain from the null object, fully traced
+==========================================================
+
+Build 23:36 gave the caller:
+
+    ctorelem: hits=24630 lr=0x2164b0c this=0x49f4c90 buf=0x4737c pool=0x0
+
+24,630 calls, not the single occurrence the earlier nullinst count suggested --
+that field records only the first null-buffer case, this one counts every
+call. The buffer here is non-null (0x4737c, a .bss address); it is the POOL
+that is null.
+
+THE FULL CHAIN
+--------------
+    igMetaObject::createInstanceInPlace        mem = NULL, pool = NULL
+      igTPool<igHandleRedirect>::constructElement   forwards its arguments
+        igPool::allocateBucket(uint, uint, uint, igMemoryPool*)
+          igPool::grow(uint, uint, uint)       <- takes NO pool parameter
+            2164d18: lwz r7, 0x20(r3)          ; pool = this->+0x20  -> NULL
+            2164d1c: bl allocateBucket
+
+grow has no pool argument at all, so it reads one from a member at +0x20 of
+the igPool. That member is null.
+
+WHAT WRITES THAT MEMBER
+-----------------------
+igPool::activate(uint, uint, uint, igMemoryPool*), and it does so correctly:
+
+    2164b5c: mr  r31, r7          ; the pool argument
+    ...      stw r31, 0x20(r27)   ; this->+0x20 = pool
+
+The store is present and correctly translated, so this is not another codegen
+gap. Two possibilities remain and they need different fixes:
+
+    activate never ran for this pool  -> grow is being called on an
+                                          unactivated igPool
+    activate ran with a null argument -> the null comes from ITS caller
+
+THIS BUILD (00:23)
+------------------
+    poolact:  acts=%u nullacts=%u lr=0x%x this=0x%x
+    poolgrow: hits=%u this=0x%x lr=0x%x
+
+Both ends measured at once. If poolgrow's `this` belongs to an igPool that
+activate never saw, the pool was never activated. If activate saw a null
+argument, nullacts is non-zero and its lr names the caller.
+
+Reading lr at function ENTRY in both, where it is still the true caller.
+
+A NOTE ON THE NUMBERS
+---------------------
+74,730 dispatch misses, 24,630 constructElement calls, 1 recorded null-buffer
+case. These count different things and should not be added up or treated as
+one population. The dispatch-miss counter details only its first occurrence;
+whether the rest share a cause is still not established.
+
+BUILD
+-----
+00:23, links clean, 175,940,985 bytes.
