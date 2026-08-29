@@ -1,0 +1,62 @@
+2026-08-29 — the game's Bink API now returns full frames
+=========================================================
+
+THE RESULT
+----------
+    [bink] movies/bash.mov -> .../content/movies/bash.mov  1280x720 via binkvideo
+    frame 1: luma rows with data = 720 of 720, last row = 719
+    frame 1: BinkDoFrame executed 0 guest calls
+
+720 of 720 luma rows, against 32 to 48 from the recompiled decoder. The
+truncation that survived four recompiler fixes is simply gone, and "0 guest
+calls" confirms the decode is native rather than recompiled.
+
+This went through the GAME's own API -- BinkOpen, BinkGetFrameBuffersInfo,
+BinkRegisterFrameBuffers, BinkDoFrame -- so when the engine eventually plays a
+movie itself, it will get whole frames.
+
+WHY THIS WAS THE RIGHT MOVE, AND WHOSE IDEA IT WAS
+---------------------------------------------------
+The owner's, and it should have been proposed here first. Bink is middleware,
+not game code. conquertron already replaces coreinit, GX2 and snd_core with
+native implementations rather than recompiling Nintendo's libraries; RAD's
+decoder is the same category, and the devkitPro ffmpeg already carried
+ff_bink_decoder, ff_binkaudio_dct_decoder and ff_bink_demuxer.
+
+Several hours went into chasing the truncation through the recompiled
+bitstream decoder -- ExpandPlane, CheckReadDelta16Bundle, bundle refills --
+which is exactly the work the recomp model says should not be necessary for a
+third-party library. The four recompiler bugs found along the way were real
+and worth having (record-form CR0, srawi's carry, division UB, and computed
+jump tables, which silently broke every switch in the game). But the decoder
+itself was never the thing to fix.
+
+HOW IT IS WIRED
+---------------
+tools/shim_bink.py renames the 23 recompiled definitions to
+ppc_Bink*__recompiled and leaves every call site alone, so bink_ffmpeg.c takes
+the original names. Verified by symbol: ppc_BinkOpen resolves out of
+bink_ffmpeg.o.
+
+The game keeps everything it owned. It allocates the frame buffers in guest
+memory, registers them, and uploads and presents them itself; only who fills
+the planes changed. Two details came from measurement rather than
+documentation: the BINKFRAMEBUFFERS layout is the one verified against the
+game's own configureVideo loop (docs had the header right and the plane order
+wrong), and cR/cB map to ffmpeg's data[2]/data[1] because Bink names them Cr
+and Cb.
+
+TIDIED IN THE SAME PASS
+------------------------
+The clip was playing twice -- once slowly and silently through the harness's
+game-API test, once properly through the standalone player. The API test is
+now three frames, which is all that is needed to report the row count, and the
+colour-bar self-test is removed: it existed to prove the blit path when
+nothing else could, and real frames do that every run now.
+
+STILL TRUE
+----------
+The engine still has not reached video playback of its own. It stalls in
+igStringPool::remove with igArkCore::init never running, so nothing has opened
+a game file yet. What has changed is that the decoder is no longer between the
+engine and a working picture.

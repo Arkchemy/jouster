@@ -1115,70 +1115,12 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                    (unsigned)info);
     }
 
-    /* Prove the second half of the pipeline before chasing the first.
-     *
-     * The green screen already showed that convert -> upload -> present works:
-     * BT.601 turns an all-zero YUV frame into exactly RGB(0,135,0), so a green
-     * panel means real frames really are reaching the display every frame.
-     * What it cannot show is whether the planes would be drawn correctly if
-     * they held actual picture.
-     *
-     * So write a known pattern into the very buffers Bink was given -- colour
-     * bars with an animated luma ramp -- and present those. If the bars appear
-     * and move, then plane addressing, pitches, YUV->RGB, the staging upload,
-     * the swapchain blit and the present are all correct, and the ONLY
-     * remaining unknown is getting Bink to decode into these buffers. If the
-     * bars do not appear, the fault is on this side and Bink was never the
-     * problem. Either way it converts a vague "green screen" into a fact. */
-    if (arkchemy_video_staging_init()) {
-        uint32_t set0 = info + VID_FB_FRAMES;
-        uint32_t ty  = ppc_load_u32(&g_ctx, set0 + 4u);
-        uint32_t tcr = ppc_load_u32(&g_ctx, set0 + 16u);
-        uint32_t tcb = ppc_load_u32(&g_ctx, set0 + 28u);
-        int t;
-        checkpoint("[video] self-test: writing colour bars into the Bink planes");
-        for (t = 0; t < 90 && ty && tcr && tcb; t++) {
-            uint32_t x, y;
-            for (y = 0; y < yah; y++) {
-                for (x = 0; x < yaw; x += 1u) {
-                    ppc_store_u8(&g_ctx, ty + y * yaw + x, (uint8_t)((x + (uint32_t)t * 4u) & 0xFFu));
-                }
-            }
-            for (y = 0; y < ch; y++) {
-                for (x = 0; x < cw; x++) {
-                    /* eight vertical colour bars */
-                    uint32_t bar = (x * 8u) / cw;
-                    ppc_store_u8(&g_ctx, tcr + y * cw + x, (uint8_t)(bar & 1u ? 200u : 60u));
-                    ppc_store_u8(&g_ctx, tcb + y * cw + x, (uint8_t)(bar & 2u ? 200u : 60u));
-                }
-            }
-            arkchemy_video_yuv_to_rgba(ty, yaw, tcr, tcb, cw, yaw, yah);
-            arkchemy_video_present();
-        }
-        checkpoint("[video] self-test done -- if you saw moving colour bars, everything except Bink's decode is proven");
-        /* Clear EVERY plane of EVERY frame set, not just set 0's luma.
-         *
-         * The first version zeroed only ty -- set 0's Y -- and left the bar
-         * pattern sitting in the chroma planes. The decoder then wrote real
-         * luma while that stale chroma supplied the colour, which is exactly
-         * the red/blue/purple banding in the first frame that ever contained
-         * decoded video. The picture was real; the colours were my test
-         * pattern. Leave nothing behind, so whatever appears next is entirely
-         * the decoder's own output. */
-        {
-            uint32_t f2, p2, x2;
-            for (f2 = 0; f2 < total; f2++) {
-                uint32_t st = info + VID_FB_FRAMES + f2 * VID_PLANESET_SIZE;
-                for (p2 = 0; p2 < 4u; p2++) {
-                    uint32_t buf = ppc_load_u32(&g_ctx, st + p2 * 12u + 4u);
-                    uint32_t pit = ppc_load_u32(&g_ctx, st + p2 * 12u + 8u);
-                    uint32_t rows = (p2 == 0u || p2 == 3u) ? yah : ch;
-                    if (!buf || !pit) continue;
-                    for (x2 = 0; x2 < pit * rows; x2 += 4u) ppc_store_u32(&g_ctx, buf + x2, 0);
-                }
-            }
-        }
-    }
+    /* The colour-bar self-test that used to run here is gone. It existed to
+     * prove plane addressing, YUV conversion, the staging upload and the
+     * swapchain blit at a time when nothing else could, and it did: moving
+     * bars on hardware. Real frames now do that job every run, so the bars
+     * were only costing screen time and confusing the picture. The code is in
+     * git history if it is ever needed again. */
 
     if (!arkchemy_video_staging_init()) {
         checkpoint("[video] could not create the deko3d staging block -- is GX2Init done?");
@@ -2758,7 +2700,14 @@ static void game_thread_func(void *arg) {
             arkchemy_boot_play_sound();
             checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
                        (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
-            arkchemy_bink_video_play(g_video_hbink, 240);
+            /* Three frames, not 240. This path exercises the game's OWN Bink
+             * API -- BinkOpen, BinkGetFrameBuffersInfo, BinkRegisterFrameBuffers,
+             * BinkDoFrame -- now served by the native shim, and it reports 720
+             * of 720 luma rows where the recompiled decoder managed 32 to 48.
+             * That is the thing worth proving; playing the whole clip here as
+             * well just showed it twice, once slowly and without sound,
+             * because this harness converts on the CPU and plays no audio. */
+            arkchemy_bink_video_play(g_video_hbink, 3);
             g_ctx.r[3] = g_video_hbink;
             ppc_BinkClose(&g_ctx);
             g_video_hbink = 0;
