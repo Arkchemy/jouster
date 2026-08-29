@@ -28,6 +28,7 @@
 // thread was on), and a pulsing screen color instead of a static one.
 #include <stdarg.h>
 #include <stdio.h>
+#include <errno.h>
 #include <malloc.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -2614,6 +2615,43 @@ static void game_thread_func(void *arg) {
     checkpoint("[game thread] arkchemy_mem_bootstrap_heap_init done -- handle written=0x%x (readback=0x%x)",
                (unsigned)ARKCHEMY_BOOTSTRAP_HEAP_BASE,
                ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR));
+
+    /* Filesystem self-test.
+     *
+     * Cemu serves the retail game its files by mapping /vol/content onto the
+     * extracted content/ folder, and the equivalent here is
+     * ppc_fs_translate_path rewriting the same Wii U mount prefixes onto
+     * sdmc:/switch/Jouster/content. This exercises that path end to end on
+     * the very first file the retail game opens, so "can the engine reach its
+     * data" stops being an assumption on either side.
+     *
+     * Worth doing even though the answer is expected to be yes: the Bink shim
+     * already reads movies/bash.mov through the same translation and plays
+     * 526 frames, so the plumbing is known good. What this pins down is the
+     * exact path the ENGINE will ask for, /vol/content/alchemy.xml, rather
+     * than a relative path the video code happens to use. */
+    {
+        static const char *const fs_probe[] = {
+            "/vol/content/alchemy.xml",
+            "content:/alchemy.xml",
+            "alchemy.xml",
+            "/vol/content/permanent/bootstrap.bld",
+        };
+        for (size_t i = 0; i < sizeof(fs_probe) / sizeof(fs_probe[0]); i++) {
+            char real[512];
+            ppc_fs_translate_path(fs_probe[i], real, sizeof(real));
+            FILE *f = fopen(real, "rb");
+            if (f) {
+                long sz;
+                fseek(f, 0, SEEK_END);
+                sz = ftell(f);
+                fclose(f);
+                checkpoint("[fs] OK   %-38s -> %s  (%ld bytes)", fs_probe[i], real, sz);
+            } else {
+                checkpoint("[fs] FAIL %-38s -> %s  (errno=%d)", fs_probe[i], real, errno);
+            }
+        }
+    }
 
     // Real, bounded diagnostic added 2026-08-20 per direct owner request
     // to "build something to test" alongside the igStringPool hang hunt

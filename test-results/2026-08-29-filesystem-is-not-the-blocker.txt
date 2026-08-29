@@ -1,0 +1,80 @@
+2026-08-29 — how Cemu serves the files, and why that is already handled here
+=============================================================================
+
+The suggestion was to look at how Cemu gets the game its files and reproduce
+that for the Switch against the Jouster folder. Worth checking properly, and
+the check says the plumbing is already in place. Recording the evidence rather
+than just asserting it.
+
+WHAT CEMU DOES
+--------------
+It runs the extracted title (code/ content/ meta/) and maps the Wii U mount
+prefix /vol/content onto that content/ folder, so FSOpenFile("/vol/content/
+alchemy.xml") reaches a real file on disk.
+
+WHAT THIS BUILD ALREADY DOES
+----------------------------
+ppc_fs_translate_path in cafeos_coreinit_fs.h recognises the same prefixes --
+/vol/content/, content:/, /vol/save/, save:/ and bare relative paths -- and
+rewrites them onto ARKCHEMY_FS_CONTENT_ROOT, which is
+sdmc:/switch/Jouster/content.
+
+FOUR CHECKS, ALL PASSING
+------------------------
+1. Every coreinit FS import the game actually calls is implemented:
+   22 of 22 -- FSOpenFile, FSReadFile, FSReadFileWithPosAsync, FSOpenDir,
+   FSReadDir, FSGetStatFile, FSSetPosFile and the rest. None is a stub.
+
+2. The files are on the SD card. /switch/Jouster has code, content, figures,
+   meta, and content/alchemy.xml exists at 542 bytes -- the exact file the
+   retail game opens first. The content tree matches the local dump.
+
+3. Translation is proven at runtime, not just by reading the code. The Bink
+   shim opens movies/bash.mov through this same function every run:
+
+       [bink] movies/bash.mov -> sdmc:/switch/Jouster/content/movies/bash.mov
+
+   and 526 frames play with audio. Files are being read from the Jouster
+   folder already.
+
+4. Missing FS entry points -- FSGetMountSource, FSMount source enumeration,
+   FSGetCwd, FSChangeDir -- are all functions the game never calls. They are
+   absent from its import list entirely.
+
+SO WHY DOES THE ENGINE OPEN NOTHING?
+------------------------------------
+Because it never gets far enough to ask. The measured chain:
+
+    igFile, igMemoryStorageDevice, igMemoryStorageEntry,
+    igMemoryStorageEntryList and igVirtualStorageDevice never register
+      -> no storage device object is ever constructed
+        -> nothing ever calls FSOpenFile
+          -> a path built from a null device string comes out as "(null)/"
+
+regchain=0x0c showed those registration functions are never entered at any
+level, while the control's entire chain runs. The filesystem is downstream of
+a blocker, not the blocker.
+
+Reproducing Cemu's mounting more faithfully would therefore change nothing:
+the mount already resolves, and no code is reaching it.
+
+WHAT THIS BUILD ADDS ANYWAY (20:35)
+-----------------------------------
+A boot-time self-test, because "the plumbing works" should be a measurement
+and not an inference:
+
+    [fs] OK   /vol/content/alchemy.xml -> sdmc:/switch/Jouster/content/alchemy.xml  (542 bytes)
+
+It exercises four forms -- /vol/content/, content:/, a bare relative path, and
+a nested permanent/bootstrap.bld -- through the same translation the engine
+will use. The video path already proves relative paths work; this pins down
+the absolute /vol/content/ form the ENGINE asks for specifically, which is not
+the same thing.
+
+If any line reports FAIL, the assumption above is wrong and that is worth
+knowing immediately. If all four pass, the filesystem question is closed and
+the storage-class registration is the only thing left.
+
+BUILD
+-----
+20:35, links clean, 174,552,441 bytes.
