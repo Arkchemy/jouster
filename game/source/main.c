@@ -28,6 +28,7 @@
 // thread was on), and a pulsing screen color instead of a static one.
 #include <stdarg.h>
 #include <stdio.h>
+#include <malloc.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <switch.h>
@@ -871,6 +872,7 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
  * collide. Only valid because this test runs before the game entry. */
 #define ARKCHEMY_VID_SCRATCH 0x20000000u
 
+static int        g_arkchemy_run_boot_sequence = 0;
 static uint32_t   g_video_hbink = 0;
 static uint32_t   g_video_found_y = 0, g_video_found_cr = 0, g_video_found_cb = 0;   /* kept open across the display handover */
 static DkMemBlock g_vid_staging = NULL;
@@ -1316,6 +1318,130 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     checkpoint("[video] presented %d frames to the swapchain", played);
 }
 
+
+/* ---------------------------------------------------------------------
+ * Wii U boot sequence: the splash image and the boot jingle.
+ *
+ * Both live in meta/ and, unlike the movies, neither needs a decoder:
+ *
+ *   bootTvTex.tga    uncompressed 24-bit TGA, 1280x720 -- exactly the
+ *                    framebuffer size, so it goes straight through the same
+ *                    blit path the video uses.
+ *   bootSound.btsnd  8-byte header then raw 16-bit stereo PCM at 48kHz.
+ *                    Measured: format field 0, loop 0, 909,474 frames,
+ *                    18.9 seconds.
+ *
+ * The PCM is BIG-endian, as everything Wii U is, and audout wants
+ * little-endian -- so it has to be swapped, not just handed over.
+ *
+ * bootMovie.h264 is the one that does need a real decoder, and the Switch's
+ * hardware decoder is not exposed through libnx, so it is deliberately left
+ * for later rather than half-attempted here.
+ * --------------------------------------------------------------------- */
+
+static void arkchemy_boot_show_splash(void) {
+    const char *path = "sdmc:/switch/Jouster/meta/bootTvTex.tga";
+    FILE *f = fopen(path, "rb");
+    uint8_t hdr[18];
+    uint32_t w, h, x, y;
+    uint8_t depth, desc;
+    uint8_t *row = NULL;
+
+    if (!f) { checkpoint("[boot] %s not found", path); return; }
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) { fclose(f); return; }
+    w = (uint32_t)(hdr[12] | (hdr[13] << 8));
+    h = (uint32_t)(hdr[14] | (hdr[15] << 8));
+    depth = hdr[16];
+    desc = hdr[17];
+    checkpoint("[boot] bootTvTex.tga: type=%u %ux%u %u-bit desc=0x%02x",
+               (unsigned)hdr[2], (unsigned)w, (unsigned)h, (unsigned)depth, (unsigned)desc);
+
+    if (hdr[2] != 2u || depth != 24u || w != ARKCHEMY_GX2_FB_WIDTH || h != ARKCHEMY_GX2_FB_HEIGHT) {
+        checkpoint("[boot] unexpected TGA layout -- not blitting");
+        fclose(f);
+        return;
+    }
+    if (!arkchemy_video_staging_init()) { fclose(f); return; }
+
+    row = (uint8_t *)malloc(w * 3u);
+    if (!row) { fclose(f); return; }
+    for (y = 0; y < h; y++) {
+        /* TGA truecolour is BGR, and bottom-up unless bit 5 of the descriptor
+           says otherwise -- so the destination row is flipped by default. */
+        uint32_t dy = (desc & 0x20u) ? y : (h - 1u - y);
+        uint8_t *dst = g_vid_staging_cpu + dy * w * 4u;
+        if (fread(row, 1, w * 3u, f) != w * 3u) break;
+        for (x = 0; x < w; x++) {
+            dst[x * 4u + 0] = row[x * 3u + 2];  /* R */
+            dst[x * 4u + 1] = row[x * 3u + 1];  /* G */
+            dst[x * 4u + 2] = row[x * 3u + 0];  /* B */
+            dst[x * 4u + 3] = 255;
+        }
+    }
+    free(row);
+    fclose(f);
+    arkchemy_video_present();
+    checkpoint("[boot] splash presented");
+}
+
+static void arkchemy_boot_play_sound(void) {
+    const char *path = "sdmc:/switch/Jouster/meta/bootSound.btsnd";
+    FILE *f = fopen(path, "rb");
+    uint8_t hdr[8];
+    long bytes;
+    size_t pcm_bytes, aligned, i, got;
+    int16_t *pcm = NULL;
+    AudioOutBuffer buf, *released = NULL;
+    Result rc;
+
+    if (!f) { checkpoint("[boot] %s not found", path); return; }
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) { fclose(f); return; }
+    fseek(f, 0, SEEK_END);
+    bytes = ftell(f);
+    fseek(f, 8, SEEK_SET);
+    pcm_bytes = (size_t)(bytes - 8);
+    checkpoint("[boot] bootSound.btsnd: format=%u loop=%u frames=%u (%.1f s)",
+               (unsigned)((hdr[0]<<24)|(hdr[1]<<16)|(hdr[2]<<8)|hdr[3]),
+               (unsigned)((hdr[4]<<24)|(hdr[5]<<16)|(hdr[6]<<8)|hdr[7]),
+               (unsigned)(pcm_bytes / 4u), (double)(pcm_bytes / 4u) / 48000.0);
+
+    rc = audoutInitialize();
+    if (R_FAILED(rc)) { checkpoint("[boot] audoutInitialize failed: 0x%x", rc); fclose(f); return; }
+    audoutStartAudioOut();
+
+    /* audout wants the buffer 0x1000-aligned with a 0x1000-multiple size. */
+    aligned = (pcm_bytes + 0xFFFu) & ~(size_t)0xFFF;
+    pcm = (int16_t *)memalign(0x1000, aligned);
+    if (!pcm) { checkpoint("[boot] could not allocate %u bytes for PCM", (unsigned)aligned); goto done; }
+    memset(pcm, 0, aligned);
+    got = fread(pcm, 1, pcm_bytes, f);
+
+    /* Wii U PCM is big-endian; audout is little-endian. */
+    for (i = 0; i < got / 2u; i++) {
+        uint16_t v = (uint16_t)pcm[i];
+        pcm[i] = (int16_t)((uint16_t)((v >> 8) | (v << 8)));
+    }
+
+    memset(&buf, 0, sizeof(buf));
+    buf.next = NULL;
+    buf.buffer = pcm;
+    buf.buffer_size = aligned;
+    buf.data_size = got;
+    buf.data_offset = 0;
+
+    checkpoint("[boot] playing the boot jingle (%u Hz, %u channels)",
+               (unsigned)audoutGetSampleRate(), (unsigned)audoutGetChannelCount());
+    rc = audoutAppendAudioOutBuffer(&buf);
+    if (R_FAILED(rc)) { checkpoint("[boot] append failed: 0x%x", rc); goto done; }
+    audoutWaitPlayFinish(&released, NULL, UINT64_MAX);
+    checkpoint("[boot] boot sound finished");
+
+done:
+    audoutStopAudioOut();
+    audoutExit();
+    if (pcm) free(pcm);
+    fclose(f);
+}
 static PpcSharedMemory g_shared;
 
 // void ppc_arkchemy_game_entry(PpcContext *ctx) -- the real, complete,
@@ -2042,6 +2168,7 @@ static void game_thread_func(void *arg) {
      * now, and will stay black until it actually draws. */
     checkpoint("[game thread] releasing the display to the game -- console off, "
                "everything from here is in this log file only");
+    g_arkchemy_run_boot_sequence = 1;
     mutexLock(&g_console_mutex);
     g_console_enabled = false;
     consoleExit(NULL);
@@ -2058,6 +2185,9 @@ static void game_thread_func(void *arg) {
         void ppc_BinkClose(PpcContext *ctx);
         ppc_import_gx2_GX2Init(&g_ctx);
         if (g_arkchemy_gx2.initialized && g_video_hbink) {
+            /* Wii U boot order: splash first, jingle with it, then content. */
+            arkchemy_boot_show_splash();
+            arkchemy_boot_play_sound();
             checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
                        (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
             arkchemy_bink_video_play(g_video_hbink, 240);
