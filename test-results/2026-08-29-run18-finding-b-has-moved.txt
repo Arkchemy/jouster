@@ -1,0 +1,47 @@
+2026-08-29 (run 18) — Finding B is fixed; the failure has moved
+================================================================
+
+RE-MEASURING WAS THE RIGHT CALL
+--------------------------------
+    2026-08-28:  table=0        index=0                  (NULL table pointer)
+    2026-08-29:  table=0x4405388  index=0    entry=0x440504c   VALID
+                 table=0x4405388  index=0x21c entry=0x0        NULL
+                 table=0x4405388  index=0x4a0 entry=0x0        NULL
+
+Finding B as recorded -- "the registry table pointer is NULL; not an
+unregistered entry, the pointer was never populated" -- is no longer true.
+The table is a real pointer and low-index lookups resolve correctly. Today's
+record-form CR0 fix (6,745 branch sites) and the divw/divwu guard repaired it
+somewhere upstream.
+
+Had I trusted the 2026-08-28 note, the next work would have gone into fixing
+a NULL table pointer that is no longer NULL. Re-measuring a finding after
+changing 6,745 branches was not caution for its own sake.
+
+WHAT FAILS NOW
+--------------
+Specific registry entries. Class index 0 resolves; indices 0x21c (540) and
+0x4a0 (1184) are NULL. The registry exists and is partially populated.
+
+That is a different bug with different candidates:
+  a) registration stops early -- the boot registers some classes and the
+     lookups for later ones legitimately find nothing. w7(appendToArkCore)
+     reads 54, which is small if the game has 1000+ registrable classes.
+  b) registrations land somewhere other than this table, so it stays sparse
+     no matter how many run.
+
+DOWNSTREAM, UNCHANGED
+---------------------
+A NULL entry still takes setCapacity into reallocateFieldMemory(obj=0),
+which reads igMemory::Properties from guest address 9, so _buffer stays NULL,
+setCount(128) records a count for an array that does not exist, and setAll
+walks addresses 0,4,8,... releasing low-memory junk until igStringPool::remove
+spins. The whole downstream chain is confirmed and needs no further probing --
+it is entirely explained by the NULL entry.
+
+CHANGE
+------
+The probe now takes a census of the table on a NULL hit: how many of the
+first 2048 entries are populated, and the highest populated index. That
+separates (a) from (b) directly -- a registry that stops at some boundary
+looks completely different from one that is sparse throughout.
