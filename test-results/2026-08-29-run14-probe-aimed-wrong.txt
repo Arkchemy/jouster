@@ -1,0 +1,48 @@
+2026-08-29 (run 14) — the probe measured the wrong part of the run
+===================================================================
+
+WHAT CAME BACK
+--------------
+All eight RELEASESTRING slots, calls 4646 through 5658:
+
+    pool=0x4a015bc  container=0x4a025f4  caller_lr=0x2161dbc  defaultPool=0x4a015bc
+
+Every one HEALTHY: the pool passed is the configured pool, and it matches
+igStringPool::getDefault's own global exactly. Nothing wrong anywhere in the
+sample.
+
+And that is the problem: the hang happens at call ~35,688, roughly 30,000
+calls after the probe stopped logging. A "log the first eight" limit spends
+itself on whatever happens first, which in a boot sequence is by definition
+the part that still works. The instrument was aimed at the wrong part of the
+run, and its output looked like reassuring evidence rather than an empty
+result.
+
+Same underlying mistake as the empty allocation table two days' worth of runs
+ago, in a new costume: an instrument that cannot observe the event of
+interest, returning something that reads like a finding.
+
+WHAT IS NEVERTHELESS ESTABLISHED
+--------------------------------
+- Early releaseString traffic is entirely healthy, so the default pool
+  pointer is correct and stable for at least the first ~5,700 calls, and the
+  configured pool really is the one in normal use.
+- Every one of those calls comes from
+  igMetaObject::setMetaFieldBasicPropertiesAndValidateAll (0x2161dbc), which
+  is class-registration work. Consistent with the boot sitting inside
+  initBootstrap registering metadata for its whole life so far.
+- So pool 0x4400204 appears LATE, not from the beginning. Whatever produces
+  it happens after ~5,700 calls of correct behaviour, which argues against
+  "a stale pool left over from static initialisation" and toward something
+  going wrong during registration itself.
+
+CHANGE
+------
+The probe now fires only when the pool it is handed has bucketCount == 0 --
+precisely the broken case, and nothing else, so healthy traffic cannot consume
+the slots.
+
+  pool == defaultPool -> the default global itself changed between call 5,658
+                         and the hang, and the next question is who wrote it
+  pool != defaultPool -> a caller is holding a pool the default no longer
+                         points at, and caller_lr names the exact site

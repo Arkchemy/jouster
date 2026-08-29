@@ -1,0 +1,23 @@
+--- a/generated_0161.c
++++ b/generated_0161.c
+@@ igStringPool::releaseString -- function entry @@
+   g_ppc_last_caller_lr = ctx->lr;
+   ...watch loop...
++  {
++      /* ARKCHEMY PROBE: fire on the ANOMALY, not the first N calls.
++         An earlier version logged the first eight calls and spent all of
++         them on healthy traffic (calls 4646-5658, every one with
++         pool == defaultPool == 0x4a015bc, correctly configured), then was
++         silent when the bad call arrived around call 35,688.
++
++         The broken case is a pool whose bucketCount (+0x1c) is zero: its
++         hash %% bucketCount collapses to a no-op, the raw FNV-1a basis
++         0x811C9DC5 reaches remove() as a bucket index, and the chain walk
++         never terminates. Trigger on exactly that. */
++      static int probe_n = 0;
++      if (probe_n < 6 && ppc_load_u32(ctx, ctx->r[3] + (int32_t)28) == 0) {
++          probe_n++;
++          arkchemy_probe4("RELEASESTRING_BAD", "pool", ctx->r[3], "container", ctx->r[5],
++                          "caller_lr", ctx->lr, "defaultPool", ppc_load_u32(ctx, 13652u));
++      }
++  }
