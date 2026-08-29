@@ -1562,6 +1562,8 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     AVFrame *frm = NULL;
     struct SwsContext *sws = NULL;
     int v_idx = -1, a_idx = -1, i, shown = 0, drained = 0;
+    int pkts_sent = 0, recv_fail = 0;
+    uint64_t frame_ns = 33333333ULL, next_tick = 0, tick_hz = 0;
     int16_t *pcm = NULL;
     size_t pcm_frames = 0;
     ArkchemyAudio audio;
@@ -1622,7 +1624,25 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     off_x = (ARKCHEMY_GX2_FB_WIDTH - dst_w) / 2u;
     off_y = (ARKCHEMY_GX2_FB_HEIGHT - dst_h) / 2u;
 
+    /* Pace the video to its own frame rate.
+     *
+     * swscale made the conversion fast enough that 526 frames flew past in
+     * about four seconds while the audio correctly took 17.6 -- the picture
+     * was never truncated, it was running at roughly 130fps because nothing
+     * paced it. Derive the interval from the stream and hold to it. */
+    {
+        AVRational fr = fmt->streams[v_idx]->avg_frame_rate;
+        if (fr.num <= 0 || fr.den <= 0) fr = fmt->streams[v_idx]->r_frame_rate;
+        if (fr.num > 0 && fr.den > 0)
+            frame_ns = (uint64_t)1000000000ULL * (uint64_t)fr.den / (uint64_t)fr.num;
+        else
+            frame_ns = 33333333ULL;   /* nothing declared: assume 30fps */
+        checkpoint("[ff] pacing at %u/%u fps (%llu ns per frame)",
+                   (unsigned)fr.num, (unsigned)fr.den, (unsigned long long)frame_ns);
+    }
+
     if (pcm && pcm_frames) arkchemy_audio_start(&audio, pcm, pcm_frames);
+    next_tick = armGetSystemTick();
 
     pkt = av_packet_alloc();
     frm = av_frame_alloc();
@@ -1637,9 +1657,18 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
         } else if (pkt->stream_index != v_idx) {
             av_packet_unref(pkt);
             continue;
-        } else if (avcodec_send_packet(vctx, pkt) < 0) {
-            av_packet_unref(pkt);
-            continue;
+        } else {
+            int rc_send = avcodec_send_packet(vctx, pkt);
+            if (rc_send < 0) {
+                if (pkts_sent < 4) {
+                    char err[128];
+                    av_strerror(rc_send, err, sizeof(err));
+                    checkpoint("[ff] send_packet failed (%d bytes): %s", pkt->size, err);
+                }
+                av_packet_unref(pkt);
+                continue;
+            }
+            pkts_sent++;
         }
         while (shown < max_frames && avcodec_receive_frame(vctx, frm) >= 0) {
             uint8_t *dst_data[4];
@@ -1664,6 +1693,14 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
             arkchemy_video_present();
             arkchemy_audio_pump(&audio);
             shown++;
+            /* Wait out the rest of this frame's interval, still topping up
+               audio so the queue never runs dry while we idle. */
+            if (!tick_hz) tick_hz = armGetSystemTickFreq();
+            next_tick += (frame_ns * tick_hz) / 1000000000ULL;
+            while (armGetSystemTick() < next_tick) {
+                arkchemy_audio_pump(&audio);
+                svcSleepThread(1000000ULL);
+            }
             if (shown == 1)
                 checkpoint("[ff] first frame presented (%dx%d fmt=%d -> %ux%u at %u,%u)",
                            frm->width, frm->height, frm->format,
@@ -1672,7 +1709,11 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
         if (have) av_packet_unref(pkt);
     }
 after:
-    checkpoint("[ff] presented %d frames from %s", shown, path);
+    /* bootMovie.h264 opened and reported dimensions but produced no frames,
+       and "presented 0" on its own does not say whether packets were even
+       reaching the decoder. Report both halves. */
+    checkpoint("[ff] presented %d frames from %s (%d packets sent, %d receive errors)",
+               shown, path, pkts_sent, recv_fail);
     /* let any queued audio finish rather than cutting it off with the video */
     while (audio.active && audio.offset < audio.bytes) {
         arkchemy_audio_pump(&audio);
