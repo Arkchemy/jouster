@@ -1,0 +1,68 @@
+2026-08-29 — past registration, into object construction
+=========================================================
+
+Build 22:46 on hardware, and the framing changes.
+
+    calls: 688,883 -> 695,439 -> 701,994 -> 708,573 -> 715,119
+    last position: igObject::commission, from igMetaObject::createInstanceInPlace
+
+The engine is NOT hung. Roughly 6,500 recompiled calls a second, continuously,
+for the whole run. It is past class registration and constructing objects.
+
+TWO CORRECTIONS
+---------------
+1. igFile was never missing. The only static table containing its arkRegister
+   address is referenced by exactly one function,
+   arkRegisterInternal(igIGBFile), and igIGBFile is retail #127 while the boot
+   reaches #125. Registration is recursive, so dependencies fire before their
+   owner -- which is why the retail log has igFile at #80 and its owner at
+   #127. It was beyond the frontier, not skipped. It had been probed for
+   across several builds and reported as missing.
+
+2. "Our dependency lists are built short" is also wrong, and for the same
+   reason. maxlist=11 against a retail 21 compared our numbers to a retail
+   measurement taken at a point in the boot we have not reached; the 21-entry
+   list is igIGBFile's.
+
+Both mistakes share one cause: ground truth captured at the wrong point in the
+boot. Cemu makes it easy to measure the retail game anywhere, which makes it
+easy to measure it somewhere that does not correspond to where we are.
+
+So the real picture: 124 of the retail first 125 register, in exactly the
+retail order, no holes.
+
+DISCORD CORROBORATION
+---------------------
+From the existing local exports, not by scraping. NefariousTechSupport, who
+did the original Alchemy reverse engineering:
+
+  #findings           "it does a call to Core::igArkRegister, passing the class
+                       name, metaobject pointer, parent class' arkRegisterInternal
+                       function, type size, and vtable pointer"
+  #igarchiveextractor "The game uses it to turn all the type indexes into the
+                       corresponding vtables"
+  #igcauldron         "All objects have a virtual function called getMeta, that
+                       returns a pointer to their igMetaObject"
+
+The second is the mechanism this project spent a day inside: setCapacity reads
+a metaobject from a global, takes its type index at +0xc, and indexes a table.
+The first independently confirms the inheritance-chain recursion that the Cemu
+capture showed.
+
+alchemy.xml, the first file the retail engine opens, turns out to be plain
+configuration -- Gfx vramBSize 419430400, tripleBuffer true, Sg traversal block
+sizes, and Tfb startLevel "Title". No class list, so it does not drive
+registration.
+
+WHERE THE WORK IS NOW
+---------------------
+    dispatchmiss n=75,021, every one addr=0x0
+
+Empty vtable slots where a virtual method belongs, during construction. Most
+vtables are populated now that data relocations are applied, so these most
+likely belong to types past the registration frontier rather than to another
+missing relocation.
+
+For scale on in-game video: the movie classes register at retail #738-#909
+(igMovieInfo #738, tfbMovieSystem #906, igMoviePlayer #907), so the engine
+reaches its own movie system very late. The video capability itself is done.
