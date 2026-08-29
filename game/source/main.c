@@ -1044,10 +1044,29 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
      * flag becomes worth finding; if it does not, the gate is elsewhere and
      * nothing has been broken. */
     {
-        uint32_t gate_before = ppc_load_u32(&g_ctx, hbink + 0x44u);
-        ppc_store_u32(&g_ctx, hbink + 0x44u, 1u);
-        checkpoint("[video] external-frame-buffer gate bink+0x44 was %u, forced to 1",
-                   (unsigned)gate_before);
+        /* bink+0x44 came back already 1, so the external-buffer path was
+           never gated off there. start_do_frame (2370c04..2370c60) has three
+           more conditions before it will use FrameBuffers, so read all of
+           them at once rather than one per hardware run:
+
+             0x44  != 0     required   (measured: already 1)
+             0x4dc != 'e2BK'          required -- the Bink 2 signature check.
+                                      bash.mov is 'BIKi', Bink 1, so this
+                                      should pass.
+             0x11c == 0     required
+             0xe0           our registered struct
+             0xe8           read straight after the gates pass
+
+           The movie itself is confirmed sound: 'BIKi' magic, 526 frames,
+           largest frame 36,952 bytes, and the header's size field matches the
+           file's 13,421,988 bytes exactly. */
+        checkpoint("[video] bink gates: +0x44=%u +0x11c=%u +0x4dc=0x%x +0xe0=0x%x +0xe8=0x%x (info=0x%x)",
+                   (unsigned)ppc_load_u32(&g_ctx, hbink + 0x44u),
+                   (unsigned)ppc_load_u32(&g_ctx, hbink + 0x11cu),
+                   (unsigned)ppc_load_u32(&g_ctx, hbink + 0x4dcu),
+                   (unsigned)ppc_load_u32(&g_ctx, hbink + 0xe0u),
+                   (unsigned)ppc_load_u32(&g_ctx, hbink + 0xe8u),
+                   (unsigned)info);
     }
 
     if (!arkchemy_video_staging_init()) {
