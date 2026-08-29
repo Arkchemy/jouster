@@ -1,0 +1,56 @@
+2026-08-29 — the jump-table fix: 99 -> 124 classes
+===================================================
+
+    build   registrations  dispatch misses  poolrange A   frames
+    22:10   99             110,979          0x2000020     7140
+    22:23   124            72,653           0x2000020     7140
+
+81 bctr jump tables became computed gotos, 1,651 cases in total, and 25 more
+classes register. Misses fell 35%. mem: fail=0, full run.
+
+FILESYSTEM CLASSES, NOW AND THEN
+--------------------------------
+Of the five that never registered:
+
+    igMemoryStorageDevice      registers  (came back with data relocations)
+    igMemoryStorageEntryList   registers  (same)
+    igMemoryStorageEntry       registers  (same)
+    igVirtualStorageDevice     registers  (came back with the jump-table fix)
+    igFile                     still missing
+
+Last registered is igInternalLockableHandleMemoryPool, retail #125, up from
+#100. The next class due is igDirectory, #126 -- also filesystem.
+
+THE REMAINING MISSES
+--------------------
+    dispatchmiss: n=72653 addr=0x0 pc=0x214d258 lr=0x2160d64
+
+Back to NULL targets rather than wrong ones. The chain is
+Core::igMetaObject::createInstanceInPlace calling
+Core::igMetaField::construct, which then makes a virtual call through a vtable
+slot that is NULL. With relocations applied most vtables are populated, so a
+NULL one now most likely means the field's TYPE was never registered -- which
+points back at igFile rather than at a separate bug.
+
+THIS BUILD (22:28)
+------------------
+tools/probe_igfile_registration.py instruments all three levels of igFile's
+registration chain, with igStorageDevice as a control -- it registers
+successfully and sits at retail #83, inside the range igFile belongs to.
+
+    igfile: mask=0x%02x
+      bit0 arkRegister(igFile)            bit3 arkRegister(igStorageDevice)
+      bit1 arkRegisterInternal(igFile)    bit4 arkRegisterInternal(igStorageDevice)
+      bit2 arkRegisterInitialize(igFile)  bit5 arkRegisterInitialize(igStorageDevice)
+
+  bits 0-2 clear -> igFile is never dispatched to at any level; its entry is
+                    missing from the list the driver walks
+  bit 0 set only -> arkRegister runs and fails before reaching Internal
+  bits 0-2 set   -> the chain runs and the failure is after it
+
+The earlier version of this probe was applied inline and lost on the first
+regeneration. It is a script now, like the registration log, so it survives.
+
+BUILD
+-----
+22:28, links clean, 175,936,889 bytes.
