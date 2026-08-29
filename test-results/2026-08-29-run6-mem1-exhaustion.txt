@@ -1,0 +1,83 @@
+2026-08-29 (run 6) — pacing fixed; real blocker is MEM1 exhaustion
+===================================================================
+
+PACING FIX CONFIRMED
+--------------------
+120 frame lines = 7200 frames = a real 120 seconds. Guest work went from
+8,254 calls (run 5) to 35,683, and appendToArkCore from 9 hits to 54.
+
+BUT THE GAME THREAD IS NOT SLOW -- IT IS STOPPED
+-------------------------------------------------
+    frame  900   calls=35683   appendToArkCore=54
+    frame 1800   calls=35683   appendToArkCore=54
+    ...
+    frame 6300   calls=35683   appendToArkCore=54
+
+Frozen from frame 900 (15 seconds in) onward. The remaining 105 seconds
+produced no guest function calls at all. A frozen call count means a loop
+containing no calls, not slow progress.
+
+WHAT HAPPENED, IN ORDER
+-----------------------
+    @call  4077  MEMGetBaseHeapHandle lazy-creates MEM1 (0x1000000, 32MB)
+    @call  4077  game creates its own ExpHeap there
+    ... ~31,000 calls of class registration and field resets ...
+    @call 35477  MEMGetAllocatableSizeForExpHeapEx(MEM1) -> 0
+                 heap_used = 33554432 of heap_size = 33554432
+    @call 35477  MEMAllocFromExpHeapEx -> NULL (out of space)
+    @call 35683  hang
+
+MEM1 is 32MB, which matches real Wii U MEM1 exactly, so the size is not
+obviously wrong. What is wrong is that it filled: mem counters for the whole
+run were fail=1 free=78 reuse=70. Seventy-eight frees against 32MB consumed
+means this is monotonic allocation, not churn or fragmentation.
+
+THE HANG IS A SYMPTOM, AND OUR RUNTIME IS WHY IT IS SILENT
+------------------------------------------------------------
+Hang site: igStringPool::remove(igStringPoolItem*, unsigned), called from
+igStringPool::releaseString. It is a hash-bucket unlink:
+
+    L_21a55e4:
+      r8  = r11
+      r11 = r11->next            (lwz r11, 8(r11))
+      if (r11 != r4) goto L_21a55e4
+
+The only loop exit is finding the item. There is no NULL check, because on
+real hardware walking off the end dereferences NULL and traps immediately.
+
+In this runtime it cannot trap: every guest load is masked with
+& (PPC_MEM_SIZE - 1), so load(NULL + 8) quietly returns mem[8] and the walk
+spins forever. The masking that makes wild guest pointers harmless to the
+host also converts a would-be instant crash into a silent infinite loop.
+Worth remembering as a general property when reading future hangs -- a
+"hang" here may be a null dereference on real hardware.
+
+So the item was not in its bucket, which is what you would expect after the
+string pool started failing to allocate.
+
+WHY NOTHING IN THE LOG SAYS WHAT FILLED IT
+-------------------------------------------
+The existing instrumentation logs single allocations of 64KB or more. The
+whole 32MB went in below that threshold -- thousands of small, never-freed
+blocks -- so every one of them was invisible. The string pool is the obvious
+suspect, which is exactly why it should be measured rather than assumed. I
+have guessed wrong twice today already.
+
+CHANGE
+------
+cafeos_coreinit_mem.h now accumulates count and bytes per guest call site
+(96 slots, overflow folded into slot 0 so totals still add up), and on
+exhaustion logs the top 8 consumers of that heap:
+
+    [MEM EVENT] MEM top consumer <pc> <count> <bytes> <rank>
+
+No behaviour change, no threshold, and the cost is paid only when a heap
+actually runs dry.
+
+NEXT RUN ANSWERS
+----------------
+Which guest function consumed MEM1, how many allocations, and how many
+bytes. That determines whether this is a genuine engine need being served
+from the wrong pool (MEMAllocFromDefaultHeapEx was already rerouted from
+MEM1 to MEM2 on 2026-08-24 for exactly that reason), a leak caused by our
+own free path, or something allocating in proportion to available space.
