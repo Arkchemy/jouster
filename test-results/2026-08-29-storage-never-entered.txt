@@ -1,0 +1,66 @@
+2026-08-29 — the storage registrations are never entered at all
+================================================================
+
+Build 20:18 on hardware:
+
+    storagereg: mask=0x20  n=[0,0,0,0,0,1]
+
+Bit 5 is set and nothing else. That bit is igStorageDevice, the control, which
+ran once. The five missing classes -- igFile, igMemoryStorageDevice,
+igMemoryStorageEntryList, igMemoryStorageEntry, igVirtualStorageDevice -- were
+entered exactly zero times.
+
+So they do not run and fail. They are never called.
+
+WHY THE CONTROL MATTERS
+-----------------------
+igStorageDevice sits at real #83, in the middle of the missing range (#80 to
+#101), and it registers successfully. So the driver is not stopping early and
+it is not skipping a contiguous region: it walks past #80, does #83, and walks
+past #98..#101. The list it walks has holes in specific places.
+
+THE CHAIN, TRACED
+-----------------
+Each class registers through three levels, and every one of them is reached
+only through ppc_dispatch -- no direct call exists anywhere in the output,
+for the missing classes OR for the working control:
+
+    arkRegister_X            (public entry)
+      -> arkRegisterInternal_X   (takes &arkRegisterInitialize_X)
+        -> arkRegisterInitialize_X   (what the storagereg probe watched)
+
+Confirmed by following the addresses: arkRegister__..igFile..SFv is what takes
+the address of arkRegisterInternal__..igFile..SFv, which in turn takes the
+address of arkRegisterInitialize__..igFile..SFv. Same shape for the control.
+
+Since everything is dispatched through function pointers, the difference
+between a class that registers and one that does not is in the DATA -- the
+table being walked -- not in the code, which is identical in shape.
+
+THIS BUILD (20:24)
+------------------
+Instruments the two upper levels for igFile and for the control:
+
+    regchain=0x%02x
+      bit0 arkRegister(igFile)              bit2 arkRegister(igStorageDevice)
+      bit1 arkRegisterInternal(igFile)      bit3 arkRegisterInternal(igStorageDevice)
+
+Reading it:
+
+  bits 2,3 set and 0,1 clear  -> igFile's chain is never entered at any level,
+                                 so its entry is absent from the table and the
+                                 question becomes what builds that table
+  bit 0 set, bit 1 clear      -> arkRegister(igFile) runs but does not reach
+                                 Internal, so it fails inside itself
+  bits 0,1 set                -> the chain runs and the failure is in
+                                 Initialize, contradicting the storagereg
+                                 result and worth knowing
+
+A fifth bit for arkRegister(igMemoryStorageDevice) was planned but that
+function does not exist in the binary -- only its Internal does -- so four
+bits are instrumented rather than five. Stated because a missing bit in the
+mask would otherwise look like a negative result.
+
+BUILD
+-----
+20:24, links clean, 174,548,345 bytes.

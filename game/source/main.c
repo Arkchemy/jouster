@@ -130,6 +130,13 @@ unsigned int g_arkchemy_bb_size = 0, g_arkchemy_bb_hdr[4] = {0,0,0,0};
 unsigned int g_arkchemy_storagereg_mask = 0;
 unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
 
+/* Which level of the registration chain is entered -- see the REGCHAIN probe.
+ * bit0 arkRegister(igFile)            bit1 arkRegisterInternal(igFile)
+ * bit2 arkRegister(igStorageDevice)   bit3 arkRegisterInternal(igStorageDevice)
+ * bit4 arkRegister(igMemoryStorageDevice). igStorageDevice is the control: it
+ * registers successfully, so its bits show what a working chain looks like. */
+unsigned int g_arkchemy_regchain = 0;
+
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
 // on-screen libnx console (see main()'s own consoleInit) -- added
@@ -3359,6 +3366,7 @@ int main(int argc, char *argv[]) {
                        " -- nullwrite: count=%u first_pc=0x%x addr=0x%x val=0x%x"
                        " -- zerowrite: count=%u pc=0x%x lr=0x%x addr=0x%x val=0x%x"
                        " -- storagereg: mask=0x%02x n=[%u,%u,%u,%u,%u,%u]"
+                       " -- regchain=0x%02x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3438,6 +3446,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_storagereg_n[0], g_arkchemy_storagereg_n[1],
                        g_arkchemy_storagereg_n[2], g_arkchemy_storagereg_n[3],
                        g_arkchemy_storagereg_n[4], g_arkchemy_storagereg_n[5],
+                       g_arkchemy_regchain,
                        loopwatch_buf);
         }
 
