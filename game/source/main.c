@@ -1221,7 +1221,12 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                    cannot say how far down the frame the decode reached. Find
                    the last row with any non-zero luma, which is exactly the
                    boundary visible on screen between picture and flat green. */
-                uint32_t y1 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + VID_PLANESET_SIZE + 4u);
+                /* Read the set this frame actually decoded into, not always
+                   set 1. Sampling a fixed set reported "0 of 720" for frame 0
+                   simply because the decode went to set 0 -- a measurement
+                   artifact that looked exactly like a failed decode. */
+                uint32_t which = ppc_load_u32(&g_ctx, info + VID_FB_FRAMENUM) & 1u;
+                uint32_t y1 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + which * VID_PLANESET_SIZE + 4u);
                 uint32_t row, col, last = 0, filled = 0;
                 if (y1) {
                     for (row = 0; row < yah; row++) {

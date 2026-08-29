@@ -1,0 +1,60 @@
+2026-08-29 — correction: the recompiler fixes did not advance the game boot
+============================================================================
+
+WHAT I CLAIMED
+--------------
+That the four recompiler fixes had moved the boot a long way, citing guest
+calls rising from 35,689 to 441,359 -- "twelve times more work".
+
+WHY IT WAS WRONG
+----------------
+Almost all of that increase was the recompiled BINK DECODER, not the game.
+
+    run48 (recompiled Bink, 240 frames): 441,350
+    run50 (recompiled Bink, 240 frames): 441,354
+    run52 (Bink shimmed natively):        35,221
+
+Once Bink runs natively and costs 0 guest calls, the boot's real figure is
+35,221 -- against 35,689 before any of the four fixes. The decoder was doing
+roughly 1,700 calls a frame across 240 frames, about 408,000, which is the
+entire difference.
+
+The correct reading: the boot does the same amount of work it always did and
+stalls in the same place, igStringPool::remove, with igArkCore::init never
+running.
+
+WHAT THE FIXES DID DO
+---------------------
+They were real and they were worth it, but their effect was on the decoder
+and on correctness generally, not on boot progress:
+
+    record-form CR0 not updated          6,745 sites
+    srawi dropping XER[CA]               2,890 sites
+    divw/divwu emitting C undefined       730 sites
+    computed jump tables not translated      61 tables
+
+The jump-table one in particular took BinkDoFrame from 75 guest calls to
+1,445-2,271 -- which is exactly the rise that then flattered the boot number.
+Every switch the original compiler turned into a jump table had silently done
+nothing, across the whole game, so it remains the most significant find of the
+day regardless.
+
+THE LESSON
+----------
+A single counter that aggregates two unrelated workloads cannot attribute
+progress to either. g_ppc_fn_call_count counts every recompiled call, and the
+Bink test shares it with the boot; I read a rise in the total as a rise in the
+part I cared about. The number that actually tracks boot progress is the
+watches -- w4, w5, w6, w7 -- and those have not moved all day:
+
+    w4 igArkCore::initBootstrap  hits=1
+    w5 igMemoryContext::activate hits=1
+    w6 igArkCore::init           hits=0
+    w7 appendToArkCore           hits=54
+
+ALSO FIXED HERE
+---------------
+The row-count probe always sampled frame-set 1, so frame 0 reported "0 of 720"
+whenever the decode went to set 0 -- indistinguishable from a failed decode in
+the log. It now reads the set the frame actually decoded into. Frames 1 and 2
+already reported 720 of 720, so the native decoder was never in doubt.
