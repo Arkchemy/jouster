@@ -30,12 +30,34 @@ deko3d, plus a checkout of
 `ppc_runtime.h`, the `cafeos_*.h` shims and `cafeos_state.c` that the
 generated C compiles against.
 
-The build defaults to conquertron being cloned next to this repo:
+You do not have to fetch it yourself. `tools/fetch-conquertron.sh` resolves
+conquertron in this order:
+
+1. an explicit `make CONQUERTRON=/path/to/conquertron`
+2. a sibling checkout next to this repo
+3. otherwise, a copy fetched into `deps/conquertron`, pinned by
+   `conquertron.lock`
+
+A sibling checkout deliberately beats the fetched copy. conquertron and jouster
+are developed together, and a fetched tree silently shadowing local recompiler
+edits would mean the next hardware run tests the wrong code. An
+already-present copy is used with no network access at all, so builds work
+offline.
+
+The side-by-side layout, if you want it:
 
 ```
 some-dir/
   conquertron/
   jouster/
+```
+
+Two helpers, since a sibling and a vendored copy look identical in build
+output and building against the wrong one is silent:
+
+```sh
+make -C game conquertron-info      # resolved path, commit, local modifications
+make -C game conquertron-update    # update deps/conquertron and re-pin the lock
 ```
 
 ```bash
@@ -87,10 +109,32 @@ examples live in `test-results/`.
 
 ## Status
 
-Early. The game boots and runs its engine startup sequence, but nothing is
-rendered yet, no audio plays, and no level or asset loading has been reached.
-Graphics calls are honest no-ops pending a Switch backend. Expect it to run for
-a while and then stop, not to be playable.
+Early, and not playable. The engine starts, runs its 114 static initialisers
+and reaches its reflection registration, but stalls partway through and never
+gets to level or asset loading.
+
+What does work:
+
+- **Video and audio playback.** `bash.mov` plays start to finish, 526 frames at
+  29.97fps with its audio in sync, decoded by ffmpeg (already in devkitPro's
+  portlibs, with a Bink decoder and demuxer). A native Bink shim also serves
+  the game's own `BinkOpen`/`BinkDoFrame` API, delivering all 720 luma rows per
+  frame.
+- **The Wii U boot presentation** — `bootTvTex.tga` splash and the 18.9-second
+  `bootSound.btsnd` jingle, from the game's own `meta/` files.
+
+What does not:
+
+- **The engine boot.** Registration reaches 61 of roughly 1007 classes, then
+  hangs in the pool allocator (`tlsf_largest_free_block_size`) walking a free
+  list whose head is null. Guest-memory masking turns what would be a crash
+  into a silent spin, so it stops rather than faults.
+- **Game rendering.** Graphics calls are honest no-ops pending a Switch
+  backend; nothing the game itself draws reaches the screen.
+
+Progress is tracked run by run in `test-results/`, including the wrong turns —
+several confident theories in there were later disproved, and the records say
+so rather than being quietly rewritten.
 
 ## Licence
 
