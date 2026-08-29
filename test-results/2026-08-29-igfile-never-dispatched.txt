@@ -1,0 +1,62 @@
+2026-08-29 — igFile is never dispatched to at any level
+========================================================
+
+Build 22:28 on hardware:
+
+    igfile: mask=0x38
+
+    bit0  arkRegister(igFile)                        never
+    bit1  arkRegisterInternal(igFile)                never
+    bit2  arkRegisterInitialize(igFile)              never
+    bit3  arkRegister(igStorageDevice)      CTRL     ENTERED
+    bit4  arkRegisterInternal(igStorageDevice)       ENTERED
+    bit5  arkRegisterInitialize(igStorageDevice)     ENTERED
+
+The control's whole chain runs. igFile's is never entered at any level, so
+nothing inside those functions is failing -- the driver never reaches them.
+
+WHAT THE DATA LOOKS LIKE
+------------------------
+Now that data relocations are applied, both classes' registration entry points
+are written into .rodata by ppc_init_globals. The counts differ:
+
+    &arkRegister(igFile)            written once   at 1152044
+    &arkRegister(igStorageDevice)   written 3x     at 1135428, 1135464, 1136264
+
+Three is explained: igPhysicalStorageDevice, igVirtualStorageDevice and
+igMemoryStorageDevice all derive from igStorageDevice, so the base appears in
+each subclass's table as well as its own. igFile has one entry, its own.
+
+So igFile's entry EXISTS in data. It is simply never walked.
+
+THIS BUILD (22:34)
+------------------
+The driver is Core::__internalObjectBase::getClassMetaSafeInternal, which
+walks a function-pointer list unrolled eight at a time with a count & 7
+remainder tail, dispatching every entry. It now counts what it dispatches and
+flags whether igFile's address is ever among them:
+
+    drv: n=%u sawIgFile=%u
+
+  sawIgFile=0  -> the list the driver walks does not contain igFile, even
+                  though its entry exists in .rodata. The question becomes
+                  what builds that list and why this entry is not in it.
+  sawIgFile>0  -> the list DOES contain it and the dispatch itself fails,
+                  which would be a different bug entirely and would show up
+                  in the dispatch-miss counter.
+
+Those need different fixes, which is why it is measured rather than reasoned
+about -- the same reason the probe before it separated "never entered" from
+"entered and failed", and that answer is what made this question the right one
+to ask next.
+
+CONTEXT
+-------
+    registration 124 of ~1007, last igInternalLockableHandleMemoryPool (#125)
+    next due igDirectory (#126), also filesystem
+    dispatchmiss n=72,772, all addr=0x0
+    mem: fail=0, full 7200 frames
+
+BUILD
+-----
+22:34, links clean, 175,936,889 bytes.

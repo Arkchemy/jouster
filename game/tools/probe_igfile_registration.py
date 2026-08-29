@@ -74,3 +74,52 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# Second site: the driver itself.
+#
+# mask=0x38 on hardware -- igStorageDevice's whole chain runs, igFile's is
+# never entered at any level. So the question is no longer what igFile does,
+# it is whether the driver ever sees it.
+#
+# Core::__internalObjectBase::getClassMetaSafeInternal walks a function-pointer
+# list, unrolled eight at a time with a count & 7 remainder tail, and every
+# entry goes through ppc_dispatch. igFile's arkRegister address is written into
+# .rodata exactly once by a data relocation; igStorageDevice's appears three
+# times, because its subclasses' tables reference the base too.
+#
+# This counts every pointer the driver dispatches and flags whether igFile's
+# address is ever among them. That separates "the list does not contain it"
+# from "the list contains it and the dispatch fails".
+MARKER2 = "ARKCHEMY-PROBE-IGFILE-DRIVER"
+DRIVER_SIG = "void ppc_getClassMetaSafeInternal__Q2_4Core20__internalObjectBaseSFRPQ2_4Core12igMetaObjectPFv_PQ2_4Core22__internalFunctionList(PpcContext *ctx) {\n"
+IGFILE_ARKREGISTER = 35335860  # 0x21b2eb4
+
+
+def patch_driver():
+    base = pathlib.Path(__file__).resolve().parent.parent / "source"
+    for p in sorted(base.glob("generated_*.c")):
+        t = p.read_text()
+        if DRIVER_SIG not in t:
+            continue
+        if MARKER2 in t:
+            print("probe_igfile_registration: driver already instrumented")
+            return
+        # count and inspect every dispatch this function makes
+        old = "  ppc_dispatch(ctx, ctx->ctr);\n"
+        new = ("  { extern unsigned int g_arkchemy_drv_dispatches, g_arkchemy_drv_saw_igfile;\n"
+               "    g_arkchemy_drv_dispatches++;\n"
+               "    if (ctx->ctr == %du) g_arkchemy_drv_saw_igfile++; }\n" % IGFILE_ARKREGISTER
+               + "  ppc_dispatch(ctx, ctx->ctr);\n")
+        start = t.index(DRIVER_SIG)
+        end = t.index("\n}\n", start)
+        body = t[start:end].replace(old, new)
+        t = t[:start] + "/* " + MARKER2 + " */\n" + body + t[end:]
+        p.write_text(t)
+        print("probe_igfile_registration: instrumented the driver in %s" % p.name)
+        return
+    sys.exit("probe_igfile_registration: driver not found")
+
+
+patch_driver()
