@@ -76,6 +76,13 @@ static volatile bool g_game_thread_started = false;
 static volatile bool g_globals_init_done = false;
 static volatile bool g_static_init_done = false;
 
+/* EXPERIMENT counter -- see tools/experiment_null_meta_global.py. Counts how
+ * often igDataList::setCapacity read its metaobject global as NULL and fell
+ * back to typeIndex 0 instead of the garbage sitting at guest address 12.
+ * Not static: the patched generated_0156.c declares it extern at the use
+ * site. */
+unsigned int g_arkchemy_nullmeta_hits = 0;
+
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
 // on-screen libnx console (see main()'s own consoleInit) -- added
@@ -165,7 +172,7 @@ static void checkpoint(const char *fmt, ...) {
     // were landing at exactly 4095 characters and ending mid-field
     // ("... -- loopwatch" with no name and no values), so every
     // loopwatch slot past that point had been silently invisible.
-    // Worst case for the current line is ~4.2KB (loopwatch_buf 3072 +
+    // Worst case for the current line is ~7.3KB (loopwatch_buf 6144 +
     // vtable_dump_buf 256 + ~900 of fixed fields), so 8192 leaves real
     // headroom. It was ~6.3KB before the dead dispatch-log field was
     // removed; keep this figure in step with the format string, since a
@@ -3168,7 +3175,12 @@ int main(int argc, char *argv[]) {
             // off mid-entry instead. 3072 leaves real headroom below
             // checkpoint()'s own 4096-byte buffer for the "main frame
             // ..." prefix this gets appended to.
-            char loopwatch_buf[3072];
+            /* 6144, not 3072: at 3072 the list overflowed and the final
+             * field came out as a bare "loopwatch(<name>)" with no values,
+             * so the last watch was silently invisible -- the exact failure
+             * the buffer note above describes, recurring one layer down.
+             * Hardware log of Aug 29 was truncating at 4061 chars this way. */
+            char loopwatch_buf[6144];
             size_t loopwatch_len = 0;
             for (size_t i = 0; i < ARKCHEMY_DEBUG_WATCH_SLOT_COUNT && loopwatch_len < sizeof(loopwatch_buf); i++) {
                 int n = snprintf(loopwatch_buf + loopwatch_len, sizeof(loopwatch_buf) - loopwatch_len,
@@ -3288,6 +3300,7 @@ int main(int argc, char *argv[]) {
                        " -- pool_vtable[0..17]=%s"
                        " -- cur_mem_ctx(.data+5336)=0x%x boot_heap_handle=0x%x"
                        " -- report_fmt=\"%s\" append_str=\"%s\""
+                       " -- nullmeta_fallbacks=%u"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3326,6 +3339,7 @@ int main(int argc, char *argv[]) {
                         * when it goes. */
                        ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR),
                        report_fmt_str, append_str_str,
+                       g_arkchemy_nullmeta_hits,
                        loopwatch_buf);
         }
 

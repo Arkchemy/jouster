@@ -1,0 +1,94 @@
+2026-08-29 — hardware run: the hang located exactly, and a correction
+=====================================================================
+
+Build Aug 29 16:41. 7200 frames (120 s). Log: 235 lines, 504,908 bytes.
+
+WHAT WORKED
+-----------
+  ppc_init_globals, 114 static initializers, entry point reached
+  Wii U boot splash (bootTvTex.tga 1280x720) + 18.9 s jingle
+  Bink shim: 720 of 720 luma rows, 3 frames presented, decode round-trip ok
+  ffmpeg path: 526 frames of bash.mov, audio 32k->48k, paced 30000/1001
+  registration reached #54 igStringRefList
+  mem: fail=0 -- no allocation failure anywhere in the run
+
+THE HANG, EXACTLY
+-----------------
+calls=35221, last_pc=0x21a55cc, caller_lr=0x21a57d8, r5=0x811c9dc5,
+r6=0x3ffff920 -- all frozen from frame ~2400 to 7200. The call counter does
+not advance at all, so this is a leaf loop, not runaway recursion.
+
+0x21a55cc is igStringPool::remove(const igStringPoolItem*, unsigned int):
+
+    r12 = this->buckets;        /* lwz  r12, 0xc(r3)  */
+    r0  = hash << 2;            /* slwi r0,  r5, 2    */
+    r11 = buckets[hash];        /* lwzx r11, r12, r0  */
+    while (r11 != item)         /* cmplw r11, r4      */
+        r11 = r11->next;        /* lwz  r11, 8(r11)   */
+
+There is no NULL check and no bounds check. r5 is 0x811C9DC5 -- the raw FNV-1a
+basis, never reduced, which is what `hash % bucketCount` evaluates to when
+bucketCount is 0 (x - (x/0)*0 = x, and real PowerPC divwu-by-zero behaves the
+same way, so this is not the codegen guard). The index therefore lands about
+two billion entries past the bucket array, reads garbage, and walks a ->next
+chain that has no terminator.
+
+r6 = 0x3ffff920 = 0x40000000 - 0x6E0: a small negative offset wrapped by the
+guest-memory mask to the top of the 1 GB space. That mask is why this hangs
+silently for two minutes instead of faulting with a usable address.
+
+A CORRECTION
+------------
+Last turn, after proving nothing writes the metaobject global, the conclusion
+recorded was that the global was "probably not the origin" and that the read
+must be executing on a path that should not be reached. The hardware says
+otherwise, and the earlier call was the right one.
+
+The SETCAP_REG probe resolves it directly:
+
+    index=0x0    entry=0x440504c   <- valid
+    index=0x0    entry=0x440504c   <- valid
+    index=0x21c  entry=0x0         <- fails   (540)
+    index=0x4a0  entry=0x0         <- fails   (1184)
+
+and loopwatch(regglobal_loadvalue) hits=22 last=0x0 confirms the global itself
+reads as 0 on hardware, 22 times.
+
+So the mechanism is exactly as first described: global is NULL, `lha r6,
+0xc(r12)` reads guest address 12, and low memory is scribbled on by other
+code, so the "type index" varies run-to-run. Registration survives while that
+garbage happens to be 0 (index 0 is a real, populated entry) and dies when it
+is 540 or 1184. That is why it stops at class 54 of 1007 rather than at a
+fixed, reproducible place.
+
+The exhaustive writer search was still worth having -- it is what rules out a
+missing function and proves the recompilation faithful, which is what makes
+"conquertron folded this reference to the wrong symbol" the leading theory
+rather than one guess among several. But the walk-back of the root cause was
+an over-correction and is withdrawn.
+
+EXPERIMENT IN THIS BUILD (16:56)
+--------------------------------
+tools/experiment_null_meta_global.py substitutes typeIndex 0 when the global
+is NULL, instead of whatever lies at guest address 12. Index 0 is the one
+value hardware has already shown resolves to a real entry.
+
+This is a probe, not a repair. The correct value is still unknown. Read the
+result as evidence about the mechanism:
+
+  - registration walks past 54 toward 1007  -> chain confirmed end to end,
+    remaining work is identifying the right metaobject
+  - stalls somewhere new                    -> that is the next real blocker
+  - stalls at 54 again                      -> the theory is wrong and the
+                                               index is not the deciding input
+
+New counter nullmeta_fallbacks=N on every frame line reports how often the
+fallback fired.
+
+ALSO FIXED
+----------
+loopwatch_buf was 3072 and the watch list had outgrown it: every frame line
+ended mid-field at "loopwatch(igRefAlchemy_guard_before_increment)" with no
+values, so the last watch was silently invisible. This is the same failure
+the buffer note at main.c:172 documents, recurring one layer down. Raised to
+6144 and the sizing estimate updated to match.
