@@ -1,0 +1,72 @@
+2026-08-29 — video display path built (no shader translation)
+==============================================================
+
+WHY THIS, AND WHY NOW
+---------------------
+Two things were already true and had never been connected:
+  - the recompiled Bink decoder completes a full open/decode/next/close
+    round trip on a real retail movies/bash.mov, on hardware;
+  - GX2Init builds a real deko3d swapchain (1280x720, RGBA8_Unorm).
+
+What was missing was the path between them, and that path does NOT depend on
+the engine boot -- which is still stuck on registry index 540. So it can be
+built and tested now rather than after.
+
+WHY IT NEEDS NO SHADERS
+-----------------------
+This Wii U build uses Bink's plane API, not BinkCopyToBuffer (which is absent
+from the binary): BinkGetFrameBuffersInfo reports the plane sizes, the caller
+supplies buffers via BinkRegisterFrameBuffers, and BinkDoFrame decodes YUV
+into them. A game converts YUV->RGB in a pixel shader -- exactly the thing
+this project cannot do yet, since every GX2SetPixelShader/SetVertexShader shim
+is still `(void)ctx;`.
+
+So the conversion happens on the CPU instead (BT.601, integer coefficients,
+nearest-neighbour scale into 1280x720 with aspect preserved), and the result
+goes to the screen with dkCmdBufCopyBufferToImage -- a plain buffer-to-image
+copy, which needs no shader at all. Slower than a shader, and completely
+sufficient to put a real frame on a real TV.
+
+SEQUENCE
+--------
+  BinkOpen (handle now kept open, not closed in the probe block)
+  release the display: g_console_enabled = false, consoleExit(NULL)
+  GX2Init          -- idempotent; the game calling it later finds it built
+  BinkGetFrameBuffersInfo -> plane sizes
+  assign guest scratch at 0x20000000 for every plane with Allocate set
+  BinkRegisterFrameBuffers
+  per frame: BinkDoFrame -> CPU YUV->RGBA -> copy to swapchain -> present
+  BinkClose, then the normal game entry
+
+ASSUMPTIONS THAT COULD BE WRONG, STATED UP FRONT
+-------------------------------------------------
+1. BINKFRAMEBUFFERS layout is taken from RAD's documented struct
+   (TotalFrames, YABufferWidth/Height, cRcBBufferWidth/Height, FrameNum, then
+   plane sets of {Buffer, Allocate, BufferPitch}). If this build's struct
+   differs, the reported dimensions will be nonsense -- which is why the run
+   logs them and bails out rather than decoding into wild pointers.
+2. Guest scratch at 0x20000000 is safe only because this runs before the game
+   entry; the MEM2 bump had reached ~12MB of 0x4000000.
+3. Plane order assumed Y, cR, cB, A. If cR/cB are swapped the picture will
+   show with red and blue swapped -- which is itself a readable result.
+
+WHAT THE NEXT RUN SHOWS
+-----------------------
+  [video] BinkGetFrameBuffersInfo: totalFrames=.. Y=..x.. chroma=..x..
+  [video] plane buffers assigned, N bytes of guest scratch used
+  [video] frame 0: set=.. Y=0x.. pitch=.. cR=0x.. cB=0x.. cpitch=..
+  [video] presented N frames to the swapchain
+
+and, on the TV, the opening movie -- or a clearly diagnosable failure.
+
+NOT IN THIS BUILD: SOUND
+------------------------
+Checked rather than assumed. The snd_core shims are bookkeeping only:
+
+    ppc_import_snd_core_AXInit(ctx) { g_ax_initialized = 1; }
+
+Zero references to audout/audrv anywhere in the shim layer, so nothing can
+reach the speakers yet. The decoder side is in better shape --
+BinkAudioDecompressOpen/BinkAudioDecompress/BinkAudioDecompressOutputSize are
+all recompiled -- so sound is a matter of routing decoded PCM to Switch
+audout, self-contained in the same way this video path was.

@@ -35,6 +35,7 @@
 #include "ppc_runtime.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
+#include "cafeos_gx2.h"
 #include "cafeos_vpad.h"
 
 // Real, deliberate architecture: the actual, complete recompiled game
@@ -831,6 +832,211 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
  * separately: an earlier run survived 81 seconds of continuous console
  * updates on the identical 3MB of headroom. */
 
+
+/* ---------------------------------------------------------------------
+ * Bink video straight to the screen, with no shader translation.
+ *
+ * This is the milestone that does not depend on the engine booting. The
+ * decoder already works on hardware (open/decode/next/close on a real
+ * retail .mov), and GX2Init already builds a real deko3d swapchain. What
+ * was missing was the path between them.
+ *
+ * The Wii U build uses Bink's plane API -- BinkGetFrameBuffersInfo tells
+ * us the plane sizes, we hand it buffers with BinkRegisterFrameBuffers,
+ * and BinkDoFrame decodes YUV into them. A game would normally convert
+ * YUV->RGB in a pixel shader, which is exactly the thing this project
+ * cannot do yet. So convert on the CPU instead and hand the result to
+ * dkCmdBufCopyBufferToImage, which needs no shader at all. Slower than a
+ * shader and completely sufficient to put a real frame on a real TV.
+ * --------------------------------------------------------------------- */
+
+/* Guest scratch for the decode planes. Deliberately far above anything
+ * allocated at this point: the game's MEM2 ExpHeap bump starts at
+ * 0x4000000 and had reached ~12MB when this runs, so 0x20000000 cannot
+ * collide. Only valid because this test runs before the game entry. */
+#define ARKCHEMY_VID_SCRATCH 0x20000000u
+
+static uint32_t   g_video_hbink = 0;   /* kept open across the display handover */
+static DkMemBlock g_vid_staging = NULL;
+static uint8_t   *g_vid_staging_cpu = NULL;
+
+static bool arkchemy_video_staging_init(void) {
+    DkMemBlockMaker maker;
+    uint32_t size = ARKCHEMY_GX2_FB_WIDTH * ARKCHEMY_GX2_FB_HEIGHT * 4u;
+    if (g_vid_staging) return true;
+    if (!g_arkchemy_gx2.device) return false;
+    dkMemBlockMakerDefaults(&maker, g_arkchemy_gx2.device, (size + 0xFFFu) & ~0xFFFu);
+    maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+    g_vid_staging = dkMemBlockCreate(&maker);
+    if (!g_vid_staging) return false;
+    g_vid_staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_vid_staging);
+    return g_vid_staging_cpu != NULL;
+}
+
+/* BT.601, the standard Bink uses. Scaled with nearest-neighbour into the
+ * 1280x720 framebuffer, preserving aspect with black bars. */
+static void arkchemy_video_yuv_to_rgba(uint32_t y_addr, uint32_t y_pitch,
+                                       uint32_t cr_addr, uint32_t cb_addr, uint32_t c_pitch,
+                                       uint32_t vw, uint32_t vh) {
+    const uint32_t FBW = ARKCHEMY_GX2_FB_WIDTH, FBH = ARKCHEMY_GX2_FB_HEIGHT;
+    uint32_t dx, dy, dst_w, dst_h, off_x, off_y;
+    if (!g_vid_staging_cpu || vw == 0 || vh == 0) return;
+
+    /* fit vw x vh inside the framebuffer without distorting it */
+    dst_w = FBW; dst_h = (uint32_t)((uint64_t)vh * FBW / vw);
+    if (dst_h > FBH) { dst_h = FBH; dst_w = (uint32_t)((uint64_t)vw * FBH / vh); }
+    off_x = (FBW - dst_w) / 2u; off_y = (FBH - dst_h) / 2u;
+
+    memset(g_vid_staging_cpu, 0, FBW * FBH * 4u);
+
+    for (dy = 0; dy < dst_h; dy++) {
+        uint32_t sy = (uint32_t)((uint64_t)dy * vh / dst_h);
+        uint8_t *row = g_vid_staging_cpu + ((dy + off_y) * FBW + off_x) * 4u;
+        for (dx = 0; dx < dst_w; dx++) {
+            uint32_t sx = (uint32_t)((uint64_t)dx * vw / dst_w);
+            int Y = (int)ppc_load_u8(&g_ctx, y_addr  + sy * y_pitch + sx);
+            int V = (int)ppc_load_u8(&g_ctx, cr_addr + (sy >> 1) * c_pitch + (sx >> 1)) - 128;
+            int U = (int)ppc_load_u8(&g_ctx, cb_addr + (sy >> 1) * c_pitch + (sx >> 1)) - 128;
+            int R = Y + ((91881 * V) >> 16);
+            int G = Y - ((22554 * U + 46802 * V) >> 16);
+            int B = Y + ((116130 * U) >> 16);
+            if (R < 0) R = 0; else if (R > 255) R = 255;
+            if (G < 0) G = 0; else if (G > 255) G = 255;
+            if (B < 0) B = 0; else if (B > 255) B = 255;
+            row[dx * 4u + 0] = (uint8_t)R;
+            row[dx * 4u + 1] = (uint8_t)G;
+            row[dx * 4u + 2] = (uint8_t)B;
+            row[dx * 4u + 3] = 255;
+        }
+    }
+}
+
+static void arkchemy_video_present(void) {
+    DkImageView view;
+    DkImageRect rect;
+    DkCopyBuf src;
+    if (!g_vid_staging || !g_arkchemy_gx2.queue) return;
+    arkchemy_gx2_ensure_frame_acquired();
+    if (g_arkchemy_gx2.acquired_slot < 0) return;
+
+    dkImageViewDefaults(&view, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
+    rect.x = 0; rect.y = 0; rect.z = 0;
+    rect.width = ARKCHEMY_GX2_FB_WIDTH; rect.height = ARKCHEMY_GX2_FB_HEIGHT; rect.depth = 1;
+    src.addr = dkMemBlockGetGpuAddr(g_vid_staging);
+    src.rowLength = 0;   /* 0 = tightly packed */
+    src.imageHeight = 0;
+
+    dkCmdBufCopyBufferToImage(g_arkchemy_gx2.cmdbuf, &src, &view, &rect, 0);
+    dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
+    dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
+    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    dkCmdBufClear(g_arkchemy_gx2.cmdbuf);
+    g_arkchemy_gx2.acquired_slot = -1;
+}
+
+/* BINKFRAMEBUFFERS, RAD's documented layout:
+ *   +0  TotalFrames        +4  YABufferWidth     +8  YABufferHeight
+ *   +12 cRcBBufferWidth    +16 cRcBBufferHeight  +20 FrameNum
+ *   +24 Frames[] -- each 4 plane sets of {Buffer, Allocate, BufferPitch} */
+#define VID_FB_TOTALFRAMES 0u
+#define VID_FB_YAW         4u
+#define VID_FB_YAH         8u
+#define VID_FB_CW          12u
+#define VID_FB_CH          16u
+#define VID_FB_FRAMENUM    20u
+#define VID_FB_FRAMES      24u
+#define VID_PLANESET_SIZE  48u
+
+static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
+    void ppc_BinkGetFrameBuffersInfo(PpcContext *ctx);
+    void ppc_BinkRegisterFrameBuffers(PpcContext *ctx);
+    void ppc_BinkDoFrame(PpcContext *ctx);
+    void ppc_BinkNextFrame(PpcContext *ctx);
+
+    uint32_t info = ARKCHEMY_VID_SCRATCH;             /* the struct itself */
+    uint32_t pool = ARKCHEMY_VID_SCRATCH + 0x1000u;   /* plane storage after it */
+    uint32_t total, yaw, yah, cw, ch, i, p, f;
+    int played = 0;
+
+    for (i = 0; i < 256u; i += 4u) ppc_store_u32(&g_ctx, info + i, 0);
+
+    g_ctx.r[3] = hbink; g_ctx.r[4] = info;
+    ppc_BinkGetFrameBuffersInfo(&g_ctx);
+
+    total = ppc_load_u32(&g_ctx, info + VID_FB_TOTALFRAMES);
+    yaw   = ppc_load_u32(&g_ctx, info + VID_FB_YAW);
+    yah   = ppc_load_u32(&g_ctx, info + VID_FB_YAH);
+    cw    = ppc_load_u32(&g_ctx, info + VID_FB_CW);
+    ch    = ppc_load_u32(&g_ctx, info + VID_FB_CH);
+    checkpoint("[video] BinkGetFrameBuffersInfo: totalFrames=%u Y=%ux%u chroma=%ux%u",
+               (unsigned)total, (unsigned)yaw, (unsigned)yah, (unsigned)cw, (unsigned)ch);
+
+    if (total == 0 || total > 4u || yaw == 0 || yaw > 4096u || yah == 0 || yah > 4096u) {
+        checkpoint("[video] frame-buffer info is not usable -- struct layout or decoder state is wrong, stopping here");
+        return;
+    }
+
+    /* Hand Bink a buffer for every plane it says it wants to allocate. */
+    for (f = 0; f < total; f++) {
+        uint32_t set = info + VID_FB_FRAMES + f * VID_PLANESET_SIZE;
+        for (p = 0; p < 4u; p++) {
+            uint32_t plane = set + p * 12u;
+            uint32_t alloc = ppc_load_u32(&g_ctx, plane + 4u);
+            uint32_t pitch = ppc_load_u32(&g_ctx, plane + 8u);
+            uint32_t rows  = (p == 0u || p == 3u) ? yah : ch;
+            if (!alloc || !pitch) { ppc_store_u32(&g_ctx, plane + 0u, 0); continue; }
+            ppc_store_u32(&g_ctx, plane + 0u, pool);
+            pool += (pitch * rows + 0xFFu) & ~0xFFu;
+        }
+    }
+    checkpoint("[video] plane buffers assigned, %u bytes of guest scratch used",
+               (unsigned)(pool - (ARKCHEMY_VID_SCRATCH + 0x1000u)));
+
+    g_ctx.r[3] = hbink; g_ctx.r[4] = info;
+    ppc_BinkRegisterFrameBuffers(&g_ctx);
+
+    if (!arkchemy_video_staging_init()) {
+        checkpoint("[video] could not create the deko3d staging block -- is GX2Init done?");
+        return;
+    }
+
+    while (played < frames_to_play) {
+        uint32_t cur, set, y_addr, y_pitch, cr_addr, cb_addr, c_pitch;
+
+        g_ctx.r[3] = hbink;
+        ppc_BinkDoFrame(&g_ctx);
+
+        cur = ppc_load_u32(&g_ctx, info + VID_FB_FRAMENUM);
+        if (cur >= total) cur = 0;
+        set = info + VID_FB_FRAMES + cur * VID_PLANESET_SIZE;
+
+        y_addr  = ppc_load_u32(&g_ctx, set + 0u);
+        y_pitch = ppc_load_u32(&g_ctx, set + 8u);
+        cr_addr = ppc_load_u32(&g_ctx, set + 12u);
+        cb_addr = ppc_load_u32(&g_ctx, set + 24u);
+        c_pitch = ppc_load_u32(&g_ctx, set + 20u);
+
+        if (played == 0) {
+            checkpoint("[video] frame 0: set=%u Y=0x%x pitch=%u cR=0x%x cB=0x%x cpitch=%u",
+                       (unsigned)cur, (unsigned)y_addr, (unsigned)y_pitch,
+                       (unsigned)cr_addr, (unsigned)cb_addr, (unsigned)c_pitch);
+        }
+
+        if (y_addr && y_pitch && cr_addr && cb_addr && c_pitch) {
+            arkchemy_video_yuv_to_rgba(y_addr, y_pitch, cr_addr, cb_addr, c_pitch, yaw, yah);
+            arkchemy_video_present();
+        } else if (played == 0) {
+            checkpoint("[video] planes came back empty after BinkDoFrame -- nothing to show");
+            return;
+        }
+
+        g_ctx.r[3] = hbink;
+        ppc_BinkNextFrame(&g_ctx);
+        played++;
+    }
+    checkpoint("[video] presented %d frames to the swapchain", played);
+}
+
 static PpcSharedMemory g_shared;
 
 // void ppc_arkchemy_game_entry(PpcContext *ctx) -- the real, complete,
@@ -1488,9 +1694,8 @@ static void game_thread_func(void *arg) {
             g_ctx.r[3] = hbink;
             ppc_BinkNextFrame(&g_ctx);
             checkpoint("[game thread] Bink decoder test: BinkNextFrame call completed (no crash)");
-            g_ctx.r[3] = hbink;
-            ppc_BinkClose(&g_ctx);
-            checkpoint("[game thread] Bink decoder test: BinkClose completed -- real decoder round-trip successful");
+            checkpoint("[game thread] Bink decoder test: decode round-trip successful -- keeping the handle open for playback");
+            g_video_hbink = hbink;
         }
     }
 
@@ -1539,6 +1744,30 @@ static void game_thread_func(void *arg) {
     g_console_enabled = false;
     consoleExit(NULL);
     mutexUnlock(&g_console_mutex);
+
+    /* The display belongs to us now, so deko3d can have it. GX2Init is
+     * idempotent (it returns early once initialized), and the game calling it
+     * again later is harmless -- it just finds the device already built.
+     *
+     * This is the milestone that does not wait on the engine: a real retail
+     * movie decoded by the recompiled Bink and presented on the real
+     * framebuffer, with no shader translation anywhere in the path. */
+    {
+        void ppc_BinkClose(PpcContext *ctx);
+        ppc_import_gx2_GX2Init(&g_ctx);
+        if (g_arkchemy_gx2.initialized && g_video_hbink) {
+            checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
+                       (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
+            arkchemy_bink_video_play(g_video_hbink, 240);
+            g_ctx.r[3] = g_video_hbink;
+            ppc_BinkClose(&g_ctx);
+            g_video_hbink = 0;
+            checkpoint("[video] playback finished, decoder closed");
+        } else {
+            checkpoint("[video] skipped: gx2_initialized=%d hbink=0x%x",
+                       (int)g_arkchemy_gx2.initialized, (unsigned)g_video_hbink);
+        }
+    }
 
     g_ctx.r[3] = 0; /* argc */
     g_ctx.r[4] = 0; /* argv */
