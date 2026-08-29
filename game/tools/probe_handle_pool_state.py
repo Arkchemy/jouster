@@ -41,10 +41,14 @@ Idempotent: re-running is a no-op once the marker is present.
 import pathlib, sys
 
 MARKER = "ARKCHEMY-PROBE-HPOOL"
-OLD = ("  /* 21501ec: lwz r8, 0x18(r3) */\n"
-       "  ctx->r[8] = ppc_load_u32(ctx, ctx->r[3] + (int32_t)24);\n")
-NEW = (OLD
-       + "  /* " + MARKER + " -- see tools/probe_handle_pool_state.py */\n"
+# userInstantiate contains TWO structurally identical copies of this test,
+# at 0x2150198 and 0x21501ec, on different branches of its bool argument.
+# The first attempt instrumented only 0x21501ec -- the one the earlier trace
+# pointed at -- and it never executed: hits=0 while activate was still being
+# called 17 times, because control reaches the null-pool path through
+# `beq 0x21501f8` from the OTHER copy. Both are instrumented now.
+SITES = ["2150198", "21501ec"]
+BODY = ("  /* " + MARKER + " -- see tools/probe_handle_pool_state.py */\n"
        + "  { extern unsigned int g_arkchemy_hp_hits, g_arkchemy_hp_obj, g_arkchemy_hp_pool;\n"
        + "    extern unsigned int g_arkchemy_hp_w[8];\n"
        + "    if (g_arkchemy_hp_hits == 0u) {\n"
@@ -62,14 +66,22 @@ def main():
     base = pathlib.Path(__file__).resolve().parent.parent / "source"
     for p in sorted(base.glob("generated_*.c")):
         t = p.read_text()
-        if OLD not in t:
-            continue
         if MARKER in t:
             print("probe_handle_pool_state: already applied, nothing to do")
             return
-        p.write_text(t.replace(OLD, NEW, 1))
-        print("probe_handle_pool_state: instrumented the +0x18 test in %s" % p.name)
-        return
+        n = 0
+        for site in SITES:
+            old = ("  /* %s: lwz r8, 0x18(r3) */\n"
+                   "  ctx->r[8] = ppc_load_u32(ctx, ctx->r[3] + (int32_t)24);\n" % site)
+            if old not in t:
+                continue
+            t = t.replace(old, old + BODY, 1)
+            n += 1
+        if n:
+            p.write_text(t)
+            print("probe_handle_pool_state: instrumented %d of %d +0x18 tests in %s"
+                  % (n, len(SITES), p.name))
+            return
     sys.exit("probe_handle_pool_state: site not found -- regenerate first")
 
 

@@ -1,0 +1,59 @@
+2026-08-30 — two identical blocks, and the probe went in the wrong one
+=======================================================================
+
+Build 00:43:
+
+    hpool: hits=0 obj=0x0 pool=0x0 w=[all zero]
+
+The probe never fired, while poolact still reported acts=17 nullacts=17 with
+lr=0x215020c -- the instruction directly after the activate call the probe was
+supposed to be guarding.
+
+WHY
+---
+Core::igObjectHandleManager::userInstantiate contains TWO structurally
+identical copies of the same test, on different branches of its bool argument:
+
+    2150190: bl    instantiateFromPool
+    2150194: stw   r3, 0x2c(r28)
+    2150198: lwz   r8, 0x18(r3)     <- the copy that RUNS
+    215019c: cmpwi r8, 0
+    21501a0: beq   0x21501f8        ; zero -> the null-pool path
+    21501a4: b     0x2150220        ; non-zero -> the normal path
+
+    21501e4: bl    instantiateFromPool
+    21501ec: lwz   r8, 0x18(r3)     <- the copy that was instrumented
+    21501f0: cmpwi r8, 0
+    21501f4: bne   0x2150220
+    21501f8: (shared tail: li r7, 0; bl activate)
+
+Both converge on the same tail at 0x21501f8, which is why activate was still
+being reached 17 times with a probe at the other copy sitting idle. The
+earlier trace pointed at 0x21501ec and that is the one that got instrumented.
+
+Checked before concluding: no duplicate function definitions, one occurrence
+of each instruction comment, and the probe genuinely present in the source. So
+this was not a build or patch failure -- it was the wrong instruction.
+
+WHAT IS STILL ESTABLISHED
+-------------------------
+    acts=17, nullacts=17     every activate call gets a null pool
+    poolgrow hits=0          grow is not involved
+    li r7, 0                 the null is the game's own hardcoded literal
+
+None of that depended on the probe that missed.
+
+THIS BUILD (00:56)
+------------------
+Both copies instrumented. hpool now reports the freshly created
+igHandleRedirectPool from whichever branch actually executes:
+
+    hpool: hits=%u obj=0x%x pool=0x%x w=[8 words]   (w[6] is +0x18)
+
+  all zero        -> allocated, never constructed
+  set but +0x18=0 -> constructed, that field never written
+  obj=0           -> instantiateFromPool returned nothing
+
+BUILD
+-----
+00:56, links clean, 175,940,985 bytes.
