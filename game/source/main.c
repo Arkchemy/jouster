@@ -632,6 +632,18 @@ void arkchemy_jt_miss(uint32_t ctr, uint32_t base) {
     }
 }
 
+/* Logging hook for the native Bink shim, which lives in its own translation
+ * unit and so cannot reach checkpoint() directly. */
+void arkchemy_bink_log(const char *fmt, ...);
+void arkchemy_bink_log(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    checkpoint("%s", buf);
+}
+
 void arkchemy_probe4(const char *label,
                             const char *n0, uint32_t v0,
                             const char *n1, uint32_t v1,
@@ -2523,6 +2535,36 @@ static void game_thread_func(void *arg) {
         checkpoint("[hunt] atvinewlogo=0x%x  \"movies/\"=0x%x  \".mov\"=0x%x",
                    (unsigned)found[0], (unsigned)found[1], (unsigned)found[2]);
 
+        /* The filename is not a literal in the executable, and it was never
+         * going to be: reconstructing .rodata around the hit for "movies/"
+         * shows the string is actually "movies/%s", a format, sitting
+         * directly beside "igBinkMovieCodec". The game builds movie paths
+         * with sprintf and takes the name from its DATA files, so
+         * atvinewlogo_640.mov lives in a .bld/.arc the engine cannot read yet
+         * rather than in the binary.
+         *
+         * That makes the format string the thing worth watching. A read of it
+         * means the game is composing a movie path -- the earliest possible
+         * evidence that it is trying to play anything, and it fires long
+         * before FSOpenFile would.
+         *
+         * (The ".mov" hit was a false positive: it matched inside
+         * "this.movieSystem" in an XML blob, which is a good reminder that a
+         * four-character needle proves very little.) */
+        if (found[1]) {
+            char fmt[48];
+            uint32_t i3;
+            for (i3 = 0; i3 < sizeof(fmt) - 1; i3++) {
+                uint8_t c = ppc_load_u8(&g_ctx, found[1] + i3);
+                if (!c || c < 32 || c > 126) break;
+                fmt[i3] = (char)c;
+            }
+            fmt[i3] = 0;
+            g_ppc_watch_load_addr = found[1];
+            checkpoint("[hunt] watching the movie path format \"%s\" at 0x%x -- a read means "
+                       "the game is composing a movie path", fmt, (unsigned)found[1]);
+        }
+
         if (found[0]) {
             /* read back what is actually there, so the log shows the whole
                filename rather than just an address to trust */
@@ -2534,8 +2576,7 @@ static void game_thread_func(void *arg) {
                 name[i2] = (char)c;
             }
             name[i2] = 0;
-            checkpoint("[hunt] the string reads \"%s\" -- arming a load watch on it", name);
-            g_ppc_watch_load_addr = found[0];
+            checkpoint("[hunt] literal filename present at 0x%x: \"%s\"", (unsigned)found[0], name);
         } else {
             checkpoint("[hunt] filename not present in the first 16MB of guest memory");
         }
