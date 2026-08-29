@@ -1,0 +1,78 @@
+2026-08-29 — TLSF: the free list head is NULL, and reflection metadata arrives
+==============================================================================
+
+Build 18:46.
+
+    tlsf: tripped=375  ctrl=0x45002e0  nodes=[0x0,0x0,0x0,0x0,0x0,0x0]
+    registrations: 61 (unchanged)
+    calls at stall: 392,874   (was 150,839 -- the bail-out let it run on)
+    stall: pc=0x21f0450 lr=0x216fd38  r3=0x45002e0 r4=0x40 r5=0x7 r6=0x4500f38
+
+ANSWERED, AND NOT AMBIGUOUSLY
+-----------------------------
+All six recorded nodes are 0. The free list head is NULL, and walking it does
+this:
+
+    r7 = 0
+    r7 != r3 (control)      -> enter the loop
+    r8 = *(0 + 4)           -> guest address 4
+    r7 = *(0 + 8)           -> guest address 8, which is also 0
+    r7 != r3                -> loop forever at address zero
+
+So it is not a cycle among real blocks and not a merely long list. It is a
+NULL head with no NULL check, spinning on address 0 because the guest-memory
+mask makes address 0 readable instead of faulting. Third hang of this exact
+shape today, after igStringPool::remove and the string-pool bucket walk.
+
+The 1,000,000-iteration bail-out did its job: it tripped 375 times and the
+boot kept running, taking execution from 150,839 calls to 392,874 in the same
+run rather than costing another test cycle.
+
+WHAT IT MEANS
+-------------
+The loop reaches this list only after the TLSF bitmap said the size class is
+non-empty:
+
+    21f0450: lwz r10, 0x10(r3)   ; first-level bitmap
+    21f0464: cntlzw r5, r10      ; highest set bit -> fl
+    21f0480: lwz r12, 0x14(r9)   ; second-level bitmap
+    21f0490: cntlzw r10, r12     ; -> sl
+    21f04b4: lwz r7, 0x74(r6)    ; free list head for [fl][sl]
+
+Bitmap says occupied, list is NULL: the control block is internally
+inconsistent. Either a bit was set without a block being linked in, or the
+head was cleared without the bit being cleared. r4 and r5 (0x40/0x7 this run,
+0x18/0xf last) are the size-class inputs, and they change run to run, so this
+is not one specific poisoned class.
+
+Registrations stayed at 61, so nothing new registered -- the allocator is
+failing rather than the reflection system.
+
+REFLECTION METADATA FROM WinnerNombre
+-------------------------------------
+/home/aaron/Documents/Github/Arkchemy/SSAWiiUShaderDumps -- despite the name
+these are not shaders. They are the Alchemy reflection schema:
+
+    metaobjects.xml   1.5M   991 metaobjects, refname + basetype (the class
+                             hierarchy; our target is ~1007 registrations, so
+                             this is essentially the whole set)
+    metafields.xml    104K   93 metafield types with per-platform align/size,
+                             and IG_CORE_PLATFORM_CAFE is present -- exact
+                             Wii U field sizes, e.g. igBoolMetaField 1/1,
+                             igUnsignedShortMetaField 2/2, igMemoryRefMetaField
+                             align 4 size 8
+    metaenums.xml      36K   enum definitions with values
+    tfbbindings.xml    48K   script bindings
+
+This is ground truth for the exact system the boot has been stuck in.
+igMetaField sizes on CAFE are what setCapacity and reallocateFieldMemory
+compute buffer sizes from, so they are directly checkable against what the
+recompiled code produces.
+
+One thing NOT established: the metafield file order does not explain the
+typeIndex values we log. Index 9 in the file is igStructArrayMetaField while
+our igCharMetaField logs typeIndex 9, so there is no simple positional
+mapping, and no mapping is being claimed until one is actually verified.
+
+These files are game-extracted data and are deliberately NOT committed to the
+public repos; they are referenced by path only.
