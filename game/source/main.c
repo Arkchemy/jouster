@@ -856,7 +856,8 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
  * collide. Only valid because this test runs before the game entry. */
 #define ARKCHEMY_VID_SCRATCH 0x20000000u
 
-static uint32_t   g_video_hbink = 0;   /* kept open across the display handover */
+static uint32_t   g_video_hbink = 0;
+static uint32_t   g_video_found_y = 0, g_video_found_cr = 0, g_video_found_cb = 0;   /* kept open across the display handover */
 static DkMemBlock g_vid_staging = NULL;
 static uint8_t   *g_vid_staging_cpu = NULL;
 
@@ -1163,6 +1164,58 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                        (unsigned)g_arkchemy_fs_read_calls, (unsigned)g_arkchemy_fs_read_bytes);
         }
 
+        /* Bink is decoding somewhere -- reads happen, BinkDoFrame returns 0,
+           and the colour-bar self-test proved everything downstream works --
+           it is simply not using the buffers we registered. Bink 1's own BINK
+           struct carries internal plane pointers (YPlane[2], APlane[2],
+           cRPlane[2], cBPlane[2]), so rather than keep trying to make
+           registration take, find the decoded planes in the struct and blit
+           straight from those.
+
+           Search rather than assume the offsets: walk the struct for values
+           that look like guest addresses, checksum each, and keep the ones
+           holding real data. The Y plane is 1280x720 and chroma 640x360, so a
+           candidate followed by another exactly 921600 bytes later is the
+           give-away. */
+        if (played == 0 && !g_video_found_y) {
+            uint32_t off, cand[24], coff[24], csum[24];
+            int n = 0, i2, j2;
+            for (off = 0; off < 0x600u && n < 24; off += 4u) {
+                uint32_t v = ppc_load_u32(&g_ctx, hbink + off), k, sum = 0;
+                if (v < 0x10000u || v >= 0x40000000u) continue;
+                for (k = 0; k < 4096u; k += 4u) sum += ppc_load_u32(&g_ctx, v + k);
+                if (!sum) continue;
+                coff[n] = off; cand[n] = v; csum[n] = sum; n++;
+            }
+            for (i2 = 0; i2 < n && i2 < 10; i2++) {
+                checkpoint("[video] bink+0x%x -> 0x%x sum=0x%x", (unsigned)coff[i2],
+                           (unsigned)cand[i2], (unsigned)csum[i2]);
+            }
+            /* a Y plane with chroma exactly one Y-plane later */
+            for (i2 = 0; i2 < n && !g_video_found_y; i2++) {
+                for (j2 = 0; j2 < n; j2++) {
+                    if (cand[j2] == cand[i2] + yaw * yah) {
+                        g_video_found_y  = cand[i2];
+                        g_video_found_cr = cand[j2];
+                        g_video_found_cb = cand[j2] + cw * ch;
+                        checkpoint("[video] FOUND decoded planes: Y=0x%x cR=0x%x cB=0x%x (from bink+0x%x)",
+                                   (unsigned)g_video_found_y, (unsigned)g_video_found_cr,
+                                   (unsigned)g_video_found_cb, (unsigned)coff[i2]);
+                        break;
+                    }
+                }
+            }
+            if (!g_video_found_y && n > 0) {
+                /* fall back to the busiest buffer as luma; chroma may be wrong
+                   but a monochrome picture still proves the decode works */
+                int best = 0;
+                for (i2 = 1; i2 < n; i2++) if (csum[i2] > csum[best]) best = i2;
+                g_video_found_y = cand[best];
+                checkpoint("[video] no exact plane triple; trying busiest buffer 0x%x as luma only",
+                           (unsigned)g_video_found_y);
+            }
+        }
+
         cur = ppc_load_u32(&g_ctx, info + VID_FB_FRAMENUM);
         if (cur >= total) cur = 0;
         set = info + VID_FB_FRAMES + cur * VID_PLANESET_SIZE;
@@ -1179,7 +1232,13 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                        (unsigned)cr_addr, (unsigned)cb_addr, (unsigned)c_pitch);
         }
 
-        if (y_addr && y_pitch && cr_addr && cb_addr && c_pitch) {
+        if (g_video_found_y) {
+            uint32_t fy = g_video_found_y;
+            uint32_t fcr = g_video_found_cr ? g_video_found_cr : fy; /* luma-only fallback */
+            uint32_t fcb = g_video_found_cb ? g_video_found_cb : fy;
+            arkchemy_video_yuv_to_rgba(fy, yaw, fcr, fcb, cw, yaw, yah);
+            arkchemy_video_present();
+        } else if (y_addr && y_pitch && cr_addr && cb_addr && c_pitch) {
             arkchemy_video_yuv_to_rgba(y_addr, y_pitch, cr_addr, cb_addr, c_pitch, yaw, yah);
             arkchemy_video_present();
         } else if (played == 0) {

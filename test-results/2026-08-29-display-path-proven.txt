@@ -1,0 +1,58 @@
+2026-08-29 — the display path is proven; only Bink's decode target is unknown
+==============================================================================
+
+WHAT THE SELF-TEST SETTLED
+--------------------------
+Colour bars written into the Bink planes appeared on the panel and animated.
+That proves, on real hardware, every stage after decoding:
+
+    plane addressing and pitches
+    YUV -> RGB (BT.601, CPU)
+    staging buffer upload
+    dkCmdBufCopyBufferToImage into the swapchain image
+    dkQueuePresentImage
+
+all correct, at 1280x720, with NO shader translation anywhere in the path.
+That is the piece that was supposed to be hard.
+
+The dull static bars afterwards were self-inflicted and expected: the test
+zeroes the Y plane at the end but leaves chroma holding the pattern, so the
+result is dark hues with no luma.
+
+Green, likewise, was never noise. BT.601 maps an all-zero YUV frame to exactly
+RGB(0,135,0), so a green panel was always saying "frames are reaching the
+screen, the planes are empty".
+
+WHAT REMAINS
+------------
+Bink decodes successfully -- BinkDoFrame returns 0 (not skipped), file reads
+climb run over run (10, then 14) -- but not into the buffers we register:
+
+    Ysum[set0]=0  Ysum[set1]=0   every frame
+
+Registration is provably unconditional (BinkRegisterFrameBuffers is three
+instructions: two null checks and stw r4, 0xe0(r3)), and every gate in
+start_do_frame reads correctly: +0x44=1, +0x11c=0, +0x4dc='BIKi' so the Bink 2
+signature check passes, +0xe0 = our struct.
+
+A misread cost one run: 2370c5c..2370c74 is the TAIL of start_do_frame -- a
+memset and two field copies before returning -- not the decode path. So
++0xe8=0 was never a blocker.
+
+NEW APPROACH: STOP FIGHTING REGISTRATION, FIND THE PLANES
+----------------------------------------------------------
+Bink 1's BINK struct carries its own decoded plane pointers (YPlane[2],
+APlane[2], cRPlane[2], cBPlane[2]). So search the struct rather than assume
+offsets: walk bink+0..0x600, keep values that look like guest addresses,
+checksum 4KB at each, and report the ones holding real data.
+
+The give-away is arithmetic: Y is 1280x720 = 921,600 bytes, so a candidate
+followed by another exactly 921,600 bytes later is the Y/chroma pair. If no
+exact triple turns up, fall back to blitting the busiest buffer as luma only
+-- a monochrome picture still proves the decode is real and locates it.
+
+MOVIE CONFIRMED SOUND
+---------------------
+Pulled from the card and parsed directly: magic 'BIKi' (Bink 1, not Bink 2),
+526 frames, largest frame 36,952 bytes, header size field matching the file's
+13,421,988 bytes exactly.
