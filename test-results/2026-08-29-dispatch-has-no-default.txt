@@ -1,0 +1,71 @@
+2026-08-29 — the filesystem is fine; ppc_dispatch has no default case
+======================================================================
+
+FILESYSTEM: CLOSED
+------------------
+Build 20:35, all four probes pass:
+
+    [fs] OK  /vol/content/alchemy.xml             -> .../Jouster/content/alchemy.xml  (542 bytes)
+    [fs] OK  content:/alchemy.xml                 -> same
+    [fs] OK  alchemy.xml                          -> same
+    [fs] OK  /vol/content/permanent/bootstrap.bld -> ...  (198,695 bytes)
+
+Every path form the engine can ask for resolves onto the Jouster folder,
+including the nested one. Combined with all 22 of the game's FS imports being
+implemented and the Bink shim already reading movies/bash.mov through the same
+translation, the "does it get its files the way Cemu does" question is
+answered: yes, and it was never the blocker.
+
+THE DRIVER, NAMED
+-----------------
+    regdrv: lr=0x215ba4c n=2
+
+0x215ba4c is inside
+Core::__internalObjectBase::getClassMetaSafeInternal(igMetaObject*&,
+void(*)(), __internalFunctionList*). It walks a list of registration function
+pointers, unrolled eight at a time, with a remainder tail:
+
+    215b988 .. 215ba2c   main loop, eight bctrl sites
+    215ba30: clrlwi. r28, r27, 0x1d   ; count & 7
+    215ba38: slwi  r29, r25, 2
+    215ba3c: lwz   r10, 0(r26)        ; the function list
+    215ba40: lwzx  r0, r10, r29       ; list[i]
+    215ba48: bctrl
+    215ba4c:                          ; <- where the control returned to
+
+igStorageDevice, the one storage class that DOES register, arrived through the
+REMAINDER, not the main loop.
+
+WHAT THAT POINTS AT
+-------------------
+ppc_dispatch is a switch over 19,474 addresses and had NO default case. An
+address it does not contain falls out of the switch and returns: the indirect
+call does nothing, with no crash, no log and no unhandled instruction.
+
+This is not a new class of bug here. It is exactly what made every computed
+jump table in this binary silently do nothing until that was found and fixed.
+
+If the main loop's eight dispatch sites are hitting addresses the table lacks,
+those entries vanish silently, and precisely what is observed follows: some
+classes register, five are never entered at any level, and the one that works
+came in by a different route.
+
+MEASURED, NOT ASSUMED
+---------------------
+Both the generated file and conquertron itself now record misses:
+
+    dispatchmiss: n=N addr=0x... pc=0x...
+
+  n=0    -> every indirect call resolves. The theory is wrong, and the missing
+            classes are simply absent from the list the driver walks.
+  n>0    -> indirect calls are silently vanishing. addr names one, and
+            checking it against the registration functions says whether this
+            is that bug or a different one.
+
+The default case is now emitted by codegen permanently, with weak globals in
+ppc_runtime.h, so no future title has to rediscover that a silent dispatch
+failure is even possible.
+
+BUILD
+-----
+20:40, links clean, 174,552,441 bytes.

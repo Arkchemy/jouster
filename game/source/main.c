@@ -138,6 +138,10 @@ unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
  * registers successfully, so its bits show what a working chain looks like. */
 unsigned int g_arkchemy_regchain = 0;
 unsigned int g_arkchemy_regdrv_lr = 0, g_arkchemy_regdrv_n = 0;
+/* Indirect calls ppc_dispatch could not resolve. Without the default case
+ * added by tools/probe_dispatch_miss.py these vanish silently. */
+unsigned int g_ppc_dispatch_miss_count = 0;
+unsigned int g_ppc_dispatch_miss_addr = 0, g_ppc_dispatch_miss_pc = 0;
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
@@ -3407,6 +3411,7 @@ int main(int argc, char *argv[]) {
                        " -- storagereg: mask=0x%02x n=[%u,%u,%u,%u,%u,%u]"
                        " -- regchain=0x%02x"
                        " regdrv: lr=0x%x n=%u"
+                       " -- dispatchmiss: n=%u addr=0x%x pc=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3488,6 +3493,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_storagereg_n[4], g_arkchemy_storagereg_n[5],
                        g_arkchemy_regchain,
                        g_arkchemy_regdrv_lr, g_arkchemy_regdrv_n,
+                       g_ppc_dispatch_miss_count, g_ppc_dispatch_miss_addr, g_ppc_dispatch_miss_pc,
                        loopwatch_buf);
         }
 
