@@ -2652,9 +2652,16 @@ static void game_thread_func(void *arg) {
              * frames were followed by the colour bars and the broken decode,
              * which read as a regression rather than as a diagnostic. */
             arkchemy_boot_show_splash();          /* fills the staging buffer */
+            /* The boot movie decodes correctly -- 62 frames, matching the 62
+             * slices in the file -- but a 256x128 overlay in a corner of the
+             * splash simply looks wrong, so it is off. The playback path and
+             * the overlay compositing both stay; set this to 1 to bring it
+             * back once there is a placement worth having. */
+#if 0
             g_ff_overlay = 1;
             arkchemy_ff_play("sdmc:/switch/Jouster/meta/bootMovie.h264", 900);
             g_ff_overlay = 0;
+#endif
             arkchemy_boot_play_sound();
             checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
                        (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
