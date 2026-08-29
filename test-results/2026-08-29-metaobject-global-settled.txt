@@ -1,0 +1,63 @@
+2026-08-29 — the metaobject global, settled by Cemu
+====================================================
+
+THE ANSWER
+----------
+Breaking at 0x215db88 (lha r6, 0xc(r12)) in the real game:
+
+    0x101345E8 = 0x115DE3B8          <- a runtime HEAP pointer
+
+    metaobject @0x115DE3B8
+      +0x00  0x10056e44     vtable
+      +0x04  0x00000001
+      +0x08  0x001a000b
+      +0x0c  0x00020008     typeIndex halfword = 0x0002
+      +0x10  0x00100000
+
+    r3 (the object being indexed) = 0x115de06c
+
+So the global holds a heap-allocated metaobject and the type index is 2.
+
+WHY NOTHING WRITES IT STATICALLY
+--------------------------------
+0x115DE3B8 is a heap address, in the same region as the string pool at
+0x11bda68c. The value is produced at RUNTIME. That resolves the long-running
+"nothing in 8.7M lines writes this global" finding: there was never a static
+writer to find, and the exhaustive seven-scan search was answering a question
+whose premise was wrong. The search itself was sound -- it is what proved the
+recompilation faithful and ruled out a missing function -- but "no static
+writer" is not the same as "never written", and it was read as the latter for
+most of a day.
+
+What still is not known is which instruction performs that runtime store. A
+gdb watchpoint on the address never fired in 220 s; Cemu's stub almost
+certainly has no hardware watchpoint support and gdb's software fallback
+single-steps far too slowly to reach it. Finding the writer needs a different
+instrument -- Cemu's own memory-searcher or debugger GUI, or breaking on the
+allocation that produces 0x115DE3B8.
+
+The leading explanation stays what it was: a store through a base register
+loaded from memory rather than materialised by a lis. Every scan run so far
+tracks lis-derived bases only, so such a store is invisible to all of them.
+That blind spot was recorded when the search was first done and it is still
+the open edge.
+
+WHAT CHANGED IN THE BUILD
+-------------------------
+The NULL-global fallback now substitutes typeIndex 2 rather than 0.
+
+0 was never justified -- it was picked because hardware happened to show
+index 0 resolving to a non-NULL entry, which is a very different thing from
+being right. 2 is the value the real game uses, read directly off the
+metaobject. It is still a fallback papering over an unwritten global, but it
+is now papering with the correct number.
+
+Note this will probably not move the boot on its own: the earlier experiment
+established that the index is not the deciding input for the #54 stall, which
+is now understood to be the malformed string-pool item header. It is worth
+doing anyway so the next run is not carrying a value known to be wrong.
+
+BUILD
+-----
+18:28, links clean, 174,466,425 bytes. Carries the module-range fix, the
+typeIndex-2 fallback, and the relstr/baditem probes.

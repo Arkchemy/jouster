@@ -30,9 +30,15 @@ check, at a bucket index of 0x811C9DC5 -- the raw FNV-1a basis, because
 
 WHAT THIS DOES, AND WHAT IT DOES NOT
 ------------------------------------
-When the global is NULL this substitutes typeIndex 0 instead of whatever
-happens to be lying at guest address 12. Index 0 is the one value hardware has
-already shown resolves to a real entry.
+When the global is NULL this substitutes typeIndex 2 instead of whatever
+happens to be lying at guest address 12.
+
+2 is not a guess. Cemu, broken at 0x215db88 on a healthy boot, shows the
+global holding 0x115DE3B8 -- a heap-allocated metaobject, so the value is
+written at runtime, which is why nothing static writes it -- and that
+object's typeIndex halfword at +0xc reads 0x0002. An earlier version of this
+script used 0, which was only ever "a value hardware happened to show
+resolving to a non-NULL entry".
 
 This is a probe, not a repair. The correct value is whatever metaobject that
 global is supposed to hold, and that is still unknown -- nothing in the
@@ -60,7 +66,7 @@ NEW = (
     "  if (ctx->r[12] == 0u) {\n"
     "    extern unsigned int g_arkchemy_nullmeta_hits;\n"
     "    g_arkchemy_nullmeta_hits++;\n"
-    "    ctx->r[6] = 0u;\n"
+    "    ctx->r[6] = 2u;\n"
     "  } else {\n"
     "    ctx->r[6] = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, ctx->r[12] + (int32_t)12);\n"
     "  }\n"
