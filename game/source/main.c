@@ -123,6 +123,13 @@ unsigned int g_arkchemy_sc_hits = 0, g_arkchemy_sc_pc = 0, g_arkchemy_sc_fl = 0;
 unsigned int g_arkchemy_bb_hits = 0, g_arkchemy_bb_ctrl = 0, g_arkchemy_bb_blk = 0;
 unsigned int g_arkchemy_bb_size = 0, g_arkchemy_bb_hdr[4] = {0,0,0,0};
 
+/* Storage-class registration entry probe -- see
+ * tools/probe_storage_registration.py. Bits 0..4 are the five filesystem
+ * classes the retail game registers in its first 125 and we never do; bit 5
+ * is igStorageDevice, a control that does register. */
+unsigned int g_arkchemy_storagereg_mask = 0;
+unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
+
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
 // on-screen libnx console (see main()'s own consoleInit) -- added
@@ -3351,6 +3358,7 @@ int main(int argc, char *argv[]) {
                        " -- badblock: hits=%u ctrl=0x%x blk=0x%x size=0x%x hdr=[0x%x,0x%x,0x%x,0x%x]"
                        " -- nullwrite: count=%u first_pc=0x%x addr=0x%x val=0x%x"
                        " -- zerowrite: count=%u pc=0x%x lr=0x%x addr=0x%x val=0x%x"
+                       " -- storagereg: mask=0x%02x n=[%u,%u,%u,%u,%u,%u]"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3426,6 +3434,10 @@ int main(int argc, char *argv[]) {
                        g_ppc_null_write_addr, g_ppc_null_write_val,
                        g_ppc_zero_write_count, g_ppc_zero_write_pc, g_ppc_zero_write_lr,
                        g_ppc_zero_write_addr, g_ppc_zero_write_val,
+                       g_arkchemy_storagereg_mask,
+                       g_arkchemy_storagereg_n[0], g_arkchemy_storagereg_n[1],
+                       g_arkchemy_storagereg_n[2], g_arkchemy_storagereg_n[3],
+                       g_arkchemy_storagereg_n[4], g_arkchemy_storagereg_n[5],
                        loopwatch_buf);
         }
 

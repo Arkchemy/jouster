@@ -1,0 +1,66 @@
+2026-08-29 — the frontier is the filesystem: five storage classes never register
+=================================================================================
+
+Build 20:12, with the log window widened, gives the real frontier for the
+first time:
+
+    120 registrations, last = igInternalLockableHandleMemoryPool
+    w7(appendToArkCore) hits=120        (consistent, as it always was)
+
+THE DIFF THAT MATTERS
+---------------------
+Against the retail game's own registration order, captured under Cemu by
+breaking on appendToArkCore and reading the class name at this+0x8 (965
+entries, docs/registration-order-real.txt), exactly five classes in the real
+first 125 are missing from ours:
+
+    igFile                     real #80
+    igMemoryStorageDevice      real #98
+    igMemoryStorageEntryList   real #99
+    igMemoryStorageEntry       real #100
+    igVirtualStorageDevice     real #101
+
+and the next class due after our last is igDirectory, real #126.
+
+Every one of them is filesystem or storage. Two long-standing observations
+line up with that immediately:
+
+  - our engine opens no file at all in a 120-second run, while the retail game
+    opens /vol/content/alchemy.xml as the very first thing it touches
+  - a path was built as "(null)/" -- printf's rendering of a NULL %s followed
+    by a separator, which is exactly what a missing storage device would
+    produce when something asks it for a root path
+
+The order is otherwise identical: every class we do register appears in the
+same sequence as the real game. Sequencing is correct; five specific classes
+are absent.
+
+WHAT IS ALREADY KNOWN ABOUT THEM
+--------------------------------
+All five functions exist in the recompiled output. None is called directly --
+each appears only in ppc_dispatch -- so registration is driven indirectly
+through a table of function pointers, which is also true of the classes that
+DO register.
+
+THIS BUILD (20:18)
+------------------
+    storagereg: mask=0x%02x n=[...]
+
+Bits 0..4 are the five missing classes, bit 5 is igStorageDevice as a control.
+The control matters: it registers successfully and sits at real #83, in the
+middle of the missing range, so if the driver were simply stopping early it
+would be missing too.
+
+  mask bits 0..4 all clear  -> the driver never reaches them; the table entry
+                               is absent or the loop that walks it skips them,
+                               and the classes themselves are irrelevant
+  bits set but no
+  registration logged       -> the functions run and fail partway, so the
+                               fault is inside them or in what they depend on
+
+Those two need completely different fixes, which is why this is measured
+rather than guessed.
+
+BUILD
+-----
+20:18, links clean, 174,548,345 bytes.
