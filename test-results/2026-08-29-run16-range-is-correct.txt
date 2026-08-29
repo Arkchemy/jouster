@@ -1,0 +1,50 @@
+2026-08-29 (run 16) — the pool range is fine; the list storage is garbage
+=========================================================================
+
+ZERO-BOUNDS THEORY DEAD
+-----------------------
+    poolRangeLo=0x183190  poolRangeHi=0x70b990   (every bad call)
+
+Both bounds are real, sensible addresses. igCafeSystemMemory::__ct__ ran and
+published the string pool's address range correctly, so the range test in
+igStringRefList::setAll is working exactly as intended. My "the constructor
+never ran or computed zeroes" hypothesis is wrong.
+
+WHAT THAT LEAVES, AND IT IS TIGHTER
+------------------------------------
+setAll's release path, fully traced:
+
+    2162db0: r12 = load(r31)          ; old string in this slot
+    2162db4: cmpwi r12, 0
+    2162db8: beq -> 2162de0           ; NULL is handled, skipped harmlessly
+             range test on r12         ; correct bounds, r12 is outside them
+    2162dd4: r3 = load(r12 - 12)      ; container = *(str - 12)
+    2162ddc: internalRelease(...)     ; -> tail-call releaseString(pool=0)
+
+The decisive detail is the null check at 2162db8. If the list's element
+storage were zeroed, r12 would be 0, the branch would skip, and none of this
+would happen. So the storage is not zeroed -- it holds values that are neither
+null nor valid string pointers, and *(garbage - 12) is the garbage container
+the probe reported (0, 0x194, 0x3).
+
+RULED OUT THIS RUN
+------------------
+- Missing shim: zero unhandled stubs hit in the whole run.
+- Absent memset: the coreinit memset shim exists (cafeos_coreinit_libc.h:40).
+- The setCount_* / constructInstance_* loopwatch slots all read hits=0, but
+  that is NOT evidence: those probe patches are not applied to the current
+  tree, so the sinks in main.c are simply never written. An inert instrument
+  reading zero looks identical to a measured zero, which is the third time
+  today that shape of thing has come up.
+
+NEXT RUN ANSWERS
+----------------
+New probe at the release site reports the list's own shape -- its address, its
+count field (+8), the slot being written, and the garbage value found there.
+
+  count absurd    -> the list believes it has more elements than it does, and
+                     setAll walks off the end of real data into uninitialised
+                     memory. The bug is in whatever set that count.
+  count sane      -> the storage itself was handed out without being zeroed,
+                     and the bug is in the allocation/growth path that should
+                     have cleared it.
