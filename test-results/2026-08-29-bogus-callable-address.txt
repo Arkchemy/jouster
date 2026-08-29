@@ -1,0 +1,52 @@
+2026-08-29 — the 278,093 bad dispatches: a data relocation resolved as code
+============================================================================
+
+Build 21:29 gave the caller, which the previous probe could not:
+
+    dispatchmiss: n=278093 addr=0x700370 pc=0x2583d98 lr=0x257cf38
+
+lr 0x257cf38 is inside Core __gh_vsprintf -- Green Hills' vsprintf, calling
+through a function pointer. That is the same machinery that produced the
+"(null)/" string earlier in the day.
+
+Both pc and lr need reading with care here. vsprintf calls _savegpr_14_l at
+entry, and g_ppc_current_pc is set at function ENTRY and never restored on
+return, so by the time the miss happens it still names the helper. lr is the
+return address from that same helper call. Neither points at the bctrl itself;
+what they do establish is that execution was inside vsprintf.
+
+THE ACTUAL FAULT
+----------------
+0x700370 is a synthetic data address. Working backwards from an emitted
+example: value 7320928 annotated ".text+5735376", and 7320928 - 5735376 =
+1585552, the synthetic base assigned to .text. So a data relocation naming
+.text was resolved against a SYNTHETIC base.
+
+Text keeps its real addresses in generated code; only data sections are moved
+into synthetic space. The correct resolution is the real text base plus the
+addend: 0x2000020 + 5735376 = 0x257CF30 -- inside .text, and immediately
+beside __gh_vsprintf, which is exactly what was calling it.
+
+FIXED, AND BOUNDS-CHECKED
+-------------------------
+These now resolve against section_real_addr[".text"], and anything that does
+not land inside .text is skipped and counted rather than emitted. A wrong
+pointer here is CALLED, so a silently wrong callable address is far worse than
+a null one.
+
+Verified by measuring the output, not by reasoning about it -- twice during
+this sequence the branch was believed to be firing when it was not:
+
+    pointer values inside real .text                    : 33,260
+    pointer values in the bogus synthetic-callable band :      0
+
+WHERE THE BOOT IS
+-----------------
+    registration 99, last = igMemoryStorageEntry (real #100)
+    mem: fail=0
+    full 7200 frames, no early exit
+    igFile and igVirtualStorageDevice still missing; the latter is next due
+
+BUILD
+-----
+21:38, links clean, 174,769,529 bytes.
