@@ -1,0 +1,59 @@
+2026-08-29 — the driver runs 1,163 times and dispatches 318 entries
+====================================================================
+
+Build 22:42:
+
+    drv: n=318 sawIgFile=0 calls=1163 maxlist=0
+    igfile: mask=0x38          (control's chain runs, igFile's never entered)
+    registration 124, dispatchmiss n=74,712 all addr=0x0
+
+A PROBE ERROR, FIRST
+--------------------
+maxlist=0 is not a finding, it is the probe being wrong. It read the list
+count from r3+4 at the driver's ENTRY, but r3 there is igMetaObject*&, not the
+list. The real code obtains the list by CALLING r4:
+
+    215b958: mtctr r29        ; r29 = r4, the list-getter
+    215b95c: bctrl            ; call it -- list returned in r3
+    215b960: or. r26, r3, r3  ; NULL check
+    215b964: beq 0x215ba84    ; nothing to walk, bail
+    215b968: lwz r27, 4(r3)   ; count, from the RESULT
+
+So the count had to be read after the call, not before. Recording this because
+a zero from a probe pointed at the wrong register looks exactly like a zero
+from the program.
+
+WHAT IS A REAL FINDING
+----------------------
+    calls = 1,163      the driver runs 1,163 times
+    n     =   318      it dispatches 318 entries in total
+
+That is 0.27 entries per call. One retail list alone holds 21. So the
+overwhelming majority of calls dispatch nothing at all, which is what happens
+when the list-getter at 0x215b95c returns NULL and the beq at 0x215b964 bails
+before any walking.
+
+That fits the dispatch-miss counter exactly: 74,712 misses, every one to
+addr=0x0. A NULL through mtctr/bctrl is silently ignored, the caller carries
+on as if the call happened, and r3 still holds whatever it held.
+
+THIS BUILD (22:46)
+------------------
+    drv: n=%u sawIgFile=%u calls=%u gotlist=%u maxlist=%u nullgetter=%u
+
+  nullgetter  how many times r4, the list-getter pointer, is NULL at entry
+  gotlist     how many calls get past the NULL check to read a count
+  maxlist     the largest count seen, now read where the program reads it,
+              comparable to the retail 21
+
+  nullgetter high        -> the callers are passing a null function pointer,
+                            so the fault is in whatever supplies it
+  nullgetter 0, gotlist
+  far below calls        -> the pointer is fine but the call returns nothing,
+                            so the getter itself fails or its dispatch misses
+  gotlist high, maxlist
+  small                  -> lists are being built but come out short
+
+BUILD
+-----
+22:46, links clean, 175,940,985 bytes.
