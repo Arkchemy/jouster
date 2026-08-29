@@ -74,7 +74,13 @@ static ArkBink g_bink[ARK_BINK_MAX];
 /* A small slab of guest memory for the BINK structs we hand back as handles.
  * Deliberately high in the arena, clear of the game's own heaps: MEM2's
  * ExpHeap bump had reached about 12MB in every run measured. */
-#define ARK_BINK_SLAB 0x24000000u
+/* Moved 2026-08-29 from 0x24000000, which sat INSIDE the MEM2 sbrk arena
+ * (0xB400000..0x3E000000) and only survived because the arena had never grown
+ * that far. Enlarging the ExpHeap made that a real collision waiting to
+ * happen. MEM2 ends at 0x3E000000 and guest memory at 0x40000000, so this sits
+ * in the 32MB above everything; the slab needs a few KB per handle and the
+ * frame planes about 2.7MB. */
+#define ARK_BINK_SLAB 0x3E000000u
 static uint32_t g_slab_next = ARK_BINK_SLAB;
 
 static ArkBink *slot_for(uint32_t handle) {

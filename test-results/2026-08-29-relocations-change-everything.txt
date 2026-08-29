@@ -1,0 +1,66 @@
+2026-08-29 — data relocations land: every old symptom goes to zero
+===================================================================
+
+Build 20:55, the first with .rela.rodata and .rela.data applied.
+
+EVERY SYMPTOM WE HAD BEEN CHASING IS NOW ZERO
+---------------------------------------------
+    tlsf: tripped=0                 (was 393)
+    zerowrite: count=0              (was 200)
+    nullmeta_fallbacks=0            (was 26)
+    relstr: calls=0 bad=0           (was 149 / 1)
+    storagereg: mask=0x00           (control no longer even needed)
+    regchain=0x00
+    sizeclass hits=0, badblock hits=0, tlsfh seen=0
+    dispatchmiss: n=6               (was 187)
+    regglobal_loadvalue last=0x4405328   (was 0x0)
+
+That last one matters most. The metaobject global that took most of a day to
+chase, and that "nothing in 8.7M lines writes", now reads a real pointer. It
+was always written -- by a relocation the loader never read.
+
+The workarounds built on top of those symptoms are gone with them, and
+deliberately were not forced back in after regeneration: the typeIndex-2
+fallback fires 0 times and the module-range low-bound patch no longer matches
+its site. Both were compensating for pointers that should have come from data
+relocations.
+
+A DIFFERENT DEATH, AND A BETTER ONE
+-----------------------------------
+The run ends at frame 2760 rather than running the full 7200, and for the
+first time it is not a hang:
+
+    mem: fail=1
+    MEMAllocFromExpHeapEx (out of space) requested=180355080
+        heap_base=0x4000000 heap_size=121634816 heap_used=12585476
+
+The game asked for 180,355,080 bytes -- 172MB -- from a 116MB heap. That is
+the first genuine allocation failure this project has produced, and it is a
+sign of progress: the engine is now getting far enough to make real
+allocations of a real size. On a Wii U, MEM2 is 2GB and a 172MB engine pool is
+unremarkable.
+
+Registration reads 96 rather than 120, which is not a regression to be
+explained away -- the two numbers are not measuring the same thing. The run
+ended at frame 2760 instead of 7200, so it had less than half the time, and
+the type indices now come back varied and plausible (8, 3, 10, 36 for igQueue,
+igRawRefList, SaveFlushInfoMetaField, igCafeStorageDevice) where they used to
+be 2 and 3 almost exclusively. igCafeStorageDevice registering at all is new.
+
+THIS BUILD (21:18)
+------------------
+ARKCHEMY_MEM2_EXPHEAP_SIZE goes from MEM2_SIZE/8 to MEM2_SIZE/2:
+
+    MEM2      0x04000000 .. 0x3E000000   928 MB
+      ExpHeap 0x04000000 .. 0x21000000   464 MB   (was 116 MB)
+      arena   0x21000000 .. 0x3E000000   464 MB
+      bink    0x3E000000 .. 0x40000000    32 MB
+
+Also moves the Bink slab out of the arena. It sat at 0x24000000, inside
+0xB400000..0x3E000000, and only survived because the arena had never grown
+that far; enlarging the ExpHeap turned that into a collision waiting to
+happen. It now sits above MEM2 entirely.
+
+BUILD
+-----
+21:18, links clean, 174,769,529 bytes.
