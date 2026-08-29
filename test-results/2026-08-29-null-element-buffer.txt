@@ -1,0 +1,56 @@
+2026-08-29 — the object has nowhere to be constructed
+======================================================
+
+Build 23:26, with the dispatch miss finally recording ctx->lr:
+
+    dispatchmiss: n=74730 addr=0x0 pc=0x214d258 lr=0x2160d88 this=0x0 vt=0x0
+
+lr moved from 0x2160d64 to 0x2160d88 the moment it was read from the right
+place. The old value pointed at a field-array loop that a purpose-built probe
+had already shown was never involved; the new one is exact, because every
+emitted bctrl writes its own return address into ctx->lr on the line above the
+dispatch.
+
+THE REAL SITE
+-------------
+0x2160d88 is the instruction after the bctrl at 0x2160d84, in
+Core::igMetaObject::createInstanceInPlace:
+
+    2160d78: mtctr r8       ; a vtable slot
+    2160d7c: mr    r3, r31  ; this = the new object
+    2160d80: li    r4, 1
+    2160d84: bctrl          ; virtual call with argument 1
+
+this=0, and r31 is not something computed inside the function:
+
+    2160cc0: mr r31, r4     ; createInstanceInPlace(meta, void* mem, pool)
+
+r31 IS the second argument. So `mem` is null.
+
+WHAT THAT CHANGES
+-----------------
+The object is not failing to construct. There is nowhere to construct it. Every
+one of the 27 callers is an igTPool<T>::constructElement(unsigned char*,
+igMemoryPool*) template instantiation, so a pool is handing out a null element
+buffer.
+
+This is NOT the Cafe OS heap. The harness reports mem fail=0 for the whole
+run, and MEMAllocFromExpHeapEx has not failed since the ExpHeap was raised to
+464MB. This is the engine's own igMemoryPool layer returning nothing.
+
+THIS BUILD (23:31)
+------------------
+Instrumenting all 27 constructElement instantiations would be the obvious move
+and the wrong one -- they funnel through a single function whose first
+argument is the metaobject, whose name pointer is at +0x8, the same offset the
+registration log reads. One patch names the type:
+
+    nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name="%s"
+
+  lr    the specific constructElement instantiation, identifying T
+  pool  the igMemoryPool that produced nothing
+  name  the class whose instance could not be placed
+
+BUILD
+-----
+23:31, links clean, 175,940,985 bytes.

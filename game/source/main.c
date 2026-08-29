@@ -144,6 +144,12 @@ unsigned int g_arkchemy_frontier_mask = 0;
 unsigned int g_arkchemy_nf_hits = 0, g_arkchemy_nf_meta = 0;
 unsigned int g_arkchemy_nf_n = 0, g_arkchemy_nf_nulls = 0;
 char g_arkchemy_nf_name[64] = {0};
+/* First createInstanceInPlace call with a null element buffer -- see
+ * tools/probe_null_instance_buffer.py. Distinct from the Cafe OS heap: the
+ * harness reports mem fail=0, so this is the engine's own pool allocator. */
+unsigned int g_arkchemy_ni_hits = 0, g_arkchemy_ni_lr = 0;
+unsigned int g_arkchemy_ni_meta = 0, g_arkchemy_ni_pool = 0;
+char g_arkchemy_ni_name[64] = {0};
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
  * no longer defined here. */
@@ -3419,6 +3425,7 @@ int main(int argc, char *argv[]) {
                        " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
+                       " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3504,6 +3511,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
+                       g_arkchemy_ni_hits, g_arkchemy_ni_lr, g_arkchemy_ni_meta,
+                       g_arkchemy_ni_pool, g_arkchemy_ni_name,
                        loopwatch_buf);
         }
 
