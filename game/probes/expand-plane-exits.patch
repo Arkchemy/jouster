@@ -1,0 +1,31 @@
+--- a/generated_0136.c
++++ b/generated_0136.c
+@@ ExpandPlane -- the two exits from the block loop @@
+ The decode stops after a whole number of macroblock rows -- measured 32, 32,
+ 48 luma rows of 720, all exact multiples of 16 -- and the count VARIES between
+ frames, which rules out a fixed dimension or stride error and points at the
+ decoder running out of something.
+
+ The loop at 2379aac has exactly two exits:
+
+     2379ab0  bge   block counter exhausted   (normal end of plane)
+     2379ac0  bge   cur >= end                (ran out of bitstream)
+
+ Instrument both so the log says which one fires, and with what pointers.
+
+   /* 2379ab0: bge 0x237b9e8 */
++  if ((ctx->cr0_gt || ctx->cr0_eq)) {
++      static uint32_t n1 = 0;
++      if (++n1 <= 4u) arkchemy_probe4("EXPAND_END_BLOCKS", "r10", ctx->r[10],
++                                      "r19", ctx->r[19], "n", n1, "z", 0);
++      goto L_237b9e8;
++  }
+
+   /* 2379ac0: bge 0x237b9e8 */
++  if ((ctx->cr0_gt || ctx->cr0_eq)) {
++      static uint32_t n2 = 0;
++      if (++n2 <= 4u) arkchemy_probe4("EXPAND_END_BITSTREAM", "cur", ctx->r[9],
++                                      "end", ctx->r[5], "blocks_r10", ctx->r[10],
++                                      "total_r19", ctx->r[19]);
++      goto L_237b9e8;
++  }
