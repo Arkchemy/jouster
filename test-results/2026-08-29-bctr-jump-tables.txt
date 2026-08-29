@@ -1,0 +1,64 @@
+2026-08-29 — 81 jump tables were silently doing nothing
+========================================================
+
+REVERT CONFIRMED (build 22:10)
+------------------------------
+    build   registrations  misses     poolrange A   frames
+    21:46   99             109,248    0x2000020     7140
+    22:03    0             293,840    0x0           7140
+    22:10   99             110,979    0x2000020     7140
+
+The revert restored the good state exactly. mem: fail=0, full run.
+
+THE REMAINING BLOCKER, IDENTIFIED
+---------------------------------
+110,979 unresolved dispatches, all to 0x257d200. That address is inside
+__gh_vsprintf, and the instructions there are:
+
+    257d1f8: b 0x257d3d8
+    257d1fc: b 0x257d3d8
+    257d200: b 0x257d3bc     <- the address being "called"
+    257d204: b 0x257d3d8
+
+A run of unconditional branches: a computed jump table, printf's conversion
+switch. It is reached from:
+
+    257d1b0: mtctr r11
+    257d1b4: bctr
+
+bctr with no link is an intra-function jump, not a call. conquertron emitted it
+as ppc_dispatch, which only knows function ENTRY points, so a jump into the
+middle of a function matches nothing and silently returns. The switch did
+nothing, 110,979 times in two minutes.
+
+The gap was documented in codegen's own comment for PPC_INS_BCTR: "an
+intra-function jump-table use ... isn't representable this way -- a known gap,
+not yet seen needing it." It is seen needing it now.
+
+THE FIX
+-------
+The table is the contiguous run of unconditional branches immediately after the
+bctr. Entry at address A holds `b X`, so ctr == A means goto X, and X already
+has a label because it is a branch target.
+
+    switch (ctx->ctr) {
+      case 39285912u: goto L_2577790;
+      case 39285916u: goto L_2577658;
+      ...
+    }
+    ppc_dispatch(ctx, ctx->ctr);   /* unchanged fallback */
+
+Requires two or more entries, so an ordinary tail call followed by one stray
+branch is not mistaken for a table, and keeps ppc_dispatch afterwards, so this
+only ADDS cases and genuine tail calls are unaffected.
+
+    81 tables across the binary, 1,651 cases.
+
+Worth noting this is the SECOND time this exact failure has surfaced. Computed
+jump tables emitted as indirect calls were found and fixed once already for
+bctrl. Silent no-ops are hard to notice precisely because nothing reports
+them -- which is also why ppc_dispatch now counts what it cannot resolve.
+
+BUILD
+-----
+22:23, links clean, 175,936,889 bytes.
