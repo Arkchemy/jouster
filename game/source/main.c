@@ -996,12 +996,20 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     for (f = 0; f < total; f++) {
         uint32_t set = info + VID_FB_FRAMES + f * VID_PLANESET_SIZE;
         for (p = 0; p < 4u; p++) {
+            /* Plane layout, read off the raw struct dump rather than taken
+               from documentation: {Allocate, Buffer, BufferPitch}, NOT
+               {Buffer, Allocate, BufferPitch}. The dump showed the 1 at
+               plane+0 (24:1 36:1 48:1 60:0 -- Y, cR, cB allocated, no alpha),
+               so reading Allocate at +4 found a zero every time and skipped
+               every plane. BufferPitch comes back 0 as well, so the caller
+               supplies it; Y and A are full width, chroma is half. */
             uint32_t plane = set + p * 12u;
-            uint32_t alloc = ppc_load_u32(&g_ctx, plane + 4u);
-            uint32_t pitch = ppc_load_u32(&g_ctx, plane + 8u);
+            uint32_t alloc = ppc_load_u32(&g_ctx, plane + 0u);
+            uint32_t pitch = (p == 0u || p == 3u) ? yaw : cw;
             uint32_t rows  = (p == 0u || p == 3u) ? yah : ch;
-            if (!alloc || !pitch) { ppc_store_u32(&g_ctx, plane + 0u, 0); continue; }
-            ppc_store_u32(&g_ctx, plane + 0u, pool);
+            if (!alloc) { ppc_store_u32(&g_ctx, plane + 4u, 0); continue; }
+            ppc_store_u32(&g_ctx, plane + 4u, pool);   /* Buffer */
+            ppc_store_u32(&g_ctx, plane + 8u, pitch);  /* BufferPitch */
             pool += (pitch * rows + 0xFFu) & ~0xFFu;
         }
     }
@@ -1026,11 +1034,11 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
         if (cur >= total) cur = 0;
         set = info + VID_FB_FRAMES + cur * VID_PLANESET_SIZE;
 
-        y_addr  = ppc_load_u32(&g_ctx, set + 0u);
-        y_pitch = ppc_load_u32(&g_ctx, set + 8u);
-        cr_addr = ppc_load_u32(&g_ctx, set + 12u);
-        cb_addr = ppc_load_u32(&g_ctx, set + 24u);
-        c_pitch = ppc_load_u32(&g_ctx, set + 20u);
+        y_addr  = ppc_load_u32(&g_ctx, set + 4u);    /* YPlane.Buffer  */
+        y_pitch = ppc_load_u32(&g_ctx, set + 8u);    /* YPlane.Pitch   */
+        cr_addr = ppc_load_u32(&g_ctx, set + 16u);   /* cRPlane.Buffer */
+        cb_addr = ppc_load_u32(&g_ctx, set + 28u);   /* cBPlane.Buffer */
+        c_pitch = ppc_load_u32(&g_ctx, set + 20u);   /* cRPlane.Pitch  */
 
         if (played == 0) {
             checkpoint("[video] frame 0: set=%u Y=0x%x pitch=%u cR=0x%x cB=0x%x cpitch=%u",
