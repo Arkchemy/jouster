@@ -83,6 +83,20 @@ static volatile bool g_static_init_done = false;
  * site. */
 unsigned int g_arkchemy_nullmeta_hits = 0;
 
+/* PROBE state -- see tools/probe_releasestring_caller.py. The boot hangs in
+ * igStringPool::remove because releaseString is handed a "pool" that is
+ * actually item+0xc, the item's own inline string buffer. releaseString has
+ * ten call sites and g_ppc_last_caller_lr is clobbered before the hang, so
+ * the guilty one is captured here instead. first_bad_lr is the return address
+ * inside that caller. */
+unsigned int g_arkchemy_relstr_calls = 0;
+unsigned int g_arkchemy_relstr_bad = 0;
+unsigned int g_arkchemy_relstr_first_bad_lr = 0;
+unsigned int g_arkchemy_relstr_last_lr = 0;
+unsigned int g_arkchemy_relstr_pool = 0;
+unsigned int g_arkchemy_relstr_item = 0;
+unsigned int g_arkchemy_relstr_cont = 0;
+
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
 // on-screen libnx console (see main()'s own consoleInit) -- added
@@ -3301,6 +3315,7 @@ int main(int argc, char *argv[]) {
                        " -- cur_mem_ctx(.data+5336)=0x%x boot_heap_handle=0x%x"
                        " -- report_fmt=\"%s\" append_str=\"%s\""
                        " -- nullmeta_fallbacks=%u"
+                       " -- relstr: calls=%u bad=%u first_bad_lr=0x%x last_lr=0x%x pool=0x%x item=0x%x cont=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3340,6 +3355,9 @@ int main(int argc, char *argv[]) {
                        ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR),
                        report_fmt_str, append_str_str,
                        g_arkchemy_nullmeta_hits,
+                       g_arkchemy_relstr_calls, g_arkchemy_relstr_bad,
+                       g_arkchemy_relstr_first_bad_lr, g_arkchemy_relstr_last_lr,
+                       g_arkchemy_relstr_pool, g_arkchemy_relstr_item, g_arkchemy_relstr_cont,
                        loopwatch_buf);
         }
 

@@ -1,0 +1,86 @@
+2026-08-29 — the typeIndex experiment: clean negative, and the real pointer bug
+===============================================================================
+
+Build Aug 29 16:55. 7200 frames.
+
+THE EXPERIMENT DID EXACTLY WHAT IT WAS ASKED TO
+------------------------------------------------
+nullmeta_fallbacks=26, and every SETCAP_REG probe in the run now reads:
+
+    index=0x0  entry=0x440504c   <- valid, all 8 of them
+
+The 540 and 1184 lookups that returned NULL in the previous run are gone
+entirely. The registry lookup in igDataList::setCapacity now succeeds every
+single time.
+
+AND THE BOOT IS UNCHANGED
+-------------------------
+    registration still stops at #54 igStringRefList
+    calls frozen at 34967 (was 35221)
+    last_pc=0x21a55cc  r5=0x811c9dc5  r6=0x3ffff920   -- identical
+
+Same function, same bucket index, same wrapped pointer. That is outcome 3 of
+the three written down before the run: the theory is wrong and the type index
+is not the deciding input.
+
+The NULL global is real and the exhaustive search that found it stands. It is
+simply not what blocks the boot. Two days of work funnelled into it on the
+strength of a plausible-looking chain, and one deliberately falsifiable build
+settled it in one run. Worth remembering next time a chain looks airtight.
+
+WHAT THE RUN ACTUALLY SHOWS
+---------------------------
+The registers at the hang name the real bug:
+
+    r3 (pool) = 0x4400204
+    r4 (item) = 0x44001F8       0x44001F8 + 0xc == 0x4400204
+
+igStringPoolItem stores its characters inline at +0xc -- searchForString
+reaches them as `addic. r12, r11, 0xc`, and releaseString's own caller passes
+the string as `addi r4, r31, 0xc`. So the "pool" pointer is the item's own
+string buffer. It was never a pool.
+
+Everything downstream follows from that one bad pointer:
+
+    +0x1c read as bucketCount  -> 0
+    hash % 0                   -> hash, i.e. 0x811C9DC5 unreduced
+                                  (real PowerPC divwu-by-zero does the same,
+                                  so this is data, not the codegen guard)
+    +0xc read as the buckets   -> garbage
+    remove() walks ->next with no NULL check and no bounds check
+    the guest-memory mask wraps the pointer instead of faulting
+    -> silent two-minute hang instead of a crash with a usable address
+
+The string is also empty: the index is EXACTLY the FNV-1a basis, so the mixing
+loop at 21a5504 never ran a single iteration.
+
+WHY THE PROBE IN THE NEXT BUILD IS SHAPED THIS WAY
+--------------------------------------------------
+releaseString(this=pool, item, container) receives the bogus pool as an
+argument, so the mistake is its CALLER's. There are ten call sites in
+generated_0161.c alone, and g_ppc_last_caller_lr is overwritten by the calls
+releaseString makes before it hangs, so nothing in the current log can say
+which.
+
+The watch slots cannot answer it either: all 8 are in use, two of them (w0,
+w2) are what recover the engine's error text and the header warns against
+evicting them, the slot struct has no lr field, and adding one means
+regenerating 8.7M lines.
+
+tools/probe_releasestring_caller.py instruments the single function instead.
+It records the first call where pool == item + 0xc and keeps that lr -- the
+return address inside the guilty caller, which pins the call site exactly.
+New frame field:
+
+    relstr: calls=N bad=N first_bad_lr=0xADDR last_lr=0x... pool=0x... item=0x... cont=0x...
+
+first_bad_lr is the whole point. One run should name the caller outright.
+
+The nullmeta fallback is kept, deliberately: it demonstrably does not change
+the outcome, and it removes a genuinely random input (whatever happens to be
+lying at guest address 12) from every future run, which makes the next
+experiments reproducible. It is still a probe, not a repair.
+
+BUILD
+-----
+17:06, links clean, 174,466,425 bytes.
