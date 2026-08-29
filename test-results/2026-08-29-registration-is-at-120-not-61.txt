@@ -1,0 +1,72 @@
+2026-08-29 — the boot is at class 120, not 61: a probe window misread as a stall
+=================================================================================
+
+THE MISREADING
+--------------
+The registration log prints from a hard-coded window in the probe:
+
+    if (n_reg > 45u && n_reg < 62u) { ... }
+
+So it logs classes 46..61 and nothing after. For several builds "registration
+stops at 61" was reported, put in commit messages, in the README, on the
+website and in Notion. It was the window closing, not the boot stopping.
+
+appendToArkCore's own hit count was on every frame line the entire time:
+
+    w7(appendToArkCore) hits=120
+
+120, not 61. And before the typeIndex-2 fix it read 54. So that fix took
+registration from 54 classes to 120 -- roughly doubling it -- rather than the
+54 -> 61 that was reported. The evidence was in the same line of the same log
+that was being read each round.
+
+Widened to log the first 200 and then every 25th, so the frontier is visible
+without flooding the file.
+
+WHERE THE BOOT ACTUALLY IS
+--------------------------
+Real registration order, captured from the retail game under Cemu by breaking
+on appendToArkCore and printing the class name at this+0x8 (965 entries
+captured before the run was cut; see docs/registration-order-real.txt):
+
+    116 igHandlesPool
+    117 igHandleMetaField
+    118 igNamespaceHashHandleTable
+    119 igObjectHandleTable
+    120 igHandleRedirectPool     <- roughly where we are
+    121 igHandleRedirect
+    122 igMemoryHandleContext
+
+Our order matches the real one exactly through the whole logged range, so the
+sequencing is right; it is depth that is missing. The frontier is the handle
+system, not the metafield classes.
+
+WHAT THE NULL-WRITE MITIGATION DID
+----------------------------------
+Cleanly removed the corruption cascade, and did not move the boot:
+
+    sizeclass hits   2  -> 0
+    tlsfh seen      52  -> 0
+    badblock hits    1  -> 0
+    zerowrite      200  -> 98
+    registration   120  -> 120   (unchanged)
+    calls       393,647 -> 393,889 (unchanged)
+
+That is worth keeping regardless: three downstream symptoms are gone and the
+next real failure will not be buried under low-memory damage. But it is not
+progress in itself, and saying otherwise would have been wrong.
+
+THE REMAINING TLSF SPIN
+-----------------------
+    tlsf: tripped=393 ctrl=0x45002e0 nodes=[0x11f788,0x0,0x0,0x0,0x0,0x0]
+
+The head is valid now, but the chain reaches 0x11f788 -- inside static data
+(synthetic 8192..1585552), not the pool [0x45002E0, 0x4A002E0) -- and that
+"block" has ->next = 0, so the walk spins on zero. A pointer that was never
+heap memory is linked into the free list. The 1,000,000-iteration bail-out
+neutralises it, which is why execution continues to ~394k calls.
+
+BUILD
+-----
+20:12, links clean, 174,548,345 bytes. Only the log window changed, so the
+next run reports the true frontier.
