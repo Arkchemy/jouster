@@ -1060,8 +1060,9 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                 if (y0) s0 += ppc_load_u32(&g_ctx, y0 + k);
                 if (y1) s1 += ppc_load_u32(&g_ctx, y1 + k);
             }
-            checkpoint("[video] frame %d: BinkDoFrame ret=%u (1 = SKIPPED) Ysum[set0]=0x%x Ysum[set1]=0x%x",
-                       played, (unsigned)ret, (unsigned)s0, (unsigned)s1);
+            checkpoint("[video] frame %d: BinkDoFrame ret=%u Ysum[set0]=0x%x Ysum[set1]=0x%x fsReads=%u bytes=%u",
+                       played, (unsigned)ret, (unsigned)s0, (unsigned)s1,
+                       (unsigned)g_arkchemy_fs_read_calls, (unsigned)g_arkchemy_fs_read_bytes);
         }
 
         cur = ppc_load_u32(&g_ctx, info + VID_FB_FRAMENUM);
