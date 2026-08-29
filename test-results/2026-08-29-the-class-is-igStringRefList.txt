@@ -1,0 +1,63 @@
+2026-08-29 — the boot dies validating igStringRefList
+======================================================
+
+THE NAMED BLOCKER
+-----------------
+    #48  igMemoryPoolFrameManager
+    #49  igObjectList
+    #50  igMemoryPoolFrameList
+    #51  igMemoryPoolFrame
+    #52  igMemoryPoolList
+    #53  igPoolHandleTable
+    #54  igStringRefList     <- registers, then hangs in its own validate
+
+igArkRegister runs the same three steps for every class:
+
+    215f144..228   field loop
+    215f248        bctrl -> appendToArkCore     (the registration counter)
+    215f258        igMetaObject::validate
+
+So igStringRefList registers successfully and then stalls inside validate,
+which is where setMetaFieldBasicPropertiesAndValidateAll lives -- the function
+every trace has ended in for two days.
+
+The neat part: igStringRefList is precisely the class whose setAll walks a
+list with a count and no buffer. The boot dies validating the metadata of the
+very class whose method it then dies inside.
+
+THE CIRCULARITY, STATED HONESTLY
+---------------------------------
+Validating class 54 performs a registry lookup that comes back NULL, and the
+indices seen there are 540 and 1184 -- far beyond the 54 classes registered so
+far. On the face of it, class 54's validation depends on classes that have not
+been registered yet, which cannot be how the real machine works.
+
+Two readings, and the evidence does not yet separate them:
+
+  a) Ordering. On real hardware every class registers before any is validated,
+     so the lookup always succeeds. Something about how this build reaches
+     registration interleaves the two.
+  b) The index is not a class index at all. igStringRefList's own typeIndex
+     reads 3, and igMemoryPoolFrame's reads 2, so the small numbers are class
+     indices -- which makes 540 and 1184 something else entirely, and the
+     assumption that this table is "the class registry" is unproven.
+
+Reading (b) is the one I have been quietly assuming for two days without
+checking, and it deserves testing first: the table comes from a virtual call's
+result at +0x14 and the index from a global's +0xc, neither of which has been
+identified.
+
+WHAT IS NO LONGER TRUE
+----------------------
+"Registry index 540 is never populated" was recorded as a finding and treated
+as a root cause. It is neither. Only 54 of 1007 classes ever register, so
+index 540 being empty is a consequence, not a cause -- and every layer chased
+below it (setCapacity, the count-without-buffer list, setAll walking low
+memory, the garbage container, igStringPool::remove spinning on 0x811C9DC5)
+was downstream of a single fact that a counter could have shown at any point.
+
+WHERE THE PROJECT STANDS
+------------------------
+Video is finished: 720 of 720 luma rows through the game's own Bink API, via
+a native shim rather than the recompiled decoder. The engine still never
+reaches video, and the reason is this one class.
