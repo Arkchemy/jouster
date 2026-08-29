@@ -1,0 +1,79 @@
+2026-08-29 — the null writes are systemic, and the allocator was collateral
+============================================================================
+
+Build 19:51 on hardware:
+
+    zerowrite: count=200 pc=0x215c464 lr=0x21af4b0 addr=0x4 val=0xffffffff
+    nullwrite: count=327 first_pc=0x2579828 addr=0x68a val=0x0
+
+THE WRITER, NAMED
+-----------------
+    pc 0x215c464 = Core::igObject::decrementRefCount() const
+    lr 0x21af4b0 = Core::igStringMetaField::arkRegisterInitialize()
+
+decrementRefCount is called on a NULL object, so `this->refcount` at +4 is
+guest address 4, and 0 - 1 writes 0xFFFFFFFF there. 200 times in two minutes.
+
+Adding lr to the trap is what made this readable. The previous run attributed
+the first low write to _main, which is merely where execution was; the entry
+PC names the innermost function entered, not the storing instruction, and for
+a shared helper like decrementRefCount that is useless on its own.
+
+WHERE THE NULL COMES FROM
+-------------------------
+    21af440: lis  r31, 0x1013
+    21af454: lwz  r31, 0x4690(r31)   ; r31 = *(0x10134690)
+    21af45c: mr   r3, r31
+    21af460: bl   0x21600a0          ; called with this = *global
+    21af464: mr   r30, r3            ; NULL result
+    21af4ac: bl   decrementRefCount  ; on that NULL
+
+Same family as the metaobject global at 0x101345E8 that consumed most of a day
+earlier. And it is not two globals, it is a population:
+
+    distinct .bss globals loaded via a folded base : 1704
+    of those, NEVER stored through a folded base   : 1335
+    total reads of never-written globals           : 6842
+
+WHAT THAT ACTUALLY MEANS
+------------------------
+Cemu showed 0x101345E8 holding 0x115DE3B8, a runtime heap pointer. These
+globals are slots that registration fills in as each class registers. We
+complete 61 of roughly 1007, so the overwhelming majority are still 0 simply
+because their class has not registered yet.
+
+So the null writes are not an independent bug. They are what running the
+engine with nine-tenths of its type system unregistered looks like, and the
+TLSF corruption is two steps downstream of that. Chasing the allocator further
+would have been chasing collateral damage.
+
+The single real bug remains the one being worked on: registration stops at 61.
+
+MITIGATION IN THIS BUILD (19:59)
+--------------------------------
+conquertron now DROPS stores into the first 16 bytes rather than performing
+them. A store there is a null dereference; on hardware it faults and the
+program stops at the bug, while under the mask it silently corrupts low memory
+and surfaces somewhere unrelated much later.
+
+Dropping is not "correct" -- nothing is correct once a null pointer is being
+written through -- but it is strictly closer to hardware than corrupting
+memory, and it stops one bug becoming three. All three links here were
+measured, not supposed:
+
+    decrementRefCount(NULL)        -> 0xFFFFFFFF at address 4
+    a formatted "(null)/"          -> bytes at address 0
+    tlsf_free reads address 0      -> ASCII as a 1.8 GiB block size
+                                   -> size class 24 against a valid 0..23
+                                   -> poisoned bitmap, searches spin forever
+
+Only the first is a real bug. Counts are still recorded, so the suppression
+never hides the diagnosis, and -DARKCHEMY_DROP_NULL_WRITES=0 restores the old
+behaviour.
+
+Expect the TLSF hang to disappear and the boot to stop somewhere new. Whatever
+that is will be a real blocker rather than a consequence of low-memory damage.
+
+BUILD
+-----
+19:59, links clean, 174,548,345 bytes.
