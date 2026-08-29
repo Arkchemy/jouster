@@ -16,3 +16,7 @@ game/source/generated_*.c
 # The recompiler's generated declarations header, same reasoning as
 # game/source/generated_*.c above: an artefact of regenerate.sh.
 game/include/generated_decls.h
+
+# Vendored conquertron, fetched by tools/fetch-conquertron.sh when there is no
+# sibling checkout. Pinned by conquertron.lock, which IS tracked.
+deps/

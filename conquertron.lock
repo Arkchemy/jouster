@@ -1,0 +1,9 @@
+# Pinned conquertron revision.
+#
+# Used ONLY when tools/fetch-conquertron.sh has to fetch a copy into deps/,
+# i.e. when there is no sibling checkout and no explicit $(CONQUERTRON). A
+# developer with conquertron checked out beside jouster is unaffected by this
+# file -- their tree wins, by design.
+#
+# Refresh with:  make -C game conquertron-update
+commit 29fb70d1313ddd41f0fd7444a013c34b571229a5

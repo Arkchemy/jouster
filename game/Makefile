@@ -44,11 +44,23 @@ include $(DEVKITPRO)/libnx/switch_rules
 # from inside $(BUILD), so a CURDIR-relative default silently points
 # somewhere different on the second pass. TOPDIR is exported by the
 # outer pass and stays correct in both.
-CONQUERTRON	?=	$(TOPDIR)/../../conquertron
-CONQUERTRON_DIR	:=	$(abspath $(CONQUERTRON))
+# Resolution is now delegated to tools/fetch-conquertron.sh, which tries an
+# explicit $(CONQUERTRON), then a sibling checkout, then a vendored copy under
+# deps/, fetching it only if none of those exist. A sibling checkout
+# deliberately beats the vendored copy: conquertron and jouster are developed
+# together and a fetched tree silently shadowing local recompiler edits would
+# mean the next hardware run tests the wrong code.
+#
+# CONQUERTRON is passed through the environment because a variable set on the
+# make command line is not automatically visible to $(shell).
+CONQUERTRON	?=
+CONQUERTRON_DIR	:=	$(shell CONQUERTRON='$(CONQUERTRON)' $(TOPDIR)/../tools/fetch-conquertron.sh)
 
+ifeq ($(CONQUERTRON_DIR),)
+$(error could not resolve conquertron. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron -- see tools/fetch-conquertron.sh)
+endif
 ifeq ($(wildcard $(CONQUERTRON_DIR)/include/ppc_runtime.h),)
-$(error conquertron headers not found at $(CONQUERTRON_DIR)/include. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron)
+$(error conquertron at $(CONQUERTRON_DIR) has no include/ppc_runtime.h)
 endif
 
 TARGET		:=	Jouster
@@ -127,9 +139,44 @@ export APP_JSON :=
 export APP_ICON := $(CURDIR)/../native/icon.jpg
 export NROFLAGS += --icon=$(APP_ICON) --nacp=$(CURDIR)/$(TARGET).nacp
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all conquertron-info conquertron-update
 
 all: $(BUILD)
+
+# Which conquertron is this build actually compiling against? Worth being able
+# to ask directly: a sibling checkout and a vendored copy look identical in the
+# output, and building against the wrong one is silent.
+conquertron-info:
+	@echo "conquertron : $(CONQUERTRON_DIR)"
+	@if [ -d "$(CONQUERTRON_DIR)/.git" ]; then \
+		echo "commit      : $$(git -C '$(CONQUERTRON_DIR)' rev-parse HEAD)"; \
+		echo "described   : $$(git -C '$(CONQUERTRON_DIR)' log --oneline -1)"; \
+		if [ -n "$$(git -C '$(CONQUERTRON_DIR)' status --porcelain)" ]; then \
+			echo "state       : LOCALLY MODIFIED (uncommitted changes are in this build)"; \
+		else echo "state       : clean"; fi; \
+	else echo "commit      : not a git checkout"; fi
+	@case "$(CONQUERTRON_DIR)" in \
+		*/jouster/deps/conquertron) echo "source      : vendored under deps/, pinned by conquertron.lock";; \
+		*) echo "source      : local checkout -- your edits are what get built";; \
+	esac
+
+# Update the vendored copy to the latest upstream and re-pin the lock file.
+# Refuses to touch a local checkout: pulling someone's working tree from under
+# them is not this target's business.
+conquertron-update:
+	@case "$(CONQUERTRON_DIR)" in \
+		*/jouster/deps/conquertron) ;; \
+		*) echo "conquertron-update: $(CONQUERTRON_DIR) is a local checkout, not the vendored copy."; \
+		   echo "Update it yourself with git; this target only manages deps/conquertron."; exit 1;; \
+	esac
+	@git -C "$(CONQUERTRON_DIR)" fetch --quiet origin
+	@git -C "$(CONQUERTRON_DIR)" checkout --quiet origin/HEAD 2>/dev/null || git -C "$(CONQUERTRON_DIR)" checkout --quiet origin/main
+	@c=$$(git -C "$(CONQUERTRON_DIR)" rev-parse HEAD); \
+		sed -i "s/^commit .*/commit $$c/" "$(TOPDIR)/../conquertron.lock"; \
+		echo "conquertron pinned to $$c"; \
+		git -C "$(CONQUERTRON_DIR)" log --oneline -1
+
+
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@

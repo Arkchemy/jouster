@@ -16,11 +16,23 @@ include $(DEVKITPRO)/libnx/switch_rules
 # ../../recomp/include only exists in the old monorepo layout, so this
 # could not build from a fresh clone. Resolved against TOPDIR because
 # this makefile re-invokes itself from inside $(BUILD).
-CONQUERTRON	?=	$(TOPDIR)/../../conquertron
-CONQUERTRON_DIR	:=	$(abspath $(CONQUERTRON))
+# Resolution is now delegated to tools/fetch-conquertron.sh, which tries an
+# explicit $(CONQUERTRON), then a sibling checkout, then a vendored copy under
+# deps/, fetching it only if none of those exist. A sibling checkout
+# deliberately beats the vendored copy: conquertron and jouster are developed
+# together and a fetched tree silently shadowing local recompiler edits would
+# mean the next hardware run tests the wrong code.
+#
+# CONQUERTRON is passed through the environment because a variable set on the
+# make command line is not automatically visible to $(shell).
+CONQUERTRON	?=
+CONQUERTRON_DIR	:=	$(shell CONQUERTRON='$(CONQUERTRON)' $(TOPDIR)/../tools/fetch-conquertron.sh)
 
+ifeq ($(CONQUERTRON_DIR),)
+$(error could not resolve conquertron. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron -- see tools/fetch-conquertron.sh)
+endif
 ifeq ($(wildcard $(CONQUERTRON_DIR)/include/ppc_runtime.h),)
-$(error conquertron headers not found at $(CONQUERTRON_DIR)/include. Clone https://github.com/Arkchemy/conquertron next to this repo, or run: make CONQUERTRON=/path/to/conquertron)
+$(error conquertron at $(CONQUERTRON_DIR) has no include/ppc_runtime.h)
 endif
 
 TARGET		:=	ArkchemyGx2Test
