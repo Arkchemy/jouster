@@ -1479,9 +1479,37 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     AudioOutBuffer abuf;
     int audio_started = 0;
 
-    if (avformat_open_input(&fmt, path, NULL, NULL) < 0) {
-        checkpoint("[ff] cannot open %s", path);
-        return;
+    /* ffmpeg parses everything before the first colon as a URL scheme, so a
+     * devoptab path like "sdmc:/switch/..." is read as a protocol named
+     * "sdmc" and rejected -- which is why the 12:19 build reported "cannot
+     * open" for files that plainly exist and that fopen reads happily two
+     * functions earlier.
+     *
+     * "file:" names the protocol explicitly and hands the rest to
+     * ff_file_protocol, which just calls open(); newlib then resolves the
+     * device prefix itself. Try that first, then the bare path in case the
+     * default device already covers it, and report ffmpeg's own error rather
+     * than a message of my own invention. */
+    {
+        char url[512];
+        int rc_open = -1, attempt;
+        for (attempt = 0; attempt < 3 && rc_open < 0; attempt++) {
+            if (attempt == 0) snprintf(url, sizeof(url), "file:%s", path);
+            else if (attempt == 1) snprintf(url, sizeof(url), "%s", path);
+            else {
+                const char *colon = strchr(path, ':');
+                snprintf(url, sizeof(url), "%s", colon ? colon + 1 : path);
+            }
+            rc_open = avformat_open_input(&fmt, url, NULL, NULL);
+            if (rc_open < 0) {
+                char err[128];
+                av_strerror(rc_open, err, sizeof(err));
+                checkpoint("[ff] open \"%s\" failed: %s", url, err);
+            } else {
+                checkpoint("[ff] opened \"%s\"", url);
+            }
+        }
+        if (rc_open < 0) return;
     }
     if (avformat_find_stream_info(fmt, NULL) < 0) { avformat_close_input(&fmt); return; }
     for (i = 0; i < (int)fmt->nb_streams; i++) {
