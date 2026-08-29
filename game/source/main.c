@@ -1020,6 +1020,36 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     g_ctx.r[3] = hbink; g_ctx.r[4] = info;
     ppc_BinkRegisterFrameBuffers(&g_ctx);
 
+    /* Bink ignores the buffers we just registered unless bink+0x44 is set.
+     *
+     * Established by reading start_do_frame (2370c04..2370c38), which is the
+     * decode setup:
+     *     lwz   r0, 0x44(r31)
+     *     cmpwi r0, 0
+     *     beq   2370c74          <- skips the whole external-buffer path
+     *     lwz   r10, 0xe0(r31)   <- only then does it look at FrameBuffers
+     *
+     * That explains every measurement so far: reads happen (10 of them),
+     * BinkDoFrame returns 0 rather than 1 so nothing is being skipped, and
+     * BinkRegisterFrameBuffers is unconditional -- it just stores the pointer
+     * at +0xE0 -- yet our planes stay untouched. The decoder is using its own
+     * internal buffers because this gate is zero.
+     *
+     * The gate is normally set from BinkOpen's flags, and the game passes
+     * those from igMovieInfo+0x34, a value not recoverable statically.
+     * BinkOpen itself is a 110-line wrapper with no flag tests, so the bit is
+     * decoded further down than is worth chasing before confirming the
+     * mechanism. Setting it directly is a deliberate experiment, not a fix:
+     * if the picture appears, the mechanism is confirmed and the correct open
+     * flag becomes worth finding; if it does not, the gate is elsewhere and
+     * nothing has been broken. */
+    {
+        uint32_t gate_before = ppc_load_u32(&g_ctx, hbink + 0x44u);
+        ppc_store_u32(&g_ctx, hbink + 0x44u, 1u);
+        checkpoint("[video] external-frame-buffer gate bink+0x44 was %u, forced to 1",
+                   (unsigned)gate_before);
+    }
+
     if (!arkchemy_video_staging_init()) {
         checkpoint("[video] could not create the deko3d staging block -- is GX2Init done?");
         return;
