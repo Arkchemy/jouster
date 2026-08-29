@@ -150,6 +150,11 @@ char g_arkchemy_nf_name[64] = {0};
 unsigned int g_arkchemy_ni_hits = 0, g_arkchemy_ni_lr = 0;
 unsigned int g_arkchemy_ni_meta = 0, g_arkchemy_ni_pool = 0;
 char g_arkchemy_ni_name[64] = {0};
+/* igTPool<igHandleRedirect>::constructElement -- see
+ * tools/probe_construct_element.py. lr is read at function ENTRY, where it is
+ * still the true caller. */
+unsigned int g_arkchemy_ce_hits = 0, g_arkchemy_ce_lr = 0, g_arkchemy_ce_this = 0;
+unsigned int g_arkchemy_ce_buf = 0, g_arkchemy_ce_pool = 0;
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
  * no longer defined here. */
@@ -3426,6 +3431,7 @@ int main(int argc, char *argv[]) {
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
+                       " -- ctorelem: hits=%u lr=0x%x this=0x%x buf=0x%x pool=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3513,6 +3519,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
                        g_arkchemy_ni_hits, g_arkchemy_ni_lr, g_arkchemy_ni_meta,
                        g_arkchemy_ni_pool, g_arkchemy_ni_name,
+                       g_arkchemy_ce_hits, g_arkchemy_ce_lr, g_arkchemy_ce_this,
+                       g_arkchemy_ce_buf, g_arkchemy_ce_pool,
                        loopwatch_buf);
         }
 

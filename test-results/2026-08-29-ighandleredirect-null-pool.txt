@@ -1,0 +1,51 @@
+2026-08-29 — named: igHandleRedirect, with a null pool AND a null buffer
+=========================================================================
+
+Build 23:31:
+
+    nullinst: hits=1 lr=0x21cfbf8 meta=0x4423b64 pool=0x0 name="igHandleRedirect"
+
+The class is igHandleRedirect, retail #121 -- one we DO register, since the
+boot reaches #124. So this is not a class beyond the frontier. Its pool class,
+igHandleRedirectPool, is #120 and also registers.
+
+pool=0 matters as much as the null buffer. createInstanceInPlace is handed
+both a null element buffer and a null igMemoryPool, and both come straight
+through igTPool<igHandleRedirect>::constructElement, which forwards its own
+arguments unchanged:
+
+    21cfbe8: mr r5, r29   ; pool
+    21cfbec: mr r4, r30   ; buffer
+    21cfbf0: mr r3, r31   ; metaobject
+    21cfbf4: bl createInstanceInPlace
+
+So constructElement was itself called with nulls. It has no direct callers
+anywhere in the output -- it is reached through a function pointer -- so the
+caller cannot be found by reading the code.
+
+hits=1. Exactly one occurrence in a two-minute run, against 74,730 dispatch
+misses. Those are not all this: the miss counter records only its first
+occurrence in detail, and the first one happens to be this. Whether the other
+74,729 share a cause is not established and should not be assumed.
+
+THIS BUILD (23:36)
+------------------
+    ctorelem: hits=%u lr=0x%x this=0x%x buf=0x%x pool=0x%x
+
+lr is read at FUNCTION ENTRY, where it is still the true caller's return
+address, before anything downstream makes it stale. That distinction cost four
+wrong call sites earlier today, so it is worth being explicit: at entry lr is
+correct, later it is not.
+
+  lr    the caller, which is the thing that cannot be found statically
+  this  the igTPool itself, whose state says whether the pool was ever built
+  buf
+  pool  both expected null on the failing call
+
+A note on the probe itself: the first version matched the full mangled name
+and found nothing. GHS appends a source-path suffix to statics
+(..._v_static_in_CWorkProjectsalchemy...), so it now matches by prefix.
+
+BUILD
+-----
+23:36, links clean, 175,940,985 bytes.
