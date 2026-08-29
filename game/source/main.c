@@ -1919,6 +1919,29 @@ static void game_thread_func(void *arg) {
         void ppc_BinkClose(PpcContext *ctx);
         void ppc_BinkDoFrame(PpcContext *ctx);
         void ppc_BinkNextFrame(PpcContext *ctx);
+        /* Give Bink its Wii U file client before opening, exactly as the game
+         * does at 22968a4..22968b0:
+         *
+         *     lis  r31, 0x1013 ; addi r31, r31, 0x174c   -> &.bss+309068
+         *     mr   r3, r31
+         *     bl   BinkSetWiiUFileClient
+         *     ...then BinkOpen
+         *
+         * We skipped this on the grounds that our FSOpenFile shim ignores the
+         * FSClient argument, which was true but beside the point: Bink stores
+         * the client and uses it for its own per-frame reads. Without it the
+         * file was opened (14 reads during BinkOpen) and then never read
+         * again -- fsReads stayed at exactly 14 for all 240 frames, so every
+         * frame decoded out of a buffer that was filled once. That is why the
+         * picture fills only the top of the screen and the rest stays at
+         * Y=0. */
+        {
+            void ppc_BinkSetWiiUFileClient(PpcContext *ctx);
+            g_ctx.r[3] = 423996u;   /* &.bss+309068, the game's own FSClient */
+            ppc_BinkSetWiiUFileClient(&g_ctx);
+            checkpoint("[video] BinkSetWiiUFileClient(0x%x) -- the game's own client",
+                       (unsigned)423996u);
+        }
         const char *test_path = "movies/bash.mov";
         uint32_t str_addr = g_ctx.r[1] - 256; /* real, safe scratch area well below the current real stack top -- nothing else has run since ppc_init_globals set r[1], so this is unused real guest memory */
         for (size_t i = 0; i <= strlen(test_path); i++) {

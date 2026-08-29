@@ -1,0 +1,77 @@
+2026-08-29 — the recompiled Bink decoder produces real video on hardware
+=========================================================================
+
+WHAT IS ON SCREEN
+-----------------
+Real decoded frames. Structure, text-like glyph rows, block edges, and
+completely different content in each screenshot. The green is Y=0 -- rows the
+decode never reached -- because BT.601 maps an all-zero YUV pixel to exactly
+RGB(0,135,0).
+
+Measured, not inferred:
+
+    BinkDoFrame guest calls   75  ->  1445, 1492, 2271
+    lastDecoded / FrameNum    stuck  ->  3, 4, 5 (advancing)
+    Ysum[set1]                0x0 -> 0x14141280 -> 0xc1a7a740 (changing)
+    frames presented          240
+
+Changing luma checksums frame to frame is the part that matters: that is
+moving video, decoded by the recompiled decoder, converted on the CPU and
+blitted through deko3d with no shader translation anywhere in the path.
+
+WHAT UNBLOCKED IT
+-----------------
+Computed jump tables. conquertron emitted `bctr` as an indirect CALL plus a
+return, which is right for a function pointer and wrong for a switch, where
+the target is an address inside the same function. Compounded by the table
+base being folded to a synthetic .text address while ppc_dispatch is keyed by
+real guest addresses, and ppc_dispatch having no default case -- so the lookup
+matched nothing, returned silently, and the generated `return;` abandoned the
+function. Every switch the compiler turned into a jump table did nothing at
+all, in the entire game. 61 of them.
+
+ExpandPlane's table now emits exactly ten cases, 0..9, matching the
+`cmplwi r7, 9; bgt` bounds check above it. The script was never told the
+length.
+
+WHY THE PICTURE IS ONLY THE TOP OF THE SCREEN
+----------------------------------------------
+    fsReads=14    fsReads=14    fsReads=14
+
+Constant for all 240 frames. The file is read 14 times during BinkOpen and
+never again, so every frame decodes out of an I/O buffer that was filled once.
+
+The game does something before BinkOpen that we did not (22968a4..22968b0):
+
+    lis  r31, 0x1013 ; addi r31, r31, 0x174c    -> &.bss+309068
+    mr   r3, r31
+    bl   BinkSetWiiUFileClient
+    ...then BinkOpen
+
+This was skipped deliberately, on the grounds that our FSOpenFile shim ignores
+the FSClient argument. True, and beside the point: Bink stores that client and
+uses it for its own per-frame reads. Now wired in, passing the game's own
+client pointer.
+
+FOUR RECOMPILER BUGS FOUND TODAY
+---------------------------------
+    record-form CR0 not updated      6745 sites
+    srawi dropping XER[CA]           2890 sites
+    divw/divwu emitting C undefined  730 sites
+    computed jump tables not translated  61 sites
+
+The last is the one that mattered here, and it was invisible: no stub, no log,
+no crash -- a switch simply did nothing and its caller returned.
+
+METHOD NOTES
+------------
+- "Does the thing exist" comes before "where is the thing". Three separate
+  searches for decoded output found nothing because 75 guest calls meant
+  nothing was ever decoded. The call counter should have been the first
+  measurement, not the fifth.
+- last_pc is written at function ENTRY, so it names the last function entered,
+  not where the thread is now. Those differ exactly when a function returns
+  and its caller loops. Misreading it cost two runs.
+- Every time an instrument was narrowed by assumption -- one loop of four, the
+  first eight calls, one directory of two -- the assumption was wrong. Breadth
+  costs nothing; a mis-aimed probe costs a hardware round and looks like data.
