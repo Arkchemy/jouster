@@ -873,6 +873,22 @@ static void guest_str(uint32_t addr, char *out, size_t out_size) {
 #define ARKCHEMY_VID_SCRATCH 0x20000000u
 
 static int        g_arkchemy_run_boot_sequence = 0;
+/* Boot-movie placement.
+ *
+ * bootMovie.h264 is 256x128 -- far too small to be a fullscreen boot video,
+ * and the splash art backs that up: sampling bootTvTex.tga on an 8x5 grid
+ * shows the artwork filling the centre (up to 91% ink) while the top corners
+ * are at 0%. So the movie is an overlay composited onto the splash, not a
+ * replacement for it, which is how the Wii U shows it.
+ *
+ * Which corner I could not establish from the files, and the Wayback captures
+ * of the era are rate-limiting; rather than assert a placement I cannot
+ * verify, it is one constant here. Set ARKCHEMY_BOOT_MOVIE_CORNER to 0=top
+ * left, 1=top right, 2=bottom left, 3=bottom right. */
+#define ARKCHEMY_BOOT_MOVIE_CORNER 3
+#define ARKCHEMY_BOOT_MOVIE_MARGIN 48u
+
+static int        g_ff_overlay = 0;      /* draw into a sub-rect, over what is already there */
 static uint32_t   g_video_hbink = 0;
 static uint32_t   g_video_found_y = 0, g_video_found_cr = 0, g_video_found_cb = 0;   /* kept open across the display handover */
 static DkMemBlock g_vid_staging = NULL;
@@ -1635,15 +1651,36 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     checkpoint("[ff] video: %s %dx%d", dec->name, vctx->width, vctx->height);
     if (!arkchemy_video_staging_init()) { checkpoint("[ff] no staging block"); goto cleanup; }
 
-    /* Letterbox geometry, computed once. */
-    dst_w = ARKCHEMY_GX2_FB_WIDTH;
-    dst_h = (uint32_t)((uint64_t)vctx->height * ARKCHEMY_GX2_FB_WIDTH / (uint32_t)vctx->width);
-    if (dst_h > ARKCHEMY_GX2_FB_HEIGHT) {
-        dst_h = ARKCHEMY_GX2_FB_HEIGHT;
-        dst_w = (uint32_t)((uint64_t)vctx->width * ARKCHEMY_GX2_FB_HEIGHT / (uint32_t)vctx->height);
+    if (g_ff_overlay) {
+        /* Composited at native size onto whatever is already in the staging
+           buffer -- the splash. Scaling a 256x128 source up to fill 720p
+           would only produce a blurry mess. */
+        dst_w = (uint32_t)vctx->width;
+        dst_h = (uint32_t)vctx->height;
+        if (dst_w > ARKCHEMY_GX2_FB_WIDTH)  dst_w = ARKCHEMY_GX2_FB_WIDTH;
+        if (dst_h > ARKCHEMY_GX2_FB_HEIGHT) dst_h = ARKCHEMY_GX2_FB_HEIGHT;
+        switch (ARKCHEMY_BOOT_MOVIE_CORNER) {
+            case 0: off_x = ARKCHEMY_BOOT_MOVIE_MARGIN; off_y = ARKCHEMY_BOOT_MOVIE_MARGIN; break;
+            case 1: off_x = ARKCHEMY_GX2_FB_WIDTH - dst_w - ARKCHEMY_BOOT_MOVIE_MARGIN;
+                    off_y = ARKCHEMY_BOOT_MOVIE_MARGIN; break;
+            case 2: off_x = ARKCHEMY_BOOT_MOVIE_MARGIN;
+                    off_y = ARKCHEMY_GX2_FB_HEIGHT - dst_h - ARKCHEMY_BOOT_MOVIE_MARGIN; break;
+            default: off_x = ARKCHEMY_GX2_FB_WIDTH - dst_w - ARKCHEMY_BOOT_MOVIE_MARGIN;
+                     off_y = ARKCHEMY_GX2_FB_HEIGHT - dst_h - ARKCHEMY_BOOT_MOVIE_MARGIN; break;
+        }
+        checkpoint("[ff] overlay %ux%u at %u,%u over the splash", (unsigned)dst_w,
+                   (unsigned)dst_h, (unsigned)off_x, (unsigned)off_y);
+    } else {
+        /* Letterbox geometry, computed once. */
+        dst_w = ARKCHEMY_GX2_FB_WIDTH;
+        dst_h = (uint32_t)((uint64_t)vctx->height * ARKCHEMY_GX2_FB_WIDTH / (uint32_t)vctx->width);
+        if (dst_h > ARKCHEMY_GX2_FB_HEIGHT) {
+            dst_h = ARKCHEMY_GX2_FB_HEIGHT;
+            dst_w = (uint32_t)((uint64_t)vctx->width * ARKCHEMY_GX2_FB_HEIGHT / (uint32_t)vctx->height);
+        }
+        off_x = (ARKCHEMY_GX2_FB_WIDTH - dst_w) / 2u;
+        off_y = (ARKCHEMY_GX2_FB_HEIGHT - dst_h) / 2u;
     }
-    off_x = (ARKCHEMY_GX2_FB_WIDTH - dst_w) / 2u;
-    off_y = (ARKCHEMY_GX2_FB_HEIGHT - dst_h) / 2u;
 
     /* Pace the video to its own frame rate.
      *
@@ -1703,7 +1740,11 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
                                      (int)dst_w, (int)dst_h, AV_PIX_FMT_RGBA,
                                      SWS_BILINEAR, NULL, NULL, NULL);
                 if (!sws) { checkpoint("[ff] sws_getContext failed"); goto after; }
-                memset(g_vid_staging_cpu, 0, ARKCHEMY_GX2_FB_WIDTH * ARKCHEMY_GX2_FB_HEIGHT * 4u);
+                /* Only clear for fullscreen playback. In overlay mode the
+                   staging buffer still holds the splash, which is the whole
+                   point of compositing onto it. */
+                if (!g_ff_overlay)
+                    memset(g_vid_staging_cpu, 0, ARKCHEMY_GX2_FB_WIDTH * ARKCHEMY_GX2_FB_HEIGHT * 4u);
             }
             dst_data[0] = g_vid_staging_cpu + (off_y * ARKCHEMY_GX2_FB_WIDTH + off_x) * 4u;
             dst_data[1] = dst_data[2] = dst_data[3] = NULL;
@@ -2610,9 +2651,11 @@ static void game_thread_func(void *arg) {
              * screen rather than the truncated one -- previously the good
              * frames were followed by the colour bars and the broken decode,
              * which read as a regression rather than as a diagnostic. */
-            arkchemy_boot_show_splash();
-            arkchemy_boot_play_sound();
+            arkchemy_boot_show_splash();          /* fills the staging buffer */
+            g_ff_overlay = 1;
             arkchemy_ff_play("sdmc:/switch/Jouster/meta/bootMovie.h264", 900);
+            g_ff_overlay = 0;
+            arkchemy_boot_play_sound();
             checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
                        (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
             arkchemy_bink_video_play(g_video_hbink, 240);
