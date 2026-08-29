@@ -1,0 +1,11 @@
+--- a/generated_0161.c
++++ b/generated_0161.c
+@@ igStringPool::setStringPoolParameters -- 21aa5fc @@
++  /* ARKCHEMY PROBE: does the string pool ever get configured at all?
++     initBootstrap loads the bucket count from .data+5068 (confirmed to hold
++     1024 after ppc_init_globals, and never written afterwards) and calls this
++     to store it at pool+0x1c -- yet the pool runs with bucketCount 0. */
++  arkchemy_probe4("SETPOOLPARAMS", "pool", ctx->r[3], "maxStrings", ctx->r[4],
++                  "bucketCount", ctx->r[5], "lr", ctx->lr);
+   /* 21aa5fc: stw r4, 0x18(r3) */
+   ppc_store_u32(ctx, ctx->r[3] + (int32_t)24, ctx->r[4]);

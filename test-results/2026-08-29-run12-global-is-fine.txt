@@ -1,0 +1,57 @@
+2026-08-29 (run 12) — the global is correct; the setter is the suspect
+=======================================================================
+
+BOTH HYPOTHESES RULED OUT
+-------------------------
+    string pool params at rest: .data+5064=16384 .data+5068=1024
+    store watch on 13260: hits=0
+
+1. ppc_init_globals DOES apply its initialiser. The bucket-count global holds
+   1024 immediately after globals init, exactly as its byte store
+   (store_u8(13262, 4) -> big-endian 0x00000400) says it should. So this is
+   not a recompiler failure to initialise .data.
+2. Nothing ever writes to that address afterwards. So it is not being
+   clobbered either -- at least not through ppc_store_u32.
+
+Yet the pool runs with bucketCount 0.
+
+WHAT THAT LEAVES
+----------------
+If the global is right and stays right, then the value never reached the pool,
+which means the call that would carry it never ran:
+
+    21472b4: bootstrapInitialize(igStringPool)
+    21472b8: getDefault()
+    21472bc-c8: load 16384 and 1024 from .data
+    21472cc: setStringPoolParameters(pool, 16384, 1024)   <- suspected never reached
+
+igArkCore::initBootstrap was entered (w4 hits=1) but has never been observed
+to return. The hang is in igStringPool::remove via releaseString. If something
+inside the earlier part of initBootstrap calls releaseString on the default
+pool BEFORE 21472cc configures it, then the pool legitimately has no buckets,
+remove() walks buckets[0x811C9DC5], and initBootstrap never reaches the line
+that would have fixed it.
+
+That reframes the bug: not "the pool lost its configuration" but "the pool is
+used before it is configured".
+
+CAVEAT ON THE STORE WATCH
+-------------------------
+hits=0 means nothing wrote through ppc_store_u32. Byte and halfword writes,
+and any host-side shim that memcpys straight into the guest arena, do not go
+through that path and would not be seen. So "never written" is only proven for
+word stores. Recorded rather than glossed over, since the readback alone does
+not close that gap.
+
+CHANGE
+------
+Probe at the top of setStringPoolParameters logging pool, maxStrings,
+bucketCount and the return address.
+
+  probe never fires  -> confirmed: the pool is used before it is configured,
+                        and the question becomes what calls releaseString that
+                        early, and why
+  probe fires, r5=0  -> the load at 21472c8 is reading the wrong address or
+                        the wrong value, and the fault is back in the
+                        recompiler despite the readback
+  probe fires, r5=1024 -> the pool being configured is not the pool being used
