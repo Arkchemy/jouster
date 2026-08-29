@@ -1364,6 +1364,8 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 
 /* Host-memory YUV->RGBA. The guest version reads through ppc_load_u8 because
  * the recompiled decoder writes into the guest arena; ffmpeg hands us ordinary
@@ -1403,18 +1405,27 @@ static void arkchemy_video_yuv_host_to_rgba(const uint8_t *yp, int ys,
     }
 }
 
-/* Decode every audio frame up front into one interleaved 16-bit buffer, so
- * playback can start with the video rather than being interleaved frame by
- * frame. Fine for clips of this length; a real player would stream it. */
+/* Decode all audio up front, RESAMPLED to the rate audout actually runs at.
+ *
+ * bash.mov's Bink audio is 32000 Hz and audoutGetSampleRate is documented as
+ * 48000, so handing the samples over untouched plays them at the wrong rate.
+ * swresample is already linked; convert properly rather than assume the rates
+ * match. The decoder is also flushed with a NULL packet at the end, because
+ * frames can be buffered inside it -- that is why bootMovie.h264 presented
+ * zero frames despite opening cleanly. */
 static int16_t *arkchemy_ff_decode_audio(AVFormatContext *fmt, int a_idx,
-                                         size_t *out_frames, int *out_rate, int *out_ch) {
+                                         size_t *out_frames, int out_rate) {
     const AVCodec *dec;
     AVCodecContext *ctx = NULL;
+    SwrContext *swr = NULL;
     AVPacket *pkt = NULL;
     AVFrame *frm = NULL;
     int16_t *pcm = NULL;
     size_t cap = 0, used = 0;
+    AVChannelLayout out_ch;
+    int drained = 0;
 
+    *out_frames = 0;
     if (a_idx < 0) return NULL;
     dec = avcodec_find_decoder(fmt->streams[a_idx]->codecpar->codec_id);
     if (!dec) return NULL;
@@ -1423,47 +1434,124 @@ static int16_t *arkchemy_ff_decode_audio(AVFormatContext *fmt, int a_idx,
     avcodec_parameters_to_context(ctx, fmt->streams[a_idx]->codecpar);
     if (avcodec_open2(ctx, dec, NULL) < 0) { avcodec_free_context(&ctx); return NULL; }
 
-    *out_rate = ctx->sample_rate;
-    *out_ch = ctx->ch_layout.nb_channels ? ctx->ch_layout.nb_channels : 2;
-    checkpoint("[ff] audio: %s %d Hz, %d ch", dec->name, ctx->sample_rate, *out_ch);
+    av_channel_layout_default(&out_ch, 2);
+    if (swr_alloc_set_opts2(&swr, &out_ch, AV_SAMPLE_FMT_S16, out_rate,
+                            &ctx->ch_layout, ctx->sample_fmt, ctx->sample_rate,
+                            0, NULL) < 0 || swr_init(swr) < 0) {
+        checkpoint("[ff] swresample init failed");
+        avcodec_free_context(&ctx);
+        return NULL;
+    }
+    checkpoint("[ff] audio: %s %d Hz %d ch -> %d Hz 2 ch", dec->name,
+               ctx->sample_rate, ctx->ch_layout.nb_channels, out_rate);
 
     pkt = av_packet_alloc();
     frm = av_frame_alloc();
-    while (av_read_frame(fmt, pkt) >= 0) {
-        if (pkt->stream_index == a_idx && avcodec_send_packet(ctx, pkt) >= 0) {
-            while (avcodec_receive_frame(ctx, frm) >= 0) {
-                int n = frm->nb_samples, c, i;
-                size_t need = used + (size_t)n * (size_t)(*out_ch);
-                if (need > cap) {
-                    cap = need * 2u + 65536u;
-                    pcm = (int16_t *)realloc(pcm, cap * sizeof(int16_t));
-                    if (!pcm) goto done;
-                }
-                /* Bink audio decodes to planar float; interleave and clamp. */
-                for (i = 0; i < n; i++) {
-                    for (c = 0; c < *out_ch; c++) {
-                        float sample = 0.0f;
-                        if (frm->format == AV_SAMPLE_FMT_FLTP)
-                            sample = ((const float *)frm->data[c])[i];
-                        else if (frm->format == AV_SAMPLE_FMT_S16P)
-                            sample = ((const int16_t *)frm->data[c])[i] / 32768.0f;
-                        else if (frm->format == AV_SAMPLE_FMT_S16)
-                            sample = ((const int16_t *)frm->data[0])[i * (*out_ch) + c] / 32768.0f;
-                        if (sample > 1.0f) sample = 1.0f;
-                        if (sample < -1.0f) sample = -1.0f;
-                        pcm[used++] = (int16_t)(sample * 32767.0f);
-                    }
-                }
-            }
+    for (;;) {
+        int have = (av_read_frame(fmt, pkt) >= 0);
+        if (!have) {
+            if (drained) break;
+            drained = 1;
+            avcodec_send_packet(ctx, NULL);
+        } else if (pkt->stream_index != a_idx) {
+            av_packet_unref(pkt);
+            continue;
+        } else if (avcodec_send_packet(ctx, pkt) < 0) {
+            av_packet_unref(pkt);
+            continue;
         }
-        av_packet_unref(pkt);
+        while (avcodec_receive_frame(ctx, frm) >= 0) {
+            int max_out = (int)swr_get_out_samples(swr, frm->nb_samples) + 256;
+            size_t need = used + (size_t)max_out * 2u;
+            uint8_t *dst;
+            int got;
+            if (need > cap) {
+                cap = need * 2u + 65536u;
+                pcm = (int16_t *)realloc(pcm, cap * sizeof(int16_t));
+                if (!pcm) goto done;
+            }
+            dst = (uint8_t *)(pcm + used);
+            got = swr_convert(swr, &dst, max_out,
+                              (const uint8_t **)frm->extended_data, frm->nb_samples);
+            if (got > 0) used += (size_t)got * 2u;
+        }
+        if (have) av_packet_unref(pkt);
     }
 done:
-    *out_frames = used / (size_t)(*out_ch);
+    *out_frames = used / 2u;
     av_frame_free(&frm);
     av_packet_free(&pkt);
+    swr_free(&swr);
     avcodec_free_context(&ctx);
     return pcm;
+}
+
+/* audout takes a QUEUE of buffers. Submitting the whole clip as one buffer is
+ * what made the sound stop early, so slice it and top the queue up as buffers
+ * are released. */
+#define ARKCHEMY_AUD_CHUNK_BYTES  49152u   /* 12288 frames @48k stereo = 0.256s */
+#define ARKCHEMY_AUD_QUEUED       4
+
+typedef struct {
+    uint8_t *base;
+    size_t bytes, offset;
+    AudioOutBuffer bufs[ARKCHEMY_AUD_QUEUED];
+    int active;
+} ArkchemyAudio;
+
+static int arkchemy_audio_start(ArkchemyAudio *a, const int16_t *pcm, size_t frames) {
+    size_t total = frames * 2u * sizeof(int16_t);
+    size_t aligned = (total + 0xFFFu) & ~(size_t)0xFFF;
+    int i;
+    memset(a, 0, sizeof(*a));
+    if (!pcm || !frames) return 0;
+    a->base = (uint8_t *)memalign(0x1000, aligned);
+    if (!a->base) return 0;
+    memset(a->base, 0, aligned);
+    memcpy(a->base, pcm, total);
+    a->bytes = total;
+    if (R_FAILED(audoutInitialize())) { free(a->base); a->base = NULL; return 0; }
+    audoutStartAudioOut();
+    for (i = 0; i < ARKCHEMY_AUD_QUEUED; i++) {
+        size_t n = a->bytes - a->offset;
+        if (!n) break;
+        if (n > ARKCHEMY_AUD_CHUNK_BYTES) n = ARKCHEMY_AUD_CHUNK_BYTES;
+        memset(&a->bufs[i], 0, sizeof(a->bufs[i]));
+        a->bufs[i].buffer = a->base + a->offset;
+        a->bufs[i].buffer_size = ARKCHEMY_AUD_CHUNK_BYTES;
+        a->bufs[i].data_size = n;
+        if (R_FAILED(audoutAppendAudioOutBuffer(&a->bufs[i]))) break;
+        a->offset += n;
+    }
+    a->active = 1;
+    checkpoint("[ff] audio streaming: %u frames (%.1f s) at 48000 Hz",
+               (unsigned)frames, (double)frames / 48000.0);
+    return 1;
+}
+
+static void arkchemy_audio_pump(ArkchemyAudio *a) {
+    AudioOutBuffer *rel = NULL;
+    u32 count = 0;
+    if (!a->active) return;
+    while (a->offset < a->bytes &&
+           R_SUCCEEDED(audoutGetReleasedAudioOutBuffer(&rel, &count)) && count && rel) {
+        size_t n = a->bytes - a->offset;
+        if (n > ARKCHEMY_AUD_CHUNK_BYTES) n = ARKCHEMY_AUD_CHUNK_BYTES;
+        rel->buffer = a->base + a->offset;
+        rel->buffer_size = ARKCHEMY_AUD_CHUNK_BYTES;
+        rel->data_size = n;
+        if (R_FAILED(audoutAppendAudioOutBuffer(rel))) break;
+        a->offset += n;
+        rel = NULL; count = 0;
+    }
+}
+
+static void arkchemy_audio_stop(ArkchemyAudio *a) {
+    if (!a->active) return;
+    audoutStopAudioOut();
+    audoutExit();
+    if (a->base) free(a->base);
+    a->active = 0;
 }
 
 static void arkchemy_ff_play(const char *path, int max_frames) {
@@ -1472,24 +1560,19 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     AVCodecContext *vctx = NULL;
     AVPacket *pkt = NULL;
     AVFrame *frm = NULL;
-    int v_idx = -1, a_idx = -1, i, shown = 0;
+    struct SwsContext *sws = NULL;
+    int v_idx = -1, a_idx = -1, i, shown = 0, drained = 0;
     int16_t *pcm = NULL;
     size_t pcm_frames = 0;
-    int rate = 48000, ch = 2;
-    AudioOutBuffer abuf;
-    int audio_started = 0;
+    ArkchemyAudio audio;
+    uint32_t dst_w = 0, dst_h = 0, off_x = 0, off_y = 0;
 
-    /* ffmpeg parses everything before the first colon as a URL scheme, so a
-     * devoptab path like "sdmc:/switch/..." is read as a protocol named
-     * "sdmc" and rejected -- which is why the 12:19 build reported "cannot
-     * open" for files that plainly exist and that fopen reads happily two
-     * functions earlier.
-     *
-     * "file:" names the protocol explicitly and hands the rest to
-     * ff_file_protocol, which just calls open(); newlib then resolves the
-     * device prefix itself. Try that first, then the bare path in case the
-     * default device already covers it, and report ffmpeg's own error rather
-     * than a message of my own invention. */
+    memset(&audio, 0, sizeof(audio));
+
+    /* ffmpeg reads everything before the first colon as a URL scheme, so a
+     * devoptab path like "sdmc:/switch/..." is taken as a protocol named
+     * "sdmc". Name the protocol explicitly and let newlib resolve the device;
+     * fall back to the bare path, and report ffmpeg's own error text. */
     {
         char url[512];
         int rc_open = -1, attempt;
@@ -1505,8 +1588,6 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
                 char err[128];
                 av_strerror(rc_open, err, sizeof(err));
                 checkpoint("[ff] open \"%s\" failed: %s", url, err);
-            } else {
-                checkpoint("[ff] opened \"%s\"", url);
             }
         }
         if (rc_open < 0) return;
@@ -1520,8 +1601,7 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     checkpoint("[ff] %s: %d stream(s), video=%d audio=%d", path, (int)fmt->nb_streams, v_idx, a_idx);
     if (v_idx < 0) { avformat_close_input(&fmt); return; }
 
-    /* audio first, so it can start together with the first frame */
-    pcm = arkchemy_ff_decode_audio(fmt, a_idx, &pcm_frames, &rate, &ch);
+    pcm = arkchemy_ff_decode_audio(fmt, a_idx, &pcm_frames, 48000);
     av_seek_frame(fmt, -1, 0, AVSEEK_FLAG_BACKWARD);
 
     dec = avcodec_find_decoder(fmt->streams[v_idx]->codecpar->codec_id);
@@ -1530,67 +1610,84 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
     avcodec_parameters_to_context(vctx, fmt->streams[v_idx]->codecpar);
     if (avcodec_open2(vctx, dec, NULL) < 0) { checkpoint("[ff] avcodec_open2 failed"); goto cleanup; }
     checkpoint("[ff] video: %s %dx%d", dec->name, vctx->width, vctx->height);
-
     if (!arkchemy_video_staging_init()) { checkpoint("[ff] no staging block"); goto cleanup; }
 
-    if (pcm && pcm_frames) {
-        size_t bytes = pcm_frames * (size_t)ch * sizeof(int16_t);
-        size_t aligned = (bytes + 0xFFFu) & ~(size_t)0xFFF;
-        int16_t *abuf_mem = (int16_t *)memalign(0x1000, aligned);
-        if (abuf_mem) {
-            memset(abuf_mem, 0, aligned);
-            memcpy(abuf_mem, pcm, bytes);
-            if (R_SUCCEEDED(audoutInitialize())) {
-                audoutStartAudioOut();
-                memset(&abuf, 0, sizeof(abuf));
-                abuf.buffer = abuf_mem;
-                abuf.buffer_size = aligned;
-                abuf.data_size = bytes;
-                if (R_SUCCEEDED(audoutAppendAudioOutBuffer(&abuf))) {
-                    audio_started = 1;
-                    checkpoint("[ff] audio playing: %u frames, %d Hz, %d ch",
-                               (unsigned)pcm_frames, rate, ch);
-                }
-            }
-        }
+    /* Letterbox geometry, computed once. */
+    dst_w = ARKCHEMY_GX2_FB_WIDTH;
+    dst_h = (uint32_t)((uint64_t)vctx->height * ARKCHEMY_GX2_FB_WIDTH / (uint32_t)vctx->width);
+    if (dst_h > ARKCHEMY_GX2_FB_HEIGHT) {
+        dst_h = ARKCHEMY_GX2_FB_HEIGHT;
+        dst_w = (uint32_t)((uint64_t)vctx->width * ARKCHEMY_GX2_FB_HEIGHT / (uint32_t)vctx->height);
     }
+    off_x = (ARKCHEMY_GX2_FB_WIDTH - dst_w) / 2u;
+    off_y = (ARKCHEMY_GX2_FB_HEIGHT - dst_h) / 2u;
+
+    if (pcm && pcm_frames) arkchemy_audio_start(&audio, pcm, pcm_frames);
 
     pkt = av_packet_alloc();
     frm = av_frame_alloc();
-    while (shown < max_frames && av_read_frame(fmt, pkt) >= 0) {
-        if (pkt->stream_index == v_idx && avcodec_send_packet(vctx, pkt) >= 0) {
-            while (shown < max_frames && avcodec_receive_frame(vctx, frm) >= 0) {
-                if (frm->data[0] && frm->data[1] && frm->data[2]) {
-                    arkchemy_video_yuv_host_to_rgba(frm->data[0], frm->linesize[0],
-                                                    frm->data[1], frm->linesize[1],
-                                                    frm->data[2], frm->linesize[2],
-                                                    (uint32_t)vctx->width, (uint32_t)vctx->height);
-                    arkchemy_video_present();
-                    shown++;
-                    if (shown == 1)
-                        checkpoint("[ff] first frame presented (%dx%d, fmt=%d)",
-                                   frm->width, frm->height, frm->format);
-                }
-            }
+    for (;;) {
+        int have;
+        if (shown >= max_frames) break;
+        have = (av_read_frame(fmt, pkt) >= 0);
+        if (!have) {
+            if (drained) break;
+            drained = 1;
+            avcodec_send_packet(vctx, NULL);   /* flush buffered frames */
+        } else if (pkt->stream_index != v_idx) {
+            av_packet_unref(pkt);
+            continue;
+        } else if (avcodec_send_packet(vctx, pkt) < 0) {
+            av_packet_unref(pkt);
+            continue;
         }
-        av_packet_unref(pkt);
+        while (shown < max_frames && avcodec_receive_frame(vctx, frm) >= 0) {
+            uint8_t *dst_data[4];
+            int dst_stride[4];
+            /* swscale instead of the hand-rolled per-pixel converter: it is
+               SIMD and this is 921,600 pixels a frame, which is where the
+               frame rate was going. Scale straight into the staging buffer at
+               the letterbox offset, using the full framebuffer stride. */
+            if (!sws) {
+                sws = sws_getContext(frm->width, frm->height, (enum AVPixelFormat)frm->format,
+                                     (int)dst_w, (int)dst_h, AV_PIX_FMT_RGBA,
+                                     SWS_BILINEAR, NULL, NULL, NULL);
+                if (!sws) { checkpoint("[ff] sws_getContext failed"); goto after; }
+                memset(g_vid_staging_cpu, 0, ARKCHEMY_GX2_FB_WIDTH * ARKCHEMY_GX2_FB_HEIGHT * 4u);
+            }
+            dst_data[0] = g_vid_staging_cpu + (off_y * ARKCHEMY_GX2_FB_WIDTH + off_x) * 4u;
+            dst_data[1] = dst_data[2] = dst_data[3] = NULL;
+            dst_stride[0] = (int)(ARKCHEMY_GX2_FB_WIDTH * 4u);
+            dst_stride[1] = dst_stride[2] = dst_stride[3] = 0;
+            sws_scale(sws, (const uint8_t * const *)frm->data, frm->linesize,
+                      0, frm->height, dst_data, dst_stride);
+            arkchemy_video_present();
+            arkchemy_audio_pump(&audio);
+            shown++;
+            if (shown == 1)
+                checkpoint("[ff] first frame presented (%dx%d fmt=%d -> %ux%u at %u,%u)",
+                           frm->width, frm->height, frm->format,
+                           (unsigned)dst_w, (unsigned)dst_h, (unsigned)off_x, (unsigned)off_y);
+        }
+        if (have) av_packet_unref(pkt);
     }
+after:
     checkpoint("[ff] presented %d frames from %s", shown, path);
-
-    if (audio_started) {
-        AudioOutBuffer *rel = NULL;
-        u32 rel_count = 0;
-        audoutWaitPlayFinish(&rel, &rel_count, 5000000000ULL); /* cap the wait at 5s */
-        audoutStopAudioOut();
-        audoutExit();
+    /* let any queued audio finish rather than cutting it off with the video */
+    while (audio.active && audio.offset < audio.bytes) {
+        arkchemy_audio_pump(&audio);
+        svcSleepThread(2000000ULL);
     }
 cleanup:
+    arkchemy_audio_stop(&audio);
+    if (sws) sws_freeContext(sws);
     if (pcm) free(pcm);
     if (frm) av_frame_free(&frm);
     if (pkt) av_packet_free(&pkt);
     if (vctx) avcodec_free_context(&vctx);
     if (fmt) avformat_close_input(&fmt);
 }
+
 
 static void arkchemy_boot_show_splash(void) {
     const char *path = "sdmc:/switch/Jouster/meta/bootTvTex.tga";
@@ -2445,18 +2542,25 @@ static void game_thread_func(void *arg) {
         void ppc_BinkClose(PpcContext *ctx);
         ppc_import_gx2_GX2Init(&g_ctx);
         if (g_arkchemy_gx2.initialized && g_video_hbink) {
-            /* Wii U boot order: splash, jingle, boot movie, then content. */
+            /* Wii U boot order: splash, then jingle, then the boot movie.
+             * The recompiled-decoder experiment runs after those and before
+             * the ffmpeg playback, so the working picture is what is left on
+             * screen rather than the truncated one -- previously the good
+             * frames were followed by the colour bars and the broken decode,
+             * which read as a regression rather than as a diagnostic. */
             arkchemy_boot_show_splash();
             arkchemy_boot_play_sound();
-            arkchemy_ff_play("sdmc:/switch/Jouster/meta/bootMovie.h264", 600);
-            arkchemy_ff_play("sdmc:/switch/Jouster/content/movies/bash.mov", 600);
+            arkchemy_ff_play("sdmc:/switch/Jouster/meta/bootMovie.h264", 900);
             checkpoint("[video] deko3d up (%ux%u RGBA8) -- playing movies/bash.mov to the screen",
                        (unsigned)ARKCHEMY_GX2_FB_WIDTH, (unsigned)ARKCHEMY_GX2_FB_HEIGHT);
             arkchemy_bink_video_play(g_video_hbink, 240);
             g_ctx.r[3] = g_video_hbink;
             ppc_BinkClose(&g_ctx);
             g_video_hbink = 0;
-            checkpoint("[video] playback finished, decoder closed");
+            checkpoint("[video] recompiled-decoder attempt finished, decoder closed");
+            /* Now the known-good decode of the same file, so the screen ends
+             * on a real picture and the two can be compared directly. */
+            arkchemy_ff_play("sdmc:/switch/Jouster/content/movies/bash.mov", 900);
         } else {
             checkpoint("[video] skipped: gx2_initialized=%d hbink=0x%x",
                        (int)g_arkchemy_gx2.initialized, (unsigned)g_video_hbink);
