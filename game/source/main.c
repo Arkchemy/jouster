@@ -3349,6 +3349,7 @@ int main(int argc, char *argv[]) {
                        " -- tlsfc: calls=%u bail=%u mem=0x%x size=0x%x"
                        " -- sizeclass: hits=%u first_pc=0x%x fl=%u"
                        " -- badblock: hits=%u ctrl=0x%x blk=0x%x size=0x%x hdr=[0x%x,0x%x,0x%x,0x%x]"
+                       " -- nullwrite: count=%u first_pc=0x%x addr=0x%x val=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3420,6 +3421,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_bb_hits, g_arkchemy_bb_ctrl, g_arkchemy_bb_blk, g_arkchemy_bb_size,
                        g_arkchemy_bb_hdr[0], g_arkchemy_bb_hdr[1],
                        g_arkchemy_bb_hdr[2], g_arkchemy_bb_hdr[3],
+                       g_ppc_null_write_count, g_ppc_null_write_pc,
+                       g_ppc_null_write_addr, g_ppc_null_write_val,
                        loopwatch_buf);
         }
 

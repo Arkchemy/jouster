@@ -1,0 +1,71 @@
+2026-08-29 — the allocator was never the bug: "(null)/" is written to address 0
+================================================================================
+
+Build 19:35 on hardware:
+
+    badblock: hits=1 ctrl=0x45002e0 blk=0x0 size=0x6c292f00
+              hdr=[0x286e756c,0x6c292f00,0x0,0x834bd4]
+
+blk = 0. The neighbour pointer tlsf_free followed is NULL, so it is not in the
+pool, and the "header" it read is whatever happens to live at guest address 0.
+
+Decoding those four words as big-endian bytes:
+
+    0x286e756c 0x6c292f00 0x00000000 0x00834bd4
+    28 6e 75 6c  6c 29 2f 00  00 00 00 00  00 83 4b d4
+    '(' 'n' 'u' 'l'  'l' ')' '/' 0
+
+Guest address 0 contains the string "(null)/".
+
+THE WHOLE CHAIN
+---------------
+1. Something formats a path with a NULL string argument, giving "(null)/...",
+   and writes it through a NULL destination pointer.
+2. The guest-memory mask turns that into a legal write to address 0. Nothing
+   faults, nothing is logged, execution continues normally.
+3. Much later tlsf_free merges a freed block with its neighbour, reads the
+   neighbour pointer from *(ptr-8), and gets 0.
+4. It reads the neighbour's size from address 0+4, which is the ASCII "l)/\0"
+   = 0x6C292F00.
+5. fls(0x6C292F00) = 31, so fl = fls - 7 = 24. Valid fl is 0..23, since the
+   sl-bitmap array spans +0x14..+0x74, 24 words.
+6. Bit 24 is set in the first-level bitmap.
+7. Every later search for a large block picks fl=24, computes idx = 790, reads
+   a "list head" from ctrl+0x74+3160 -- past the table, in block metadata --
+   finds 0 rather than the sentinel, and walks forever.
+
+The allocator was never the bug. tlsf_free, tlsf_create and the search loop
+all behave correctly given the numbers they were handed. Everything from step
+3 onward is a faithful consequence of step 1.
+
+WHAT "(null)/" MEANS
+--------------------
+That is printf's rendering of a NULL %s argument, followed by a path
+separator: something building a file path where the base directory string is
+NULL. Worth connecting to a much older observation -- the retail game opens
+/vol/content/alchemy.xml as the very first file it touches, and our engine
+opens no file at all in a full 120-second run. A path builder whose base is
+NULL fits that exactly.
+
+THIS BUILD (19:45)
+------------------
+Rather than hunt for the writer by inspection, the runtime now records it.
+conquertron's ppc_runtime.h gained a null-write trap: the first store below
+ARKCHEMY_NULL_WRITE_LIMIT (default 0x1000) is recorded with
+g_ppc_current_pc, which names the function doing it.
+
+    nullwrite: count=N first_pc=0x... addr=0x... val=0x...
+
+Hooked into the byte store as well as the word store. A u32-only check would
+have missed this case entirely, since a formatted string is written a byte at
+a time -- the same gap that was found and fixed in the existing store watch on
+2026-08-20, repeated here deliberately rather than rediscovered later.
+
+This belongs in conquertron, not the harness: silent null writes are a
+consequence of the masking design and will bite every recompiled title, not
+just this one. Three of today's hangs trace back to masking hiding the
+original bad access.
+
+BUILD
+-----
+19:45, links clean, 174,507,385 bytes.
