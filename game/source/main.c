@@ -1551,7 +1551,8 @@ static void arkchemy_ff_play(const char *path, int max_frames) {
 
     if (audio_started) {
         AudioOutBuffer *rel = NULL;
-        audoutWaitPlayFinish(&rel, NULL, 5000000000ULL); /* cap the wait at 5s */
+        u32 rel_count = 0;
+        audoutWaitPlayFinish(&rel, &rel_count, 5000000000ULL); /* cap the wait at 5s */
         audoutStopAudioOut();
         audoutExit();
     }
@@ -1657,7 +1658,14 @@ static void arkchemy_boot_play_sound(void) {
                (unsigned)audoutGetSampleRate(), (unsigned)audoutGetChannelCount());
     rc = audoutAppendAudioOutBuffer(&buf);
     if (R_FAILED(rc)) { checkpoint("[boot] append failed: 0x%x", rc); goto done; }
-    audoutWaitPlayFinish(&released, NULL, UINT64_MAX);
+    /* released_count is an OUT parameter -- libnx writes the number of played
+     * buffers through it unconditionally, so NULL is a guaranteed null
+     * dereference. That is exactly what crashed the 12:12 build: a data abort
+     * with esr=0x92000006 and far=0x0, immediately after the jingle started. */
+    {
+        u32 released_count = 0;
+        audoutWaitPlayFinish(&released, &released_count, UINT64_MAX);
+    }
     checkpoint("[boot] boot sound finished");
 
 done:
