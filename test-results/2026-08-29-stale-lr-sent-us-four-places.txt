@@ -1,0 +1,59 @@
+2026-08-29 — a stale lr sent the investigation to four wrong places
+===================================================================
+
+Build 23:17:
+
+    nullfield: hits=0 meta=0x0 n=0 nulls=0 name=""
+    dispatchmiss: n=73020 addr=0x0 pc=0x214d258 lr=0x2160d64 this=0x0 vt=0x0
+
+The probe built specifically to catch null entries in the field array at
+0x2160d4c fired ZERO times, while the miss counter kept climbing and still
+reported lr=0x2160d64 -- a return address inside that very loop.
+
+That contradiction is the finding, and it is not about the engine.
+
+WHAT WAS WRONG
+--------------
+g_ppc_dispatch_miss_lr was recording g_ppc_last_caller_lr, which is written at
+FUNCTION ENTRY. It is therefore the lr of the last function ENTERED, not the
+bctrl that missed. Once any leaf has been called and returned, the two are
+unrelated.
+
+The emitted code has had the correct value all along, one line above the
+dispatch:
+
+    /* 2160d60: bctrl */
+    ctx->lr = 0x2160d64u;          <- the true return address
+    ppc_dispatch(ctx, ctx->ctr);
+
+ctx->lr is set by the bctrl itself, so it is exactly the call site.
+
+FOUR WRONG PLACES, ONE CAUSE
+----------------------------
+    _main                      for a low-memory write
+    _savegpr_14_l              for 277,834 dispatch misses
+    igMetaField::construct     for the null virtual calls -- a function whose
+                               entire body is a single blr
+    createInstanceInPlace's
+    field-array loop           chased on the strength of lr=0x2160d64, probed
+                               directly, and proved never involved
+
+The last one is why this is worth fixing rather than working around. A probe
+placed from a stale lr can come back with hits=0 and look like it has
+disproved something, when it is simply sitting in the wrong function. That is
+a failure mode that produces confident wrong conclusions, which is exactly
+what happened.
+
+WHAT IS STILL TRUE
+------------------
+    addr = 0    a call through a null CTR
+    this = 0    with a null object in r3
+    vt   = 0
+    frontier mask=0x00, registration 124, engine running not hanging
+
+Those come from the dispatch itself and are unaffected. What was never
+established is WHERE, and that is what this build fixes.
+
+BUILD
+-----
+23:26, links clean, 175,940,985 bytes. Reports the true call site.
