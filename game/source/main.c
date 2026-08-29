@@ -1162,6 +1162,22 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
             g_ctx.r[3] = hbink;
             ppc_BinkDoFrame(&g_ctx);
             if (played < 3) {
+                /* 75 guest calls means BinkDoFramePlane bails before decoding.
+                   It is BinkDoFrame's real body (BinkDoFrame is 3 instructions:
+                   li r4,0x303; b BinkDoFramePlane) and has two early exits
+                   before any work:
+
+                     2371740: beq exit   if start_do_frame returned 0
+                     2371764: bne exit   if bink+0x4c is non-zero
+
+                   plus check_for_pending_io and a test of bink+0x1c straight
+                   after it, which smells like a read-error/pending flag. */
+                checkpoint("[video] gates2: +0x1c=%u +0x4c=%u +0x120=%u +0xf8=0x%x +0xfc=0x%x",
+                           (unsigned)ppc_load_u32(&g_ctx, hbink + 0x1cu),
+                           (unsigned)ppc_load_u32(&g_ctx, hbink + 0x4cu),
+                           (unsigned)ppc_load_u32(&g_ctx, hbink + 0x120u),
+                           (unsigned)ppc_load_u32(&g_ctx, hbink + 0xf8u),
+                           (unsigned)ppc_load_u32(&g_ctx, hbink + 0xfcu));
                 checkpoint("[video] frame %d: BinkDoFrame executed %llu guest calls",
                            played, (unsigned long long)(g_ppc_fn_call_count - before_calls));
             }
