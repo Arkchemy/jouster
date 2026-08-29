@@ -1,0 +1,57 @@
+2026-08-29 (run 13) — two string pools: one configured, one hanging
+====================================================================
+
+THE RESULT I HAD RANKED LEAST LIKELY
+-------------------------------------
+    SETPOOLPARAMS      pool=0x4a015bc  maxStrings=16384  bucketCount=1024  @call 4218
+    STRPOOL_NOBUCKETS  pool=0x4400204  bucketCount=0     buckets=0         @call 35688
+
+setStringPoolParameters DOES run, at the right time, with exactly the right
+values -- 16384 and 1024, the values the .data globals hold. It just runs on a
+DIFFERENT OBJECT than the one that hangs.
+
+    configured pool: 0x4a015bc
+    hanging pool:    0x4400204   (lower address -> allocated EARLIER)
+
+Of the three outcomes the probe was built to separate, this was the one I
+listed third. Worth noting: the two hypotheses I had ranked first and second
+(bad global, clobbered global) were both already dead from run 12, and I still
+framed the likely answer as "the setter never runs".
+
+WHAT IS ESTABLISHED
+-------------------
+igStringPool::getDefault (21aa838) is a bare singleton read -- it loads a
+pointer from .data+5460 (synthetic 13652) and returns it, nothing more.
+
+igStringPool::bootstrapInitialize (21aa564) unconditionally creates a pool and
+stores it into that global:
+
+    21aa57c: lwz r3, 0xd9c(r30)
+    21aa580: bl 0x217d3f8
+    21aa584: bl 0x21c4ee0          <- creates the pool
+    21aa588: lis r12, 0x100d       -> 13652
+    21aa58c: stw r3, -0x2c6c(r12)  <- becomes the default pool
+
+So after bootstrapInitialize the default is 0x4a015bc, and that is the object
+initBootstrap then configures with 1024 buckets. Correct, and consistent.
+
+The hanging object 0x4400204 sits at a lower address, so it existed before
+that. Two readings remain, and they are genuinely different bugs:
+
+  a) something created a string pool during static initialisation, before
+     bootstrapInitialize, and objects from that phase still hold pointers to
+     it. releaseString is then called on a pool nobody ever configured.
+  b) 0x4400204 is not a pool at all, and a wrong `this` reaches releaseString.
+     Its fields are consistent with garbage: buckets 0, bucketCount 0, and
+     count@0x8 = 0x1000000, which is MEM1's base address rather than any
+     plausible count.
+
+CHANGE
+------
+Probe at the top of igStringPool::releaseString logging the pool it was passed,
+the container, its own caller's return address, and -- importantly -- what the
+getDefault global holds at that instant.
+
+  pool == defaultPool     -> the default pointer itself moved, and (a) is wrong
+  pool != defaultPool     -> the caller is holding a stale or bogus pool, and
+                             caller_lr names exactly which call site to read
