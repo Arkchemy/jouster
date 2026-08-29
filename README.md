@@ -110,31 +110,41 @@ examples live in `test-results/`.
 ## Status
 
 Early, and not playable. The engine starts, runs its 114 static initialisers
-and reaches its reflection registration, but stalls partway through and never
-gets to level or asset loading.
+and gets partway through its reflection registration before stalling, so it
+never reaches level or asset loading.
 
 What does work:
 
 - **Video and audio playback.** `bash.mov` plays start to finish, 526 frames at
-  29.97fps with its audio in sync, decoded by ffmpeg (already in devkitPro's
-  portlibs, with a Bink decoder and demuxer). A native Bink shim also serves
-  the game's own `BinkOpen`/`BinkDoFrame` API, delivering all 720 luma rows per
-  frame.
-- **The Wii U boot presentation** — `bootTvTex.tga` splash and the 18.9-second
-  `bootSound.btsnd` jingle, from the game's own `meta/` files.
+  29.97fps with audio in sync, decoded by ffmpeg from devkitPro's portlibs. A
+  native Bink shim also serves the game's own `BinkOpen`/`BinkDoFrame` API,
+  delivering all 720 luma rows per frame.
+- **The Wii U boot presentation** — the `bootTvTex.tga` splash and the
+  18.9-second `bootSound.btsnd` jingle, from the game's own `meta/` files.
+- **Filesystem access.** All 22 coreinit FS imports the game calls are
+  implemented, and a boot self-test opens `/vol/content/alchemy.xml`,
+  `content:/alchemy.xml`, a bare relative path and a nested
+  `permanent/bootstrap.bld` through the same translation the engine uses.
 
 What does not:
 
-- **The engine boot.** Registration reaches 61 of roughly 1007 classes, then
-  hangs in the pool allocator (`tlsf_largest_free_block_size`) walking a free
-  list whose head is null. Guest-memory masking turns what would be a crash
-  into a silent spin, so it stops rather than faults.
+- **The engine boot.** Registration reaches roughly 99 of about 1,007 classes.
+  Two filesystem classes, `igFile` and `igVirtualStorageDevice`, still never
+  register.
 - **Game rendering.** Graphics calls are honest no-ops pending a Switch
   backend; nothing the game itself draws reaches the screen.
 
-Progress is tracked run by run in `test-results/`, including the wrong turns —
-several confident theories in there were later disproved, and the records say
-so rather than being quietly rewritten.
+Progress is tracked run by run in `test-results/`, including the wrong turns.
+Several confident theories in there were later disproved and the records say
+so rather than being quietly rewritten -- the pool allocator, for one, was
+chased for hours before it turned out to be reading a block header out of
+address 0.
+
+## Reference material
+
+- `docs/registration-order-real.txt` -- 965 classes in the retail game's own
+  registration order, captured from Cemu by breaking on `appendToArkCore`.
+  Diffing our order against it is what identified the missing classes.
 
 ## Licence
 
