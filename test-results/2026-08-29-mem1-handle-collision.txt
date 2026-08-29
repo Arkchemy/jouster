@@ -1,0 +1,82 @@
+2026-08-29 (run 9) — root cause: heap handle collision, not a leak
+===================================================================
+
+THE MEASUREMENT
+---------------
+With the accounting table finally shared across translation units, MEM1's
+exhaustion dump produced exactly one line:
+
+    MEM top consumer  pc=0x215696c  count=1  bytes=33554432
+
+ONE allocation, of exactly 32MB -- the whole of MEM1. Not thousands of small
+leaks, which is what "monotonic growth with 78 frees" had suggested and what
+I spent three builds instrumenting for.
+
+pc 0x215696c is Core::igCafeSystemMemory::activate, called from
+Core::igMemoryContext::activate.
+
+WHY THAT ALLOCATION IS CORRECT
+------------------------------
+It is the standard Cafe OS idiom for taking over a base heap:
+
+    h     = MEMGetBaseHeapHandle(MEM1);
+    size  = MEMGetAllocatableSizeForExpHeapEx(h, align);
+    block = MEMAllocFromFrmHeapEx(h, size, align);   <- all of MEM1
+    mine  = MEMCreateExpHeapEx(block, size, flags);  <- own heap in that block
+
+The game is doing exactly what it should. The bug is entirely ours.
+
+ROOT CAUSE
+----------
+arkchemy_mem_heap_create set bump = base, reserving nothing at the start of
+a heap. So the frame-heap allocation above returned MEM1's own base address,
+0x1000000 -- confirmed directly in the log, which shows MEMCreateExpHeapEx
+being called with heap_base=0x1000000, identical to MEM1's base.
+
+Heap handles in this shim ARE base addresses (arkchemy_mem_heap_create
+returns `base`), which matches Cafe OS, where the handle is a pointer to the
+heap header at the start of the block. So the game's brand-new 32MB heap and
+the now-empty MEM1 frame heap had the SAME handle, and
+arkchemy_mem_heap_find returns the first match -- the parent.
+
+Every allocation the game made against its own fresh 32MB heap was served
+from the exhausted parent and returned NULL, while its real heap sat
+untouched and unreachable. igStringPool then failed to allocate, an item
+went missing from its bucket, and igStringPool::remove spun forever walking
+a chain for something that was not there.
+
+Real Cafe OS cannot hit this: MEMCreateFrmHeapEx/MEMCreateExpHeapEx write a
+0x40-byte MEMHeapHeader at the start of the block and begin allocating after
+it, so a child block never starts at its parent's base.
+
+FIX
+---
+arkchemy_mem_heap_create now starts bump at base + 0x40, mirroring the real
+heap header. Child heaps therefore get distinct base addresses and distinct
+handles. One line, plus the reasoning.
+
+WHAT MISLED ME, WORTH RECORDING
+--------------------------------
+Every visible symptom said "leak": monotonic growth, 78 frees against 32MB,
+a heap at exactly 100% used. All three are equally consistent with a single
+correct allocation of the entire heap, which is what it was. "Used == size"
+says nothing about how many allocations produced it, and I read it as many.
+
+Three builds were spent getting the instrumentation to report at all:
+  1. only the ExpHeap path was instrumented -- but MEM1 is the FRAME heap,
+     and MEMAllocFromFrmHeapEx had no accounting AND failed with a bare
+     `return 0` and no log line, so it was invisible twice over;
+  2. the accounting table was declared `static` in a header included by
+     hundreds of generated_*.c files, giving every translation unit its own
+     private copy, so the dump read a different table than the one being
+     written. g_arkchemy_mem_heaps directly above it was already extern for
+     exactly that reason.
+Both were mine, and both produced a confident-looking empty result that
+could easily have been read as a finding.
+
+STATE
+-----
+  w4 igArkCore::initBootstrap   hits=1
+  w5 igMemoryContext::activate  hits=1
+  w6 igArkCore::init            hits=0   <- the next thing that should move
+  calls frozen at ~35,687 from frame 900 onward
