@@ -1244,6 +1244,25 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                 if (y0) s0 += ppc_load_u32(&g_ctx, y0 + k);
                 if (y1) s1 += ppc_load_u32(&g_ctx, y1 + k);
             }
+            {
+                /* Ysum only covers the first 64KB -- 51 rows of 1280 -- so it
+                   cannot say how far down the frame the decode reached. Find
+                   the last row with any non-zero luma, which is exactly the
+                   boundary visible on screen between picture and flat green. */
+                uint32_t y1 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + VID_PLANESET_SIZE + 4u);
+                uint32_t row, col, last = 0, filled = 0;
+                if (y1) {
+                    for (row = 0; row < yah; row++) {
+                        uint32_t any = 0;
+                        for (col = 0; col < yaw; col += 16u) {
+                            if (ppc_load_u8(&g_ctx, y1 + row * yaw + col)) { any = 1; break; }
+                        }
+                        if (any) { last = row; filled++; }
+                    }
+                }
+                checkpoint("[video] frame %d: luma rows with data = %u of %u, last row = %u",
+                           played, (unsigned)filled, (unsigned)yah, (unsigned)last);
+            }
             checkpoint("[video] frame %d: BinkDoFrame ret=%u Ysum[set0]=0x%x Ysum[set1]=0x%x fsReads=%u bytes=%u",
                        played, (unsigned)ret, (unsigned)s0, (unsigned)s1,
                        (unsigned)g_arkchemy_fs_read_calls, (unsigned)g_arkchemy_fs_read_bytes);
