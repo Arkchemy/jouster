@@ -1946,6 +1946,15 @@ int main(int argc, char *argv[]) {
             u64 t = 0, u = 0;
             svcGetInfo(&t, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
             svcGetInfo(&u, InfoType_UsedMemorySize,  CUR_PROCESS_HANDLE, 0);
+            if (g_arkchemy_registry_table) {
+                uint32_t pop = 0, hi = 0, k;
+                for (k = 0; k < 2048u; k++) {
+                    if (ppc_load_u32(&g_ctx, g_arkchemy_registry_table + k * 4u) != 0) { pop = pop + 1; hi = k; }
+                }
+                checkpoint("registry @frame %d: table=0x%x populated=%u highest=%u index540=%s",
+                           frame, (unsigned)g_arkchemy_registry_table, (unsigned)pop, (unsigned)hi,
+                           ppc_load_u32(&g_ctx, g_arkchemy_registry_table + 540u * 4u) ? "FILLED" : "empty");
+            }
             checkpoint("host mem @frame %d: used=%lluMB total=%lluMB free=%lluMB",
                        frame, (unsigned long long)(u / (1024*1024)),
                        (unsigned long long)(t / (1024*1024)),

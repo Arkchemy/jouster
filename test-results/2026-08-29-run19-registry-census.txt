@@ -1,0 +1,54 @@
+2026-08-29 (run 19) — the registry is filling, and is also sparse
+==================================================================
+
+CENSUS AT EACH FAILURE
+----------------------
+    @20416  index=0      entry=valid  populated=11   highest=13
+    @24925  index=0      entry=valid  populated=376  highest=466
+    @25487  index=0x21c  entry=NULL   populated=420  highest=523
+    @26597  index=0x4a0  entry=NULL   populated=503  highest=1705
+
+(The @26027 line reads populated=22 highest=28 against a DIFFERENT table,
+0x4405d04 rather than 0x4405388 -- each metaobject carries its own list, so
+those numbers are not comparable with the others. Worth stating, because
+read as one series they look like the table shrinking.)
+
+TWO FACTS, PULLING DIFFERENT WAYS
+----------------------------------
+1. The registry is being FILLED during initBootstrap: 11 -> 376 -> 420 -> 503
+   populated as the boot proceeds. It is not static and it is not empty.
+2. At @25487 the code asks for index 540 when the highest populated index is
+   523 -- consistent with "not registered yet".
+   But at @26597 it asks for 1184 while the highest populated is 1705, and
+   1184 is still NULL. Entries exist well beyond the one being requested, so
+   the table is genuinely SPARSE, not merely short.
+
+Sparse-with-a-higher-watermark rules out the simplest ordering story on its
+own. It does not yet distinguish:
+  a) the class at 540/1184 is registered later and these lookups are simply
+     early, with the sparseness explained by indices that are legitimately
+     unused;
+  b) the class at 540/1184 is never registered, and the lookup would fail no
+     matter when it ran.
+
+WHY A SNAPSHOT CANNOT SETTLE THIS
+----------------------------------
+Every census so far is taken at the moment of failure. Whether index 540 is
+ever filled is a question about the FUTURE of the run, which no snapshot at
+the failure can answer.
+
+CHANGE
+------
+The probe publishes the table pointer into g_arkchemy_registry_table, and the
+harness censuses it once a second alongside the host-memory line, reporting
+populated, highest, and specifically whether index 540 is FILLED or empty. The
+game thread stops at ~call 35,689, so the last line printed is the final state
+of registration -- which answers (a) vs (b) directly.
+
+BUILD NOTE
+----------
+The first attempt failed to link: this header defines its globals with
+__attribute__((weak)) so the hundreds of per-TU copies collapse, and inserting
+the new variable between an existing weak attribute and its definition stole
+it, leaving g_ppc_watch_store_addr non-weak and multiply defined. The new
+global now carries its own.
