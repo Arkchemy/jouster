@@ -107,6 +107,17 @@ def patch_driver():
             print("probe_igfile_registration: driver already instrumented")
             return
         # count and inspect every dispatch this function makes
+        # Also record the list COUNT the driver sees. Cemu shows the retail
+        # game handing this function a list of 21 entries with igFile at index
+        # 13 -- inside the main unrolled loop's first 16, not the remainder.
+        # If our lists are shorter, igFile's slot does not exist at all.
+        entry_sig = "  g_ppc_current_pc = 0x215b914u;"
+        if entry_sig in t:
+            t = t.replace(entry_sig, entry_sig + "\n"
+                          "  { extern unsigned int g_arkchemy_drv_calls, g_arkchemy_drv_maxcount;\n"
+                          "    unsigned int __c = ppc_load_u32(ctx, ctx->r[3] + 4u);\n"
+                          "    g_arkchemy_drv_calls++;\n"
+                          "    if (__c > g_arkchemy_drv_maxcount && __c < 0x10000u) g_arkchemy_drv_maxcount = __c; }", 1)
         old = "  ppc_dispatch(ctx, ctx->ctr);\n"
         new = ("  { extern unsigned int g_arkchemy_drv_dispatches, g_arkchemy_drv_saw_igfile;\n"
                "    g_arkchemy_drv_dispatches++;\n"

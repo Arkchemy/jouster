@@ -1,0 +1,69 @@
+2026-08-29 — what the real game's registration list looks like when igFile runs
+================================================================================
+
+Build 22:28 established that igFile is never dispatched to at any level
+(igfile mask=0x38: the control's whole chain runs, igFile's none of it). So
+the question became whether the driver ever sees it. Cemu answers that from
+the working side.
+
+BREAKING ON arkRegister(igFile) IN THE RETAIL GAME
+---------------------------------------------------
+    lr  = 0x215b9fc
+    r25 = 0x10 (16)   r26 = 0x11dd9680   r27 = 0x15 (21)   r29 = 0x24 (36)
+
+r14..r31 are non-volatile on PowerPC, so at the callee's entry the driver's own
+registers are still intact -- which is what makes this readable without a stack
+walk.
+
+    list header at r26 : array=0x359e0b7c  count=0x15 (21)  capacity=0x1c (28)
+
+    entry array:
+      0x021bc3d8  0x021bc4a8  0x021b3f24  0x021b8664
+      0x021c0ad4  0x021c06b4  0x021c1348  0x021af868
+      0x021b8038  0x021b825c  0x021b95ec  0x021b1594
+      0x021ca8d8  0x021b2eb4  0x021c043c  0x021c050c
+                              ^^^^^^^^^^ igFile, index 13
+
+So the list igFile belongs to holds 21 entries and igFile is number 13.
+
+WHICH DISPATCH SITE, AND WHY IT MATTERS
+---------------------------------------
+getClassMetaSafeInternal walks the list unrolled eight at a time, then handles
+count & 7 in a remainder tail. With 21 entries that is two full iterations of
+eight, then five in the remainder.
+
+lr = 0x215b9fc is the fifth bctrl of the main loop, and index 13 is 8 + 5 --
+the second iteration. So igFile is dispatched by the MAIN LOOP, not the
+remainder.
+
+Our own control, igStorageDevice, arrived from 0x215ba4c, the remainder. That
+looked like evidence the main loop never runs, and it is not: a class whose
+list has fewer than eight entries is handled entirely by the remainder, which
+is ordinary. That inference was made and then dropped.
+
+Also checked and cleared while here: rlwinm. at 0x215b978 computes count/8 and
+sets CR0, and if that CR0 update were missing the ble after it would skip the
+main loop entirely -- which would have explained everything. It is not
+missing. All 6,912 rlwinm. instructions in the tree emit their CR0 update.
+
+THIS BUILD (22:42)
+------------------
+    drv: n=%u sawIgFile=%u calls=%u maxlist=%u
+
+  n           dispatches the driver performs
+  sawIgFile   whether igFile's address is ever among them
+  calls       how many times the driver runs
+  maxlist     the largest list count it sees, directly comparable to the
+              retail 21
+
+  sawIgFile=0 and maxlist well under 14 -> our lists are shorter than the real
+              ones and igFile's slot does not exist, so the question is what
+              builds them
+  sawIgFile=0 and maxlist >= 14         -> the list is long enough but holds
+              something else at that index
+  sawIgFile>0                           -> the driver does reach it and the
+              dispatch itself fails
+
+BUILD
+-----
+22:42, links clean, 175,940,985 bytes.
