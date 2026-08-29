@@ -1,0 +1,57 @@
+2026-08-29 — real addresses for every section
+==============================================
+
+CONFIRMED ON HARDWARE (build 21:46, .text only)
+------------------------------------------------
+    poolrange: A=0x2000020 B=0x2588820     (A was 0x183190)
+    dispatchmiss: n=109248 addr=0x257d200  (was 277,834 at 0x700370)
+
+Both predictions held. A now reads exactly 0x02000020, which is what Cemu
+reads out of the retail game, and the bad dispatch address moved from
+synthetic space into real .text. Misses fell 60%.
+
+That left the rest of the same defect: .rodata, .data and .bss were still
+synthetic, so the module range covered only .text and string literals still
+sat outside it.
+
+THIS BUILD (22:03)
+------------------
+Every relocated section keeps its real address:
+
+    .text     0x02000020
+    .rodata   0x10000000
+    .data     0x100CBE40
+    .bss      0x100E6000
+
+and MEM2 moves from 0x4000000 to 0x11000000, 720MB. The old heap window ran
+0x4000000..0x3E000000, which now contains the game's own globals -- it would
+have handed them out as free memory.
+
+TWO MISTAKES ALONG THE WAY
+--------------------------
+Recorded because both produced a build that looked plausible.
+
+Assigning a real base to every section with one also covered .symtab and the
+.rela tables: 20 million byte stores, 584 chunks, a 467MB NRO against the
+usual 174MB. The pass now only relocates sections that were already going to
+get a base.
+
+Then .text content was skipped on the theory that translated functions make
+the bytes redundant. That is wrong -- the original build copies .text, 5.4
+million byte stores of it, and any code reading a constant out of the code
+section would have read zeros. It produced a 77MB NRO with half the generated
+lines, which is what caught it.
+
+Output is now byte-store-identical to the known-good build: 5,417,129 stores,
+218 chunks, 1,091 init_globals sub-functions, 19,623 functions.
+
+A KNOWN LOOSE END
+-----------------
+.dimport_coreinit resolves to 0xC1032680, above the 1GB guest space, and the
+mask folds it to 0x01032680. Data imports are written separately by fake
+address so this may not matter, but it is not verified and is written down
+rather than assumed harmless.
+
+BUILD
+-----
+22:03, links clean, 174,876,025 bytes.
