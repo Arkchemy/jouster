@@ -1,0 +1,62 @@
+2026-08-29 — the registration lists are being built short
+==========================================================
+
+Build 22:46, with the probe reading the values where the program reads them:
+
+    drv: n=318 sawIgFile=0 calls=1163 gotlist=104 maxlist=11 nullgetter=0
+
+WHAT EACH NUMBER SETTLES
+------------------------
+    nullgetter = 0        The list-getter pointer is never null. Callers pass
+                          a valid function every time, so "somebody hands it a
+                          null pointer" is out.
+
+    gotlist = 104
+    of calls = 1163       91% of calls bail at the NULL check after calling
+                          the getter. Some of that is ordinary -- a class with
+                          no metafields has no list -- but 91% is a lot.
+
+    maxlist = 11          The longest list we ever walk holds 11 entries. The
+                          retail list igFile belongs to holds 21.
+
+    sawIgFile = 0         igFile's arkRegister address never appears in any
+                          list the driver walks, in a full two-minute run.
+
+WHY sawIgFile=0 IS THE FINDING
+------------------------------
+igFile is retail #80. We register every retail class up to #125 EXCEPT it --
+124 of 125, in the correct order, one hole. So whichever class pulls igFile
+into its list is a class we DID register successfully. Its list simply does
+not contain igFile.
+
+That is not a frontier problem. The lists themselves are coming out short.
+
+GROUND TRUTH FOR COMPARISON
+---------------------------
+Retail, at the first list the driver reads:
+
+    header: array=0x11dd96fc  count=4  capacity=4
+    owner:  metaobject slot 0x101348d8 -> 0x115db8bc
+
+Retail, at the list containing igFile:
+
+    header: array=0x359e0b7c  count=21  capacity=28
+    igFile at index 13, dispatched by the main unrolled loop
+
+So lists live on the heap, are built by appending, and vary in size. Ours
+never exceed 11.
+
+WHAT THIS RULES OUT AND WHAT IS LEFT
+------------------------------------
+Ruled out today, each by measurement rather than argument: the getter pointer
+being null, the driver never running, the main loop being skipped, rlwinm.
+failing to set CR0 for the count/8 branch, and igFile's own registration
+functions failing internally (they are never entered at all).
+
+What is left is whatever APPENDS to these lists. Something adds entries as
+classes register, and ours adds fewer. That is the next thing to instrument.
+
+BUILD
+-----
+No new build. This run measured the 22:46 build; the finding points at code
+not yet identified, and guessing at a fix would be the wrong move.
