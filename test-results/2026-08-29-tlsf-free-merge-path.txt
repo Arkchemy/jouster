@@ -1,0 +1,65 @@
+2026-08-29 — the culprit is tlsf_free's merge path
+===================================================
+
+Build 19:29 on hardware:
+
+    sizeclass: hits=2 first_pc=0x21f0b8c fl=24
+
+Two hits in 120 seconds, so this is one specific event rather than something
+systemic -- which is good news for finding it.
+
+0x21f0b8c is inside tlsf_free, on the path that merges a freed block with its
+neighbour:
+
+    21f0b34: lwz r7,  -8(r4)              ; neighbour block, read from *(ptr-8)
+    21f0b38: lwz r12, 4(r7)               ; its size, from header +4
+    21f0b3c: rlwinm r11, r12, 0, 0, 0x1d  ; strip the low flag bits
+    21f0b40: cmplwi r11, 0x80
+    21f0b44: bge 0x21f0b7c                ; large-block path
+    21f0b7c: cntlzw r12, r11
+    21f0b80: subfic r12, r12, 0x20        ; fls(size)
+    21f0b8c: addi r12, r12, -7            ; fl = fls(size) - 7 = 24
+
+So the oversized size does not belong to the block being freed. It belongs to
+a NEIGHBOUR, reached through the pointer stored at ptr-8, and tlsf_free is
+doing exactly what it should with the numbers it was given.
+
+WHAT IS NARROWED
+----------------
+fl = 24 requires fls = 31, so that neighbour's header claims a size in
+[1 GiB, 2 GiB). PPC_MEM_SIZE is exactly 1 GiB. A value that size is what the
+guest-memory mask produces when an out-of-range address gets wrapped, and a
+size derived from it comes out around the whole address space.
+
+Everything upstream is already ruled out by earlier runs: the pool was created
+(tlsfc calls=2 bail=0 on this exact control block), the size check passed, the
+translation of every tlsf_* function is clean with no dropped displacements,
+stwu emits its update, bdnz and the addic. CR0 update are correct, and the
+pool size is a red herring since 5 MiB maps to fl 16, which is legitimately
+set.
+
+THE TWO REMAINING POSSIBILITIES
+-------------------------------
+They need different fixes, so guessing between them is worth nothing:
+
+  blk inside [ctrl, ctrl + 0x500000)
+      the pointer is fine and the header was scribbled -- something wrote past
+      its allocation into block metadata
+
+  blk outside the pool
+      the pointer at ptr-8 is wrong, most likely wrapped by the mask, and the
+      "header" being read was never a block header at all
+
+THIS BUILD (19:35)
+------------------
+Captures the first occurrence outright:
+
+    badblock: hits=N ctrl=0x... blk=0x... size=0x... hdr=[w0,w1,w2,w3]
+
+blk against ctrl settles which of the two it is on sight. hdr shows whether
+the four words look like a plausible block header (a sane size, sane list
+pointers) or like unrelated data that happens to sit there.
+
+BUILD
+-----
+19:35, links clean, 174,470,521 bytes.

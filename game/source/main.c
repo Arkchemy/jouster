@@ -116,6 +116,12 @@ unsigned int g_arkchemy_tlsfc_mem = 0, g_arkchemy_tlsfc_size = 0;
  * tools/probe_tlsf_sizeclass.py. fl = fls(size) - 7, so fl > 23 means a block
  * claiming a size of 1 GiB or more, which is the whole guest address space. */
 unsigned int g_arkchemy_sc_hits = 0, g_arkchemy_sc_pc = 0, g_arkchemy_sc_fl = 0;
+/* The specific block whose header claims ~1 GiB -- see
+ * tools/probe_tlsf_badblock.py. blk in [ctrl, ctrl+pool) means the header was
+ * scribbled; blk outside means the pointer at ptr-8 is wrong, probably
+ * wrapped by the guest-memory mask. */
+unsigned int g_arkchemy_bb_hits = 0, g_arkchemy_bb_ctrl = 0, g_arkchemy_bb_blk = 0;
+unsigned int g_arkchemy_bb_size = 0, g_arkchemy_bb_hdr[4] = {0,0,0,0};
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
@@ -3342,6 +3348,7 @@ int main(int argc, char *argv[]) {
                        " -- tlsfh: seen=%u ctrl=0x%x fl=0x%x sl=0x%x slot=0x%x idx=%u neigh=[0x%x,0x%x,0x%x,0x%x]"
                        " -- tlsfc: calls=%u bail=%u mem=0x%x size=0x%x"
                        " -- sizeclass: hits=%u first_pc=0x%x fl=%u"
+                       " -- badblock: hits=%u ctrl=0x%x blk=0x%x size=0x%x hdr=[0x%x,0x%x,0x%x,0x%x]"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3410,6 +3417,9 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_tlsfc_calls, g_arkchemy_tlsfc_bail,
                        g_arkchemy_tlsfc_mem, g_arkchemy_tlsfc_size,
                        g_arkchemy_sc_hits, g_arkchemy_sc_pc, g_arkchemy_sc_fl,
+                       g_arkchemy_bb_hits, g_arkchemy_bb_ctrl, g_arkchemy_bb_blk, g_arkchemy_bb_size,
+                       g_arkchemy_bb_hdr[0], g_arkchemy_bb_hdr[1],
+                       g_arkchemy_bb_hdr[2], g_arkchemy_bb_hdr[3],
                        loopwatch_buf);
         }
 
