@@ -73,7 +73,17 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -ldeko3d -lnx -lm
+# FFmpeg comes from the devkitPro portlibs and is already installed; it is not
+# a new dependency and needs no forked tree. Two things it gives us:
+#   - H.264 for meta/bootMovie.h264, including averne's Tegra hardware
+#     backend (ff_h264_nvtegra_hwaccel is compiled into this build)
+#   - a Bink decoder and demuxer (ff_bink_decoder, ff_binkaudio_*,
+#     ff_bink_demuxer), so the game's own .mov files can be decoded
+#     independently of the recompiled decoder -- useful both as a shortcut to
+#     picture and sound, and as an ORACLE to diff against when debugging the
+#     recompiled one.
+# Link order matters: avformat before avcodec before avutil.
+LIBS	:= -ldeko3d -lavformat -lavcodec -lswresample -lswscale -lavutil -ldav1d -lbz2 -lz -lnx -lm -lpthread
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 

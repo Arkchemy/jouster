@@ -1,0 +1,63 @@
+2026-08-29 — ffmpeg was already installed, with a Bink decoder and Tegra H.264
+==============================================================================
+
+RESEARCH RESULT
+---------------
+Looked at the existing Switch homebrew players to see how they decode H.264:
+
+  NXMP (proconsule)   MPV-based, hardware H264/HEVC/VP9 since 0.7.0
+  SwitchWave (averne) custom Tegra hardware backend for ffmpeg, with forked
+                      ffmpeg and mpv as git submodules
+
+Adopting either would mean taking on a forked ffmpeg+mpv tree. That turned out
+to be unnecessary: the devkitPro portlibs on this machine ALREADY ship an
+ffmpeg containing averne's Tegra work, installed 2024-11-06.
+
+Verified by symbol, not by assumption:
+
+    ff_h264_nvtegra_hwaccel     hardware H.264 (also hevc/mjpeg/mpeg1/2/4)
+    ff_bink_decoder             Bink VIDEO
+    ff_binkaudio_dct_decoder    Bink AUDIO
+    ff_binkaudio_rdft_decoder
+    ff_bink_demuxer             the .mov container this game ships
+
+So ffmpeg can decode Skylanders' own movies, picture and sound, and the boot
+movie, with no new dependency and no forked tree.
+
+WHY THIS MATTERS TWICE
+----------------------
+1. A shortcut to the thing actually asked for: bash.mov with sound, without
+   waiting on the recompiled decoder's truncation bug.
+2. An ORACLE, which matters more. The recompiled Bink currently produces
+   32-48 luma rows of 720 before stopping cleanly at a macroblock boundary.
+   Having a known-good decode of the same frame turns "why does it stop"
+   from guesswork into a diff -- the same move that made Cemu useful for the
+   boot sequence, applied to the decoder.
+
+This does NOT replace the recompilation goal. The game driving its own decoder
+is still the target; this de-risks the milestone and supplies a reference to
+debug against.
+
+WHAT WAS BUILT
+--------------
+- Makefile links avformat/avcodec/swresample/swscale/avutil (+dav1d, bz2, z).
+- A host-pointer YUV->RGBA converter. The existing one reads guest memory
+  through ppc_load_u8 because the recompiled decoder writes into the guest
+  arena; ffmpeg hands over ordinary host pointers, so it is the same maths
+  without the address masking.
+- arkchemy_ff_play(): demux, decode audio up front into one interleaved
+  16-bit buffer, start audout, then decode and present video frames through
+  the same staging buffer and swapchain blit already proven by the colour
+  bars. One routine serves both bootMovie.h264 and the game's .mov files.
+
+Boot sequence is now: splash (bootTvTex.tga) -> jingle (bootSound.btsnd) ->
+bootMovie.h264 -> bash.mov -> the recompiled game entry.
+
+Verified linked into the NRO by symbol: ff_bink_decoder,
+ff_binkaudio_dct_decoder, ff_h264_decoder, ff_bink_demuxer,
+ff_h264_nvtegra_hwaccel. NRO grew 159MB -> 167MB.
+
+STILL TRUE, STATED PLAINLY
+--------------------------
+The recompiled Bink decoder still truncates. This build does not fix that; it
+routes around it and gives us the reference needed to fix it properly.
