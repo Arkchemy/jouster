@@ -1,0 +1,54 @@
+2026-08-29 — the boot blocker, in one number: 54 of 1007 classes register
+==========================================================================
+
+VIDEO IS DONE
+-------------
+    frame 0/1/2: luma rows with data = 720 of 720
+    movie-path watch: hits=0
+
+All three frames full through the game's own Bink API, and the watch on
+"movies/%s" never fires -- the engine genuinely never reaches video, which is
+consistent with everything else. The decoder is no longer between the engine
+and a picture.
+
+THE BOOT BLOCKER
+----------------
+    classes carrying an arkRegisterInternal: 1007
+    all of them called somewhere in the tree: 1007
+    reaching appendToArkCore on hardware:       54
+
+Registration gets about 5% through and stops. That single ratio explains the
+whole downstream chain that has been chased for two days:
+
+  registry index 540 is NULL  -- of course it is; registration never got past
+    54, and 540 is far beyond that
+  setCapacity takes reallocateFieldMemory(obj=0)
+  the list ends up with a count and no buffer
+  igStringRefList::setAll walks guest addresses 0,4,8...
+  garbage reaches internalRelease as a container
+  igStringPool::remove spins on bucket index 0x811C9DC5
+
+And the hang is INSIDE registration, not after it:
+setMetaFieldBasicPropertiesAndValidateAll is field setup for a class being
+registered. So the boot dies partway through registering roughly the 54th
+class, and everything else is consequence.
+
+This reframes two days of work. The NULL registry entry was never the root --
+it was a symptom of registration stopping, and every layer chased below it was
+downstream of that.
+
+WHAT THIS BUILD MEASURES
+-------------------------
+A probe on appendToArkCore logging the last handful of registrations before
+the stall: the sequence number, the metaobject, its type index and its name
+pointer. That turns "it dies around the 54th class" into a named class, which
+is the difference between a region to search and a thing to read.
+
+CORRECTION CARRIED FORWARD
+--------------------------
+The earlier claim that the four recompiler fixes moved the boot twelve times
+further was wrong; that rise was the recompiled Bink decoder sharing the same
+call counter. The boot's real figure is 35,221 calls against 35,689 before any
+of them. The fixes were worth having on their own merits -- computed jump
+tables alone silently broke every switch in the game -- but they did not
+advance the boot.
