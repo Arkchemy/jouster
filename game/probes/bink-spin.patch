@@ -1,0 +1,23 @@
+--- a/generated_0136.c
++++ b/generated_0136.c
+@@ CheckReadDelta16Bundle -- 2379154, the loop Bink's decoder hangs in @@
+   /* 2379154: bne 0x2378f2c */
++  /* ARKCHEMY PROBE: r23 -= r30 until r23 is exactly zero, so this never ends
++     if r30 is 0 or r23 is not a multiple of it. Report the counters once and
++     force the loop to end: a corrupt frame that reaches the screen shows how
++     far the decode got, which a hang does not. */
++  {
++      static uint32_t bink_spin = 0;
++      if (!ctx->cr0_eq) {
++          if (++bink_spin > 100000u) {
++              arkchemy_probe4("BINK_SPIN", "r23", ctx->r[23], "r30", ctx->r[30],
++                              "r22", ctx->r[22], "r26", ctx->r[26]);
++              bink_spin = 0;
++              ctx->r[23] = 0;
++              ctx->cr0_eq = 1;
++          }
++      } else {
++          bink_spin = 0;
++      }
++  }
+   if (!ctx->cr0_eq) goto L_2378f2c;
