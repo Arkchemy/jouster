@@ -1,0 +1,57 @@
+2026-08-29 (run 20) — the registry hole is permanent
+=====================================================
+
+    registry @frame  600: table=0x4405388 populated=796 highest=2047 index540=empty
+    registry @frame  900: populated=799 highest=2047 index540=empty
+    ...frozen at 799 through frame 6900...
+
+THE ANSWER
+----------
+Index 540 is never filled. The table ends up with 799 populated entries
+scattered across indices reaching 2047, so it is genuinely SPARSE, and 540 is
+a hole rather than a slot registration had not yet reached. Ordering alone
+does not explain it.
+
+HONEST LIMIT ON THAT CONCLUSION
+--------------------------------
+`populated` freezes at 799 from frame 900 onward because the game thread hangs
+there. Registration stops because of the hang, and the hang is caused by the
+missing entry. So strictly: index 540 is not registered by the time it is
+needed, and nothing after the hang can fill it. Whether a healthy boot would
+have registered it later cannot be settled from inside a run that stops. What
+IS settled is that entries far beyond 540 (up to 2047) are already present
+when 540 is still empty, which is not what a purely sequential shortfall looks
+like.
+
+WHERE THE BOOT STANDS
+---------------------
+  114/114 static initialisers            done
+  Bink open/decode/next/close            works on a real retail .mov
+  main(argc, argv)                       reached
+  GX2Init / deko3d swapchain             created successfully
+  igMemoryContext::systemActivate  w5=1  reached
+  igArkCore::initBootstrap         w4=1  entered, never returns
+  appendToArkCore                  w7=54
+  igArkCore::init                  w6=0  never reached
+  alchemy.xml                            never opened by the engine
+
+THE ONE REMAINING CHAIN
+-----------------------
+  registry[540] is NULL
+    -> igDataList::setCapacity takes reallocateFieldMemory(obj=0)
+    -> reads igMemory::Properties from guest address 9 (garbage)
+    -> _buffer (+0x14) stays NULL
+    -> setCount(list, 128) records 128 elements over no array
+    -> igStringRefList::setAll walks guest addresses 0,4,8,...
+    -> releases low-memory junk as if it were pooled strings
+    -> igStringPoolContainer::internalRelease -> releaseString(pool=0)
+    -> igStringPool::remove walks buckets[0x811C9DC5] forever
+
+Every symptom pursued this week is downstream of that single NULL. The chain
+is fully measured end to end; nothing in it needs further probing.
+
+NEXT
+----
+Find what should register class index 540 and why it does not. The registry is
+populated during initBootstrap (11 -> 799), so the mechanism works for 799
+other classes -- this is a specific gap, not a broken system.
