@@ -139,6 +139,11 @@ unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
 unsigned int g_arkchemy_regchain = 0;
 unsigned int g_arkchemy_regdrv_lr = 0, g_arkchemy_regdrv_n = 0;
 unsigned int g_arkchemy_frontier_mask = 0;
+/* First metaobject found with null entries in its field array -- see
+ * tools/probe_null_fields.py. */
+unsigned int g_arkchemy_nf_hits = 0, g_arkchemy_nf_meta = 0;
+unsigned int g_arkchemy_nf_n = 0, g_arkchemy_nf_nulls = 0;
+char g_arkchemy_nf_name[64] = {0};
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
  * no longer defined here. */
@@ -3413,6 +3418,7 @@ int main(int argc, char *argv[]) {
                        " regdrv: lr=0x%x n=%u"
                        " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x"
                        " -- frontier: mask=0x%02x"
+                       " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3496,6 +3502,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_regdrv_lr, g_arkchemy_regdrv_n,
                        g_ppc_dispatch_miss_count, g_ppc_dispatch_miss_addr, g_ppc_dispatch_miss_pc, g_ppc_dispatch_miss_lr, g_ppc_dispatch_miss_r3, g_ppc_dispatch_miss_vt,
                        g_arkchemy_frontier_mask,
+                       g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
+                       g_arkchemy_nf_nulls, g_arkchemy_nf_name,
                        loopwatch_buf);
         }
 
