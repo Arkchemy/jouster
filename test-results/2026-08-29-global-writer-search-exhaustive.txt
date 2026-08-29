@@ -1,0 +1,87 @@
+2026-08-29 — exhaustive search for a writer to the uninitialised global
+=======================================================================
+
+Following up the root cause (see 2026-08-29-root-cause-uninitialised-global).
+The question was whether "zero writes found" meant "zero writes exist", or
+whether the scan was blind to the form. Every scan below was run because the
+previous one could not, structurally, have seen a particular addressing mode.
+
+Target: synthetic 435928 = &.bss+321000 = real 0x101345E8
+
+  1. folded-base stores, synthetic space ......... 0 writes, 1 read
+  2. disassembly-comment EA simulation, real
+     PowerPC address space (immune to folding) ... 0 writes, 1 read
+  3. literal ppc_store_* to the address .......... 0
+  4. data-import stores (emitted with no
+     disassembly comment -- scans 1 and 2 were
+     structurally incapable of seeing these) ..... 0  (only 3 exist, all coreinit)
+  5. small-data-area stores via r13/r2 (base
+     never established by a lis, so invisible to
+     scans 1 and 2) ............................. 0  (binary uses no SDA at all)
+  6. indexed stores stwx/sthx/stbx (register+
+     register form, not matched by the disp(base)
+     regex in scans 1 and 2) .................... 3256 exist, 0 reach the target
+  7. address ever taken, to be stored through
+     interprocedurally by a callee .............. 0
+
+TEXT COVERAGE
+-------------
+Extracted every /* ADDR: insn */ comment across all 217 generated files:
+
+    instructions emitted : 1,450,489
+    text range           : 0x2000020 .. 0x258881C
+    coverage             : 100.00%
+    unrecovered          : 28 bytes, as 7 isolated single instructions
+
+So there is no missing function. The "conquertron failed to recover the
+writer" theory is dead: the entire text section is present.
+
+RELOCATION FOLDING IS CONSISTENT
+--------------------------------
+Checked whether reads and writes to one real global could have been folded to
+two different synthetic addresses, which would mean they never meet:
+
+    .bss offsets mapping to more than one synthetic address : 0
+
+WHY THE INTERPROCEDURAL CASE IS ALSO CLOSED
+-------------------------------------------
+Worth stating, because it was very nearly missed. A store through a pointer
+passed as a function argument is invisible to a scanner that resets its
+register tracking at function boundaries -- and 0x10134560 is address-taken 17
+times with 0x101345E8 sitting exactly 0x88 past it, which is the classic shape
+of "pass a struct pointer to an init function".
+
+What closes it is that conquertron folds relocations into fully-resolved
+synthetic constants. `addi r3, r3, 0x4560` emits `ctx->r[3] = ctx->r[3];` -- a
+no-op, because the displacement is already in the preceding lis. So in
+synthetic space, ANY reference to this global, whether to load it, store it,
+or take its address to hand to a callee, must materialise the constant 435928
+somewhere. It appears exactly once in 8.7 million lines, and that once is the
+read.
+
+REMAINING GAP, STATED RATHER THAN GLOSSED
+-----------------------------------------
+One path is not excluded: a callee receiving a *different* nearby base
+constant and storing at a large displacement. Synthetic .bss is linear
+(&.bss+321000 - &.bss+306328 = 435928 - 421256 = 14672 exactly), so
+`stw rX, 0x3950(r3)` with r3 = 421256 would land on the target and no scan
+here would see it. 0x3950 is a legal 16-bit displacement, though a very large
+one for a struct field. Ruling it out needs real interprocedural analysis.
+
+WHAT THIS MEANS
+---------------
+The recompilation is faithful: full text coverage, consistent folding. The
+global really is read once and written never. That makes "an uninitialised
+pointer" less likely to be the whole story than it looked, and moves suspicion
+toward the read at 215db84 executing on a path that should not be reached yet
+-- i.e. the NULL is a symptom of an earlier wrong branch, not the origin.
+
+That is a different investigation from the one that has been running, and it
+should start from what selects that path, not from the global.
+
+BUILD
+-----
+NRO rebuilt clean at 16:41 (174,462,329 bytes). It is behaviourally IDENTICAL
+to the 15:52 build -- this turn changed no source, only analysis. Flagged
+explicitly because running it on hardware would produce the same log and cost
+a test cycle for nothing.
