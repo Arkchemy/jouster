@@ -1147,8 +1147,25 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
             if (played < 3) checkpoint("[video] frame %d: BinkWait settled after %d ms", played, waits);
         }
 
-        g_ctx.r[3] = hbink;
-        ppc_BinkDoFrame(&g_ctx);
+        {
+            /* 32MB of memory around Bink's own allocations changed by nothing
+               at all when a frame was decoded. Either the output buffers are
+               outside that window, or BinkDoFrame is doing no work whatsoever
+               while still returning 0.
+
+               Those are trivially separable: decoding a 1280x720 frame cannot
+               happen without executing thousands of guest functions. The call
+               counter answers it directly, and a near-zero delta means the
+               decoder is returning early and the search for output buffers is
+               chasing something that was never produced. */
+            uint64_t before_calls = g_ppc_fn_call_count;
+            g_ctx.r[3] = hbink;
+            ppc_BinkDoFrame(&g_ctx);
+            if (played < 3) {
+                checkpoint("[video] frame %d: BinkDoFrame executed %llu guest calls",
+                           played, (unsigned long long)(g_ppc_fn_call_count - before_calls));
+            }
+        }
         if (played < 3) {
             uint32_t ret = g_ctx.r[3], k, s0 = 0, s1 = 0;
             uint32_t y0 = ppc_load_u32(&g_ctx, info + VID_FB_FRAMES + 4u);
