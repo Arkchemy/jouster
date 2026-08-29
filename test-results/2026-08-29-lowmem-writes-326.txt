@@ -1,0 +1,61 @@
+2026-08-29 — 326 low-memory writes, and why the first one is not the answer
+============================================================================
+
+Build 19:45 on hardware:
+
+    nullwrite: count=326 first_pc=0x2579828 addr=0x68a val=0x0
+
+WHAT THIS DOES AND DOES NOT SAY
+-------------------------------
+326 stores below 0x1000 in a two-minute run. Nothing legitimate lives there:
+assign_global_addrs places the first data section at 0x2000 and the stack sits
+near the top of guest memory, so every one of these is a write through a bad
+pointer that the mask silently allowed. That figure alone is worth having.
+
+What it does NOT do is identify the write that mattered. Two reasons, and both
+were avoidable:
+
+1. The recorded address is 0x68a, not 0..7. The bytes that destroyed the TLSF
+   block header spell "(null)/" and live at guest address 0. Recording only
+   the FIRST write in a band 4096 bytes wide meant the first arrival won,
+   which was a different write entirely.
+
+2. first_pc is 0x2579828, which is the entry of _main. g_ppc_current_pc is set
+   at function entry, so it names the innermost function ENTERED, not the
+   instruction storing. For a write performed inside a large function -- or by
+   a shared helper -- that is far too coarse to act on. Right beside it in the
+   disassembly is a byte-copy loop (lbzu / stbu / bdnz), which is exactly the
+   shape that writes a formatted string one byte at a time, but attributing
+   the write to it on that basis would be a guess.
+
+THE FIX TO THE INSTRUMENT (build 19:51)
+---------------------------------------
+conquertron's trap now keeps a second, tight band:
+
+    ARKCHEMY_NULL_WRITE_ZERO_LIMIT = 0x10
+
+Writes into the first 16 bytes are recorded separately, because that band is
+unambiguously a null dereference rather than merely a low address, and it is
+where the damaging bytes actually landed. It also records
+g_ppc_last_caller_lr alongside the entry PC, so a shared helper can be traced
+back to whoever called it.
+
+    zerowrite: count=N pc=0x... lr=0x... addr=0x... val=0x...
+
+lr is the field to read first. If the writer turns out to be a string or
+memory helper, pc will name the helper and lr will name the caller that passed
+it a NULL destination.
+
+STILL TRUE FROM THE PREVIOUS RUN
+--------------------------------
+    badblock: hits=1 ctrl=0x45002e0 blk=0x0 size=0x6c292f00
+              hdr=[0x286e756c,0x6c292f00,0x0,0x834bd4]   = "(null)/"
+
+The chain from that string to the hang is unchanged and fully accounted for:
+null neighbour pointer, ASCII read as a block size, fl = fls(size) - 7 = 24
+against a valid range of 0..23, an out-of-range bitmap bit, and every later
+search walking off the end of the free-list table.
+
+BUILD
+-----
+19:51, links clean, 174,544,249 bytes.
