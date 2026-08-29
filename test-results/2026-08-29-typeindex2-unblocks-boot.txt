@@ -1,0 +1,83 @@
+2026-08-29 — typeIndex 2 unblocks the boot: 54 -> 61, and a correction
+======================================================================
+
+Build 18:28.
+
+    relstr: calls=487  bad=0        (was calls=142 bad=1)
+    registrations: 61               (was 54)
+    calls at stall: 150,839         (was 34,487 -- 4.4x more execution)
+    poolrange: A=0x0 B=0x70b990
+    baditem: never fired, because bad=0
+
+The bad release is gone and the boot walked past igStringRefList.
+
+A CORRECTION THAT MATTERS
+-------------------------
+The earlier experiment substituted typeIndex 0, saw no change at all, and the
+conclusion recorded was "outcome 3: the theory is wrong and the type index is
+not the deciding input". That was wrong.
+
+The index WAS the deciding input. 0 simply resolved to a valid-but-incorrect
+entry, which looks exactly like no effect. Only the real value -- 2, read off
+the metaobject in Cemu -- actually works. A probe that substitutes an
+arbitrary value can distinguish "this input is ignored" from "this input
+matters" only if the value it substitutes happens to be right, and there was
+no way to know that without ground truth. This is the clearest argument yet
+for reaching for Cemu before reaching for a plausible-looking constant.
+
+The new registrations confirm it independently. Type indices now come back
+varied and meaningful:
+
+    #56 igMetaEnum        typeIndex 5
+    #57 igIntList         typeIndex 3
+    #58 igCharMetaField   typeIndex 9
+    #59 igCharList        typeIndex 3
+    #60 igUnsignedIntList typeIndex 3
+    #61 igSystemTime      typeIndex 0
+
+Before this change every index was 2 or 3. The metaobject lookup is genuinely
+working now, not merely returning something non-NULL.
+
+THE NEW BLOCKER
+---------------
+    pc=0x21f0450  lr=0x216fd38  calls=150839 frozen
+    r3=0x45002e0  r4=0x18  r5=0xf  r6=0x4500b5c
+
+0x21f0450 is tlsf_largest_free_block_size, called from
+Core::igMemoryPool::reallocCommon. TLSF is the pool's two-level segregated-fit
+allocator; the loop scans a size-class free list:
+
+    21f04b4: lwz r7, 0x74(r6)   ; free list head
+  L_21f04c8:
+    21f04cc: lwz r7, 8(r7)      ; ->next
+    21f04d8: cmplw r7, r3       ; back at the control block?
+    21f04dc: beq done
+    21f04e0: lwz r8, 4(r7)      ; ->size
+    21f04e4: b L_21f04c8
+
+The list is circular by design and the walk ends only when ->next arrives back
+at the control block in r3. A corrupt chain, or a terminator pointing anywhere
+other than r3, never ends. Same shape as the igStringPool::remove hang: an
+unbounded pointer walk with no NULL check, kept alive by the guest-memory mask
+wrapping bad pointers instead of faulting.
+
+Worth noting this is now a memory-allocator problem rather than a reflection
+one, so it is a genuinely new frontier rather than a variation of the last.
+
+THIS BUILD (18:46)
+------------------
+tools/probe_tlsf_freelist.py counts the walk, records the control pointer and
+the first six nodes, and after 1,000,000 iterations bails out returning the
+largest block found so far. Bailing out is deliberate: it is the honest answer
+for the portion of the list actually walked, and it lets the boot continue so
+the next blocker shows up in the SAME run instead of costing another cycle.
+
+    tlsf: tripped=N ctrl=0x... nodes=[...]
+
+  tripped>0 with repeating nodes   -> a real cycle; find who corrupts the list
+  tripped>0 with distinct nodes    -> a huge but valid list; the cap is low
+  tripped=0                        -> the walk terminates and the stall moved
+
+BUILD
+-----
+18:46, links clean, 174,466,425 bytes.
