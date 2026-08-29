@@ -1,0 +1,69 @@
+2026-08-29 — root cause: a global that is read but never written
+=================================================================
+
+THE FINDING
+-----------
+igDataList::setCapacity reads a global to get the type index it looks up:
+
+    215db80: lis  r12, 0x1013        -> 435928  (&.bss+321000)
+    215db84: lwz  r12, 0x45e8(r12)   -> dereference it
+    215db88: lha  r6, 0xc(r12)       -> the index
+    215db8c: lwz  r0, 0x14(r3)       -> the table
+    215db94: lwzx r27, r10, r0       -> table[index]
+
+Scanning all 217 generated files for that address, matching folded base
+registers rather than literal addresses:
+
+    reads through a folded base : 1
+    WRITES through a folded base: 0
+
+One read, no writes, anywhere in 8.7 million lines. The global lives in .bss,
+so it is permanently NULL. setCapacity therefore reads its index from
+NULL + 0xc -- guest address 12 -- which is where 540 and 1184 come from. They
+were never class indices; they are whatever bytes happen to sit at address 12.
+
+That explains the whole chain, top to bottom:
+
+    global 435928 is NULL
+      index read from address 12 is garbage
+        table[garbage] is NULL
+          setCapacity -> reallocateFieldMemory(obj=0)
+            list gets a count and no buffer
+              igStringRefList::setAll walks addresses 0,4,8...
+                garbage container -> releaseString(pool=garbage)
+                  igStringPool::remove spins on bucket 0x811C9DC5
+
+THIS WAS MEASURABLE ON DAY ONE
+-------------------------------
+A store watch was armed on exactly this address early in the session and
+reported hits=0. It was recorded and not followed. The worktree even carried
+the note "the only reference to it in ~8.7M lines is the read in
+igDataList::setCapacity" -- which states the finding outright, and was filed as
+a detail rather than read as a cause.
+
+Two days of tracing went into the layers below it, and every one of those
+layers was a faithful consequence of this single uninitialised pointer.
+
+WHAT IT MEANS
+-------------
+A global that must hold a pointer is never initialised by any of the 19,623
+recovered functions. Two candidates, and they are distinguishable:
+
+  a) A function that writes it was not recovered. conquertron works on a
+     stripped binary with heuristic function recovery, so a missed function is
+     a real possibility -- and this would be the first evidence of one that
+     matters.
+  b) It is written through a computed address rather than a folded constant,
+     in which case the scan above cannot see it. Worth testing before
+     believing (a): the same class of mistake -- a negative grep that could not
+     see the form it was looking for -- has already cost this project time
+     twice.
+
+NEXT
+----
+Distinguish those two. A store watch is the wrong instrument for it, since it
+has already reported zero; the question is whether any code path anywhere
+computes that address at all.
+
+Video, meanwhile, is finished: 720 of 720 luma rows through the game's own
+Bink API via the native shim.
