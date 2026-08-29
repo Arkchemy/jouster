@@ -1,0 +1,58 @@
+2026-08-29 — .text had a synthetic base, and code addresses were computed from it
+==================================================================================
+
+Build 21:38 changed nothing: dispatchmiss n=277,834 to the same 0x700370.
+
+The previous fix was aimed at the wrong mechanism. It bounds-checked .text
+DATA relocations, and the regenerated output really did come out clean by that
+measure -- 33,260 pointer values inside real .text, none in the bogus band.
+The address was never stored by a relocation. It is computed at runtime.
+
+WHAT IT ACTUALLY IS
+-------------------
+Extracting every section base from the generated code:
+
+    .data              8192
+    .bss             114928
+    .rodata          750464
+    .text          1585552        <- a SYNTHETIC base for the code section
+    .dimport_coreinit  7387792
+    .module_id         7388048
+
+    0x700370 = 7340400 = 1585552 + 5754848 = .text_synthetic_base + offset
+
+assign_global_addrs gives every section referenced by a relocation a synthetic
+base, and .text is referenced like any other. But functions are emitted at
+their REAL addresses and ppc_dispatch is keyed by them, so any code address the
+game computes at runtime -- a folded lis of the section base plus an offset --
+lands in synthetic space and dispatches to nothing.
+
+TWO BUGS, ONE CAUSE
+-------------------
+This also explains something already "fixed" in the wrong place. The module
+range low bound that igMemoryPoolFrameManager::setMemoryPool tests every string
+against read 0x183190 = 1585552 -- the synthetic .text base. Cemu shows the
+retail game holding 0x02000020 there, the real start of .text. That inverted
+the range test and made the engine free every string literal it owned, and it
+was patched around in jouster with fix_module_range_bound rather than fixed in
+the recompiler.
+
+THE FIX
+-------
+.text now maps to its real address. Verified in the regenerated output:
+
+    .text base = 33554464 = 0x2000020
+
+WHAT TO EXPECT
+--------------
+    dispatchmiss n should collapse from ~278,000 toward the handful seen
+    before the boot got this far
+    poolrange A should read 0x02000020 rather than 0x183190
+
+If either does not move, the reading above is wrong and worth saying so
+plainly -- the previous fix in this same area looked right by its own
+measurements and still changed nothing on hardware.
+
+BUILD
+-----
+21:46, links clean, 174,769,529 bytes.
