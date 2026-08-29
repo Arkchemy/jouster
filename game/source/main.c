@@ -1023,7 +1023,20 @@ static void game_thread_func(void *arg) {
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
      * slots above come back empty, the measurement is void. */
-    g_ppc_watch_store_addr2 = 4359280u;
+    /* Was 4359280. Repointed 2026-08-29 at .data+5068 (synthetic 13260),
+     * the global igArkCore::initBootstrap reads to get the string pool's
+     * bucket count:
+     *
+     *   21472c0: lis r5, 0x100d          -> 13260
+     *   21472c8: lwz r5, -0x2df4(r5)     -> reads 0 at runtime
+     *   21472cc: bl setStringPoolParameters   -> stores r5 to pool+0x1c
+     *
+     * ppc_init_globals does contain the initialiser for it -- the only
+     * non-zero byte of that word is store_u8(13262, 4), i.e. big-endian
+     * 0x00000400 = 1024 buckets -- yet the read returns 0, which is why the
+     * pool ends up with no buckets and igStringPool::remove hangs walking
+     * buckets[0x811C9DC5]. Catch whoever clears it. */
+    g_ppc_watch_store_addr2 = 13260u;
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
@@ -1398,6 +1411,12 @@ static void game_thread_func(void *arg) {
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
     checkpoint("[game thread] ppc_init_globals done");
+    /* Settles, in one line, whether the string pool's parameters are wrong
+     * from the start or get clobbered later: these are the exact two words
+     * initBootstrap will read at 21472c4/21472c8. Expected 16384 and 1024
+     * from ppc_init_globals' own byte stores. */
+    checkpoint("[game thread] string pool params at rest: .data+5064=%u .data+5068=%u (expect 16384 and 1024)",
+               ppc_load_u32(&g_ctx, 13256u), ppc_load_u32(&g_ctx, 13260u));
     checkpoint("[game thread] calling ppc_run_static_initializers (114 real C++ static initializers)...");
     ppc_run_static_initializers(&g_ctx);
     g_static_init_done = true;
