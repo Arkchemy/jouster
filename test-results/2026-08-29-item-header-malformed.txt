@@ -1,0 +1,84 @@
+2026-08-29 — module-range fix lands; the item header is the real problem
+=========================================================================
+
+RESULT OF THE 18:07 FIX
+-----------------------
+    poolrange: A(.bss+306328)=0x0  B(.bss+306332)=0x70b990   <- low bound fixed
+    relstr: calls=142 bad=1                                  <- unchanged
+    registration still #54 igStringRefList
+
+The bound is corrected and the window now covers static data. bad stayed at 1,
+which was the branch called out in advance: the released string is genuinely
+heap memory above B, so releasing it is CORRECT and the fault is in the item
+it points back to.
+
+The fix is still right and stays in. It repaired a real defect -- every static
+literal was being released -- it simply was not what this particular hang
+needed.
+
+CEMU GROUND TRUTH: WHAT A HEALTHY POOL AND ITEM LOOK LIKE
+---------------------------------------------------------
+Breaking at igStringPool::remove (0x21a55cc) in the real game:
+
+    this = 0x11bda68c   item = 0x11bdb8cc   hash = 0x296 (662)
+
+    pool @0x11bda68c
+      +0x00  0x1005c154     vtable
+      +0x0c  0x11bda6c0     buckets
+      +0x14  0x11bdb6c4     container
+      +0x18  0x00004000     16384   string buffer size
+      +0x1c  0x00000400     1024    bucketCount
+
+    item @0x11bdb8cc
+      +0x00  0x11bdb6c4     <- the CONTAINER, same value as pool+0x14
+      +0x04  0x00000001     refcount
+      +0x08  0x00000000     next
+      +0x0c  "/vol/content/alchemy.xml"
+
+bucketCount is 1024, matching the "expect 16384 and 1024" params logged at
+rest, and the hash 662 is properly reduced against it.
+
+TWO CORRECTIONS THIS SETTLES
+----------------------------
+1. item+0x00 is NOT the pool. It is the igStringPoolContainer -- the same
+   pointer the pool itself holds at +0x14 -- which is why the callee is
+   igStringPoolContainer::internalRelease and not an igStringPool method.
+   Earlier notes in this session called r3 "the pool"; that was wrong.
+
+2. A pooled string living above the module range is NORMAL. The real item's
+   chars sit at 0x11bdb8d8, well above the image end 0x10181290, and the real
+   game releases it happily. So "the string is above B" was never evidence of
+   anything by itself.
+
+WHERE THE BUG ACTUALLY IS
+-------------------------
+jouster's failing item:
+
+    item = 0x44001f8   *(item+0) = 0x4400204 = item + 0xc
+
+The container pointer field holds the item's own character buffer. Against the
+healthy layout that is unambiguous: either the item was never initialised as
+an igStringPoolItem, or 0x44001f8 is not an item at all and the code simply
+subtracted 12 from a heap string that was never pooled.
+
+THIS BUILD IDENTIFIES WHICH
+---------------------------
+Captures the four header words and the string itself on the first bad call:
+
+    baditem: hdr=[0x..,0x..,0x..,0x..] str="..."
+
+Compare against the healthy shape {container, 1, 0, chars}:
+
+  - a plausible refcount/next and a readable string -> a real item whose
+    container pointer was never written; the bug is in whatever allocates
+    items
+  - garbage words and an unreadable string -> not an item at all, and the
+    question becomes where that heap string came from and why it reached a
+    release path
+  - a recognisable filename like the alchemy.xml above -> it can be traced
+    directly back to its creation site
+
+BUILD
+-----
+18:18, links clean, 174,466,425 bytes. Carries the module-range fix plus the
+nullmeta and relstr probes.

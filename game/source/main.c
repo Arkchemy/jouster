@@ -96,6 +96,8 @@ unsigned int g_arkchemy_relstr_last_lr = 0;
 unsigned int g_arkchemy_relstr_pool = 0;
 unsigned int g_arkchemy_relstr_item = 0;
 unsigned int g_arkchemy_relstr_cont = 0;
+unsigned int g_arkchemy_relstr_hdr[4] = {0,0,0,0};
+char g_arkchemy_relstr_str[64] = {0};
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
@@ -3317,6 +3319,7 @@ int main(int argc, char *argv[]) {
                        " -- nullmeta_fallbacks=%u"
                        " -- relstr: calls=%u bad=%u first_bad_lr=0x%x last_lr=0x%x pool=0x%x item=0x%x cont=0x%x"
                        " -- poolrange: A(.bss+306328)=0x%x B(.bss+306332)=0x%x"
+                       " -- baditem: hdr=[0x%x,0x%x,0x%x,0x%x] str=\"%s\""
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3372,6 +3375,9 @@ int main(int argc, char *argv[]) {
                         * than assumed, because the previous three theories
                         * this session were all confidently wrong. */
                        ppc_load_u32(&g_ctx, 421256u), ppc_load_u32(&g_ctx, 421260u),
+                       g_arkchemy_relstr_hdr[0], g_arkchemy_relstr_hdr[1],
+                       g_arkchemy_relstr_hdr[2], g_arkchemy_relstr_hdr[3],
+                       g_arkchemy_relstr_str,
                        loopwatch_buf);
         }
 
