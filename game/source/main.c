@@ -1177,42 +1177,67 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
            holding real data. The Y plane is 1280x720 and chroma 640x360, so a
            candidate followed by another exactly 921600 bytes later is the
            give-away. */
+        /* Find the decoded frame by BEHAVIOUR, not by guessing offsets.
+         *
+         * Scanning the struct for plane pointers failed twice over: it only
+         * covered bink+0..0x600, and it discarded any buffer whose first 4KB
+         * summed to zero -- which is exactly what a movie opening on a black
+         * frame looks like. The fallback then drew some bookkeeping struct,
+         * which is the tiny coloured symbols on screen.
+         *
+         * A decoded video plane has one unmistakable property: it CHANGES when
+         * a frame is decoded. So checksum the heap around Bink's own
+         * allocations in 64KB blocks, decode one frame, checksum again, and
+         * report the runs of blocks that moved. A 1280x720 luma plane is
+         * 921,600 bytes -- about 14 consecutive blocks -- which is a signature
+         * nothing else in memory will accidentally match. */
         if (played == 0 && !g_video_found_y) {
-            uint32_t off, cand[24], coff[24], csum[24];
-            int n = 0, i2, j2;
-            for (off = 0; off < 0x600u && n < 24; off += 4u) {
-                uint32_t v = ppc_load_u32(&g_ctx, hbink + off), k, sum = 0;
-                if (v < 0x10000u || v >= 0x40000000u) continue;
-                for (k = 0; k < 4096u; k += 4u) sum += ppc_load_u32(&g_ctx, v + k);
-                if (!sum) continue;
-                coff[n] = off; cand[n] = v; csum[n] = sum; n++;
+            enum { VID_SCAN_BASE = 0x0B000000u, VID_SCAN_BLOCKS = 512 }; /* 32MB in 64KB blocks */
+            static uint32_t before[VID_SCAN_BLOCKS];
+            uint32_t b, k, runs = 0;
+            int run_start = -1;
+
+            for (b = 0; b < VID_SCAN_BLOCKS; b++) {
+                uint32_t base = VID_SCAN_BASE + b * 0x10000u, sum = 0;
+                for (k = 0; k < 0x10000u; k += 64u) sum += ppc_load_u32(&g_ctx, base + k);
+                before[b] = sum;
             }
-            for (i2 = 0; i2 < n && i2 < 10; i2++) {
-                checkpoint("[video] bink+0x%x -> 0x%x sum=0x%x", (unsigned)coff[i2],
-                           (unsigned)cand[i2], (unsigned)csum[i2]);
-            }
-            /* a Y plane with chroma exactly one Y-plane later */
-            for (i2 = 0; i2 < n && !g_video_found_y; i2++) {
-                for (j2 = 0; j2 < n; j2++) {
-                    if (cand[j2] == cand[i2] + yaw * yah) {
-                        g_video_found_y  = cand[i2];
-                        g_video_found_cr = cand[j2];
-                        g_video_found_cb = cand[j2] + cw * ch;
-                        checkpoint("[video] FOUND decoded planes: Y=0x%x cR=0x%x cB=0x%x (from bink+0x%x)",
-                                   (unsigned)g_video_found_y, (unsigned)g_video_found_cr,
-                                   (unsigned)g_video_found_cb, (unsigned)coff[i2]);
-                        break;
+
+            g_ctx.r[3] = hbink;
+            ppc_BinkDoFrame(&g_ctx);   /* decode one more frame, then diff */
+
+            for (b = 0; b <= VID_SCAN_BLOCKS; b++) {
+                uint32_t sum = 0;
+                int changed = 0;
+                if (b < VID_SCAN_BLOCKS) {
+                    uint32_t base = VID_SCAN_BASE + b * 0x10000u;
+                    for (k = 0; k < 0x10000u; k += 64u) sum += ppc_load_u32(&g_ctx, base + k);
+                    changed = (sum != before[b]);
+                }
+                if (changed && run_start < 0) run_start = (int)b;
+                if (!changed && run_start >= 0) {
+                    uint32_t addr = VID_SCAN_BASE + (uint32_t)run_start * 0x10000u;
+                    uint32_t len  = (b - (uint32_t)run_start) * 0x10000u;
+                    if (runs < 8u) {
+                        checkpoint("[video] changed region %u: 0x%x len=%u (%u blocks)",
+                                   (unsigned)runs, (unsigned)addr, (unsigned)len,
+                                   (unsigned)(b - (uint32_t)run_start));
                     }
+                    /* a run big enough to hold a 1280x720 luma plane */
+                    if (!g_video_found_y && len >= yaw * yah) {
+                        g_video_found_y  = addr;
+                        g_video_found_cr = addr + yaw * yah;
+                        g_video_found_cb = addr + yaw * yah + cw * ch;
+                        checkpoint("[video] using 0x%x as the decoded frame (Y then chroma)",
+                                   (unsigned)addr);
+                    }
+                    runs++;
+                    run_start = -1;
                 }
             }
-            if (!g_video_found_y && n > 0) {
-                /* fall back to the busiest buffer as luma; chroma may be wrong
-                   but a monochrome picture still proves the decode works */
-                int best = 0;
-                for (i2 = 1; i2 < n; i2++) if (csum[i2] > csum[best]) best = i2;
-                g_video_found_y = cand[best];
-                checkpoint("[video] no exact plane triple; trying busiest buffer 0x%x as luma only",
-                           (unsigned)g_video_found_y);
+            if (!g_video_found_y) {
+                checkpoint("[video] no region large enough changed -- %u regions moved in total",
+                           (unsigned)runs);
             }
         }
 
