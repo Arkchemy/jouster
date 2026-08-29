@@ -1,0 +1,39 @@
+2026-08-29 — data sections at real addresses broke the boot; reverted
+======================================================================
+
+    build   registrations  dispatch misses  poolrange A
+    21:38   99             277,834          0x183190
+    21:46   99             109,248          0x2000020    <- .text real
+    22:03    0             293,840          0x0          <- all sections real
+
+.text KEEPS its real address. That change is measured and good: the module
+range low bound became 0x02000020, exactly what Cemu reads out of the retail
+game, and unresolved indirect calls fell 60% with the remainder landing inside
+real .text rather than synthetic space.
+
+Extending the same treatment to .rodata, .data and .bss broke the boot
+outright -- not subtly. Registration went from 99 classes to zero and
+appendToArkCore was never entered at all, so the engine never got as far as
+its type system. The module bounds read back as 0x0/0x0 and misses rose to
+293,840.
+
+What did NOT break is worth noting, because it narrows things: static
+initialisers still completed, the filesystem self-test still passed all four
+paths, and bash.mov still played its full 526 frames. So the failure is
+specific to whatever the engine does between static init and registration.
+
+Reverted rather than worked around. The reasoning behind the change still
+looks right -- guest memory is 1GB, the whole image spans
+0x02000020..0x10181290, and code and data living in different address spaces
+is what made pointer comparisons meaningless in the first place -- so not
+understanding why it collides is precisely the reason not to keep it.
+docs/address-space-split.md in conquertron still describes the full move as
+the goal, now with evidence that it needs more than swapping bases.
+
+MEM2 also returns to 0x4000000; it had only been moved to 0x11000000 so the
+heap would not cover data sitting at real addresses.
+
+BUILD
+-----
+22:10, links clean, 174,769,529 bytes -- the same size as the 21:46 build it
+restores.
