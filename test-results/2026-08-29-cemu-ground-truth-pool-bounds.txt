@@ -1,0 +1,91 @@
+2026-08-29 — Cemu ground truth: what the pool-range bounds really hold
+======================================================================
+
+THE MISSING PIECE WAS ENDIANNESS
+---------------------------------
+Breakpoints never fired in the earlier attempts, and it was NOT the JIT.
+gdb was talking to the stub little-endian. At 0x2156938 it read 0x980C4B91,
+which is 0x914B0C98 byte-swapped, and 0x914B0C98 is exactly
+`stw r10, 0xc98(r11)`. So the address mapping was right all along; gdb was
+decoding backwards -- and writing its breakpoint traps byte-swapped, which is
+why none of them ever took.
+
+    set endian big
+
+With that added, disassembly matches our own exactly:
+
+    0x2156938:  stw  r10, 3224(r11)     = 0xc98
+    0x215db80:  lis  r12, 4115          = 0x1013
+    0x215db84:  lwz  r12, 17896(r12)    = 0x45e8
+    0x215db88:  lha  r6,  12(r12)
+
+and the halt PC becomes a sane 0x025798ac instead of the garbage 0xac985702,
+which is the same value byte-swapped.
+
+Working recipe, for next time:
+    flatpak run info.cemu.Cemu -g <code/tfbGame_cafe.rpx> --enable-gdbstub
+    gdb: set architecture powerpc:750 / set endian big / target remote localhost:1337
+    Cemu must be restarted between gdb sessions (the stub has no detach).
+    --force-interpreter turned out to be unnecessary.
+
+GROUND TRUTH
+------------
+Breaking on both stores in Core::igCafeSystemMemory::igCafeSystemMemory():
+
+    0x2156938  stw r10, 0xc98(r11)   r10 = 0x02000020   r11 = 0x10130000
+    0x2156958  stw r0,  0xc9c(r11)   r0  = 0x10181290   r11 = 0x10130000
+    memory afterwards: 0x10130c98 = 0x02000020
+
+So the two globals are the loaded module's address range:
+
+    bound A = 0x02000020   start of .text
+    bound B = 0x10181290   end of the image
+
+which decodes the test in igMemoryPoolFrameManager::setMemoryPool exactly:
+
+    if (str <  moduleStart) release;      /* below the image: pool memory   */
+    if (str <  moduleEnd)   skip;         /* inside the image: a static
+                                             string literal, never release  */
+    release;                              /* above the image: pool memory   */
+
+It is a "is this a compile-time literal or a pooled string?" check.
+
+WHAT JOUSTER DOES INSTEAD
+-------------------------
+The values are built from immediates, not runtime queries:
+
+    /* 2156910: lis r9, 0x1000 */   ctx->r[9] = 750464u;   /* &.rodata+0 */
+    /* 2156928: lis r0, 0x1018 */   ctx->r[0] = 7387536u;  /* &+0 */
+    /* 2156934: addic r0, r0, 0x12a0 */  ctx->r[0] = ctx->r[0];   /* folded */
+
+conquertron folds them into SYNTHETIC addresses. Real 0x10181290 becomes
+7387536, and note the annotation is `&+0` with no section name at all --
+0x10181290 is one past the end of the image, so it could not be attributed to
+any section and the fold degenerated.
+
+The pointers these bounds get compared against are guest addresses in a
+different layout (the failing string sits at 0x4400204, in the guest heap). So
+the comparison is between two unrelated address spaces and its result is
+meaningless. That is the leading explanation for the wrong branch.
+
+IT IS A THEORY, AND THIS BUILD MEASURES IT
+------------------------------------------
+The claim "both bounds read 0" in the previous write-up was inferred from
+which branch got taken, never measured. Three theories this session were
+stated confidently and turned out wrong -- the metaobject global as root
+cause, the "fifth recompiler bug" in the bounds loads, and the walk-back of
+the root cause -- so this one gets measured before it gets believed.
+
+New frame field:
+
+    poolrange: A(.bss+306328)=0x... B(.bss+306332)=0x...
+
+Read it against the real values above. If A and B come back as 750464-ish and
+7387536, the synthetic-vs-guest mismatch is confirmed and the fix is to give
+these two globals the guest module range. If they come back 0, something
+prevents the constructor's stores from landing and that is a different bug.
+
+BUILD
+-----
+17:56, links clean, 174,466,425 bytes. Carries the nullmeta fallback and the
+relstr probe from before, both still labelled probes rather than repairs.

@@ -3316,6 +3316,7 @@ int main(int argc, char *argv[]) {
                        " -- report_fmt=\"%s\" append_str=\"%s\""
                        " -- nullmeta_fallbacks=%u"
                        " -- relstr: calls=%u bad=%u first_bad_lr=0x%x last_lr=0x%x pool=0x%x item=0x%x cont=0x%x"
+                       " -- poolrange: A(.bss+306328)=0x%x B(.bss+306332)=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3358,6 +3359,19 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_relstr_calls, g_arkchemy_relstr_bad,
                        g_arkchemy_relstr_first_bad_lr, g_arkchemy_relstr_last_lr,
                        g_arkchemy_relstr_pool, g_arkchemy_relstr_item, g_arkchemy_relstr_cont,
+                       /* The module-range bounds that
+                        * igMemoryPoolFrameManager::setMemoryPool tests every
+                        * string against: "is this pointer inside the loaded
+                        * image, i.e. a static literal, or is it pool memory?"
+                        * Cemu on the real game gives A=0x02000020 (start of
+                        * .text) and B=0x10181290 (end of the image). Here they
+                        * are folded to synthetic addresses instead, and the
+                        * pointers they are compared against are guest heap
+                        * addresses like 0x4400204 -- two different address
+                        * spaces, so the test is meaningless. Measured rather
+                        * than assumed, because the previous three theories
+                        * this session were all confidently wrong. */
+                       ppc_load_u32(&g_ctx, 421256u), ppc_load_u32(&g_ctx, 421260u),
                        loopwatch_buf);
         }
 
