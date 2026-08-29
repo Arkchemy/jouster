@@ -1,0 +1,57 @@
+2026-08-29 — make the null virtual calls name their own type
+=============================================================
+
+The blocker is now ~75,000 indirect calls a run resolving to address 0 --
+empty vtable slots where a virtual method belongs, during object construction.
+The engine is running continuously through this, not hanging.
+
+WHY THE EXISTING FIELDS COULD NOT IDENTIFY THEM
+------------------------------------------------
+The dispatch-miss probe recorded g_ppc_current_pc and g_ppc_last_caller_lr,
+and neither can name the type:
+
+  g_ppc_current_pc names the innermost function ENTERED, and nothing restores
+  it when a leaf returns. It reported 0x214d258, which is
+  Core::igMetaField::construct -- a function whose entire body is a single
+  blr, the base-class no-op. Before that it reported _savegpr_14_l, a
+  register-save helper. Both are simply the last thing entered, not the code
+  making the call.
+
+  lr names the return address of whatever was called last, which is the same
+  problem one step along.
+
+This is the third time this session that a probe named a leaf helper instead
+of the responsible code: _main for a low-memory write, _savegpr_14_l for
+277,834 dispatch misses, and now igMetaField::construct.
+
+WHAT THIS BUILD ADDS (23:12)
+----------------------------
+A bctrl through a vtable slot is a virtual call, so r3 is `this` and its first
+word is the object's vtable pointer. Those two identify the type behind an
+empty slot, which pc and lr cannot.
+
+    dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x
+
+  this in the heap, vt non-zero -> a real object with a real vtable that has a
+                                   hole in it; vt can be matched against the
+                                   vtable pointers init_globals writes, which
+                                   names the class
+  vt = 0                        -> the object has no vtable at all, so it was
+                                   never constructed properly and the fault is
+                                   earlier
+  this = 0                      -> a virtual call on a null object, which is a
+                                   different bug again
+
+Added in conquertron rather than the harness: every recompiled title will hit
+silent virtual calls through unpopulated slots, and the fields that identify
+them belong next to the counter that finds them.
+
+ALSO IN THIS BUILD
+------------------
+The frontier probe from 23:02 (igDirectory #126, igIGBFile #127) is still
+present, so this run also reports whether the registration frontier is reached
+and fails or never reached at all.
+
+BUILD
+-----
+23:12, links clean, 175,936,889 bytes.

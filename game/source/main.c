@@ -138,10 +138,6 @@ unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
  * registers successfully, so its bits show what a working chain looks like. */
 unsigned int g_arkchemy_regchain = 0;
 unsigned int g_arkchemy_regdrv_lr = 0, g_arkchemy_regdrv_n = 0;
-unsigned int g_arkchemy_igfile_mask = 0;
-unsigned int g_arkchemy_drv_dispatches = 0, g_arkchemy_drv_saw_igfile = 0;
-unsigned int g_arkchemy_drv_calls = 0, g_arkchemy_drv_maxcount = 0;
-unsigned int g_arkchemy_drv_nullgetter = 0, g_arkchemy_drv_gotlist = 0;
 unsigned int g_arkchemy_frontier_mask = 0;
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
@@ -3415,9 +3411,7 @@ int main(int argc, char *argv[]) {
                        " -- storagereg: mask=0x%02x n=[%u,%u,%u,%u,%u,%u]"
                        " -- regchain=0x%02x"
                        " regdrv: lr=0x%x n=%u"
-                       " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x"
-                       " -- igfile: mask=0x%02x"
-                       " drv: n=%u sawIgFile=%u calls=%u gotlist=%u maxlist=%u nullgetter=%u"
+                       " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x"
                        " -- frontier: mask=0x%02x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
@@ -3500,11 +3494,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_storagereg_n[4], g_arkchemy_storagereg_n[5],
                        g_arkchemy_regchain,
                        g_arkchemy_regdrv_lr, g_arkchemy_regdrv_n,
-                       g_ppc_dispatch_miss_count, g_ppc_dispatch_miss_addr, g_ppc_dispatch_miss_pc, g_ppc_dispatch_miss_lr,
-                       g_arkchemy_igfile_mask,
-                       g_arkchemy_drv_dispatches, g_arkchemy_drv_saw_igfile,
-                       g_arkchemy_drv_calls, g_arkchemy_drv_gotlist,
-                       g_arkchemy_drv_maxcount, g_arkchemy_drv_nullgetter,
+                       g_ppc_dispatch_miss_count, g_ppc_dispatch_miss_addr, g_ppc_dispatch_miss_pc, g_ppc_dispatch_miss_lr, g_ppc_dispatch_miss_r3, g_ppc_dispatch_miss_vt,
                        g_arkchemy_frontier_mask,
                        loopwatch_buf);
         }
