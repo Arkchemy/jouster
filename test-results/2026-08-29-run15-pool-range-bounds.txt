@@ -1,0 +1,72 @@
+2026-08-29 (run 15) — releaseString is called with a NULL pool, and why
+=======================================================================
+
+WHAT THE RETARGETED PROBE CAUGHT
+---------------------------------
+    calls=25894  pool=0x0         container=0x0        caller_lr=0x2185bac
+    calls=34939  pool=0x8c0002ff  container=0x3        caller_lr=0x2162de0
+    calls=34955  pool=0x0         container=0x0        caller_lr=0x2162de0
+    calls=34957  pool=0x0         container=0x215f5c4  caller_lr=0x2162de0
+    calls=34959  pool=0x0         container=0x194      caller_lr=0x2162de0
+    calls=34963  pool=0x0         container=0x0        caller_lr=0x2162de0
+    defaultPool=0x4a015bc throughout
+
+So nothing "moved". The default pool pointer is correct and stable for the
+whole run. releaseString is simply being handed a NULL (or garbage) `this`,
+because the CONTAINER it comes from is garbage:
+
+    igStringPoolContainer::internalRelease (21a583c):
+        r5 = r3                      ; container
+        r3 = load(container + 0)     ; pool = container->[0]
+        b  releaseString             ; tail call
+
+container = 0 -> load(0) -> pool = 0. (The tail call also explains why
+caller_lr showed igStringRefList::setAll rather than internalRelease: lr is
+not updated by a tail branch, so the probe reports the grandparent. Normal
+PowerPC, not a bug -- I nearly filed it as one after reading a grep-filtered
+view of the function that hid the emitted call.)
+
+WHERE THE GARBAGE CONTAINERS COME FROM
+---------------------------------------
+igStringRefList::setAll guards each release with a range test:
+
+    lwz   r0, 0xc98(r29)      ; lower bound  (.bss+306328, synthetic 421256)
+    cmplw r11, r0
+    blt   -> release path
+    lwz   r4, 0xc9c(r28)      ; upper bound  (.bss+306332, synthetic 421260)
+    cmplw r11, r4
+    blt   -> skip
+          -> release path
+
+The release path runs when the item is OUTSIDE the pool's address range:
+pooled strings are immortal and skipped, non-pooled ones get refcounted and
+released. (My first reading had this inverted; the conclusion is the same but
+the mechanism is not.)
+
+With both bounds zero, `x < 0` is false for every unsigned x, so EVERY pointer
+looks non-pooled and gets released -- including things that are not string
+containers at all.
+
+THE ONLY TWO WRITERS
+--------------------
+Scanning every reference to those addresses (401 and 398 of them) and matching
+folded base registers to stores, exactly two stores exist in the entire tree,
+both in Core::igCafeSystemMemory::__ct__:
+
+    2156938: stw r10, 0xc98(r11)   ; lower
+    2156958: stw r0,  0xc9c(r11)   ; upper
+
+A plain grep for a literal address finds nothing here, because the address is
+folded into a register first. That is worth remembering: on this codebase
+"grep found no stores" is not evidence until the folded-base form is checked
+too -- the same shape of mistake as the display-ownership grep earlier today.
+
+NEXT RUN ANSWERS
+----------------
+The probe now reports both bounds at the moment of a bad release.
+
+  lo == hi == 0   -> igCafeSystemMemory::__ct__ either never ran or computed
+                     zeroes, and that constructor is the thing to fix
+  lo/hi sensible  -> the range is fine and the containers are corrupted for
+                     some other reason, which moves the search back to
+                     igStringRefList's own storage
