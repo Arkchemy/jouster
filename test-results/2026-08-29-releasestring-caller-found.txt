@@ -1,0 +1,92 @@
+2026-08-29 — the probe names the caller; and a wrong turn, corrected
+=====================================================================
+
+Build Aug 29 17:06.
+
+THE PROBE WORKED
+----------------
+    relstr: calls=149 bad=1 first_bad_lr=0x217eeb4
+            pool=0x4400204 item=0x44001f8 cont=0x0
+
+One bad call out of 149. This is a single localised mistake, not a systemic
+one -- 148 releases are perfectly fine. The container argument is NULL too.
+
+THE CALL SITE
+-------------
+0x217eeb4 is inside Core::igMemoryPoolFrameManager::setMemoryPool:
+
+    217ee84: lwz  r11, 0(r26)      ; the string pointer (char*)
+    217ee88: cmpwi r11, 0
+    217ee8c: beq  0x217eeb4        ; NULL -> skip
+    217ee90: lwz  r9, 0xc98(r30)   ; pool range, low bound
+    217ee94: cmplw r11, r9
+    217ee98: blt  0x217eea8        ; below low  -> release
+    217ee9c: lwz  r0, 0xc9c(r29)   ; pool range, high bound
+    217eea0: cmplw r11, r0
+    217eea4: blt  0x217eeb4        ; inside range -> skip
+    217eea8: lwz  r3, -0xc(r11)    ; pool = item->pool
+    217eeac: addi r4, r11, -0xc    ; item = header behind the chars
+    217eeb0: bl   igStringPoolContainer::internalRelease -> releaseString
+
+That is a range test: "is this string inside the pool's buffer?" With both
+bounds reading 0 every comparison fails and control falls through to the
+release path, so a string that was never pooled is released as though it were.
+Its "header" at -0xc is then read as an igStringPoolItem, which is why the
+pool pointer comes back as item+0xc -- the item's own inline characters.
+
+A WRONG TURN, RECORDED BECAUSE IT NEARLY BECAME A COMMIT
+--------------------------------------------------------
+The emitted C for those two loads is:
+
+    /* 217ee90: lwz r9, 0xc98(r30) */
+    ctx->r[9] = ppc_load_u32(ctx, ctx->r[30]);        <- no +0xc98
+
+which looks exactly like a dropped displacement, and was written up as a fifth
+recompiler bug. It is not one. Four lines earlier:
+
+    /* 217ec88: lis r30, 0x1013 */
+    ctx->r[30] = 421256u; /* &.bss+306328 */
+    /* 217ec90: lis r29, 0x1013 */
+    ctx->r[29] = 421260u; /* &.bss+306332 */
+
+Both bases are folded constants with the displacement already baked in, so
+dropping it is correct. The stores are symmetric and equally correct:
+
+    ctx->r[11] = 421260u; /* &.bss+306332 */
+    /* 2156958: stw r0, 0xc9c(r11) */
+    ppc_store_u32(ctx, ctx->r[11], ctx->r[0]);
+
+A tree-wide scan found 318,903 memory ops with a non-zero displacement, of
+which 18,063 drop it; separating them by whether the base was a folded
+constant gives 17,474 legitimate and 589 suspicious. That 589 figure is NOT a
+confirmed bug count and should not be quoted as one -- the classifier's notion
+of "was this base folded" is approximate, and it got this very site wrong
+until it was checked by hand. Any individual site needs the same manual check
+before it is believed.
+
+WHERE THIS ACTUALLY LANDS
+-------------------------
+The bounds are written by Core::igCafeSystemMemory::igCafeSystemMemory(), and
+that constructor does run -- the MEM EVENT in the log at last_pc=0x2156c24
+sits a few instructions from the store at 0x2156958. So the bounds are not
+"never written" like the metaobject global was. The open question is what
+value they receive:
+
+    2156948: cmplw r12, r0
+    215694c: ble  0x2156954
+    2156950: mr   r0, r12        ; bound = max(r12, r0)
+    2156954: lis  r11, 0x1013
+    2156958: stw  r0, 0xc9c(r11)
+
+NEXT, AND WHY CEMU
+------------------
+"What do those two globals hold on a working boot" is a ground-truth question,
+and every theory for the last three days has been inferred from the
+recompiled code with nothing to check it against. That is exactly how two days
+went into the metaobject global. Cemu runs the real binary and can answer it
+directly.
+
+Cemu 2.6 is installed and supports --enable-gdbstub, so it can be driven from
+the command line by an external debugger rather than through its GUI. Game is
+at /run/media/aaron/Aaron_s Drive/Roms/Wii U/Skylanders Spyro's Adventure,
+extracted (code/ content/ meta/), which Cemu loads directly.
