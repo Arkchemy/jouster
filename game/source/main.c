@@ -1111,11 +1111,27 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
             arkchemy_video_present();
         }
         checkpoint("[video] self-test done -- if you saw moving colour bars, everything except Bink's decode is proven");
-        /* leave the planes zeroed again so the real decode is not mistaken
-           for leftover test pattern */
-        for (t = 0; t < (int)yah; t++) {
-            uint32_t x;
-            for (x = 0; x < yaw; x += 4u) ppc_store_u32(&g_ctx, ty + (uint32_t)t * yaw + x, 0);
+        /* Clear EVERY plane of EVERY frame set, not just set 0's luma.
+         *
+         * The first version zeroed only ty -- set 0's Y -- and left the bar
+         * pattern sitting in the chroma planes. The decoder then wrote real
+         * luma while that stale chroma supplied the colour, which is exactly
+         * the red/blue/purple banding in the first frame that ever contained
+         * decoded video. The picture was real; the colours were my test
+         * pattern. Leave nothing behind, so whatever appears next is entirely
+         * the decoder's own output. */
+        {
+            uint32_t f2, p2, x2;
+            for (f2 = 0; f2 < total; f2++) {
+                uint32_t st = info + VID_FB_FRAMES + f2 * VID_PLANESET_SIZE;
+                for (p2 = 0; p2 < 4u; p2++) {
+                    uint32_t buf = ppc_load_u32(&g_ctx, st + p2 * 12u + 4u);
+                    uint32_t pit = ppc_load_u32(&g_ctx, st + p2 * 12u + 8u);
+                    uint32_t rows = (p2 == 0u || p2 == 3u) ? yah : ch;
+                    if (!buf || !pit) continue;
+                    for (x2 = 0; x2 < pit * rows; x2 += 4u) ppc_store_u32(&g_ctx, buf + x2, 0);
+                }
+            }
         }
     }
 
