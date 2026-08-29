@@ -1,0 +1,71 @@
+2026-08-29 — fl = 24 means a 1 GiB block, and the pool size was a red herring
+==============================================================================
+
+Build 19:13 on hardware:
+
+    tlsfc: calls=2 bail=0 mem=0x45002e0 size=0x500000
+    tlsfh: seen=52 ctrl=0x45002e0 fl=0x1010021 sl=0x0
+           slot=0x4500fac idx=790 neigh=[0x0,0x200,0x4501020,0x18]
+
+WHAT THAT SETTLES
+-----------------
+tlsf_create ran on this exact control block (mem matches ctrl) and did not
+bail, so the pool WAS initialised and every free-list head was seeded with the
+sentinel. Both open questions from the previous build are answered: it is not
+"never created", and it is not the size check rejecting the pool.
+
+The fault is the first-level bitmap. 0x1010021 has bits 0, 5, 16 and 24 set.
+The sl-bitmap array spans +0x14..+0x74, which is (0x74-0x14)/4 = 24 words, so
+valid fl is 0..23. Bit 24 is one past the end.
+
+Follow it through: fl=24 gives idx = 24*32 + 22 = 790, and a "head" read at
+ctrl + 0x74 + 790*4 = 0x4500fac -- outside the table, in block metadata. The
+neighbours confirm it: 0x200 and 0x18 are sizes, not list heads. That slot
+holds 0, the walk never meets the sentinel, and it spins.
+
+A RED HERRING, CAUGHT BEFORE IT BECAME A FIX
+--------------------------------------------
+Our pool is 5 MiB where the real game's is 1 MiB, and that looked like the
+answer -- a pool too large for the table. It is not. Reading the mapping off
+the code rather than assuming it:
+
+    cntlzw r10, r0          ; clz(size)
+    subfic r10, r10, 0x20   ; fls(size)
+    addi   r8,  r10, -7     ; fl = fls(size) - 7
+
+5 MiB has fls = 23, giving fl = 16 -- and bit 16 is legitimately set in the
+bitmap. The pool size is fine. A patch clamping it to 1 MiB was about to be
+written and would have changed nothing while looking plausible.
+
+WHAT fl = 24 ACTUALLY REQUIRES
+------------------------------
+fl = 24 means fls(size) = 31, i.e. a block whose size field is in
+[1 GiB, 2 GiB).
+
+PPC_MEM_SIZE is 0x40000000 -- exactly 1 GiB -- and fls(0x40000000) = 31, which
+gives fl = 24 precisely. A block claiming the size of the entire guest address
+space is what a pointer difference looks like when one side has been wrapped
+by the guest-memory mask.
+
+That is the same masking behind the three silent spins already seen today
+(igStringPool::remove, the bucket walk, this one). It stops the process
+crashing at the point of the bug and turns every consequence into a hang
+somewhere else.
+
+THIS BUILD (19:29)
+------------------
+There are 18 size-class mapping sites across tlsf_create, tlsf_free,
+tlsf_memalign, tlsf_realloc and tlsf_check_heap. Rather than guess which one
+inserts the bad block, all 18 are patched mechanically to record the first to
+compute fl > 23:
+
+    sizeclass: hits=N first_pc=0x... fl=N
+
+first_pc names the function outright. tlsf_free or tlsf_realloc would mean a
+block header was corrupted before being returned to the allocator;
+tlsf_memalign would mean a bad size reached it from a caller;
+tlsf_create would mean the initial block itself is wrong.
+
+BUILD
+-----
+19:29, links clean, 174,470,521 bytes.
