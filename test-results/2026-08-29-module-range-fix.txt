@@ -1,0 +1,80 @@
+2026-08-29 — the measurement paid off: module-range low bound
+==============================================================
+
+MEASURED, NOT ASSUMED
+---------------------
+Build 17:56 carried a probe for the two bounds rather than a theory about
+them. Hardware:
+
+    poolrange: A(.bss+306328)=0x183190  B(.bss+306332)=0x70b990
+
+The earlier write-up said "both bounds read 0". That was inferred from which
+branch got taken and was wrong -- neither is 0. Measuring first was right.
+
+WHAT THE NUMBERS SAY
+--------------------
+Cemu ground truth for the same two globals in the real game:
+
+    A = 0x02000020   start of .text
+    B = 0x10181290   end of the image
+
+so [A, B) is the module image and setMemoryPool's test is "is this string a
+static literal (keep it) or pool memory (release it)?".
+
+Here:
+    B = 0x70B990 = 7387536   the synthetic image end -- fine
+    A = 0x183190 = 1585552
+
+and the static data in this build occupies synthetic [8192, 1585552]. A is
+therefore the TOP of static data, not the bottom. The window [1585552,
+7387536) contains no static data at all, so every string literal compares
+below A and takes the release path. Released literals get read back as
+igStringPoolItems through a "header" at -0xc, which is exactly where
+pool == item + 0xc came from, and why the boot hangs in igStringPool::remove
+walking a bucket chain with bucketCount 0.
+
+Working the failing case through with the measured values, string 0x4400204:
+
+    str < A (0x183190)?   no
+    str < B (0x70B990)?   no
+    -> release            matches the observed bad=1 exactly
+
+THE UNDERLYING DEFECT IS CONQUERTRON'S
+--------------------------------------
+It folds the symbolic "start of .text" to a synthetic 1585552 while real text
+keeps real addresses from 0x2000020 upward. Data is synthetic, text is real,
+so the module image is not one contiguous range in this address space and no
+single [A, B) can describe it. Two of these bounds came out of the same
+constructor and only one of them survived the translation meaningfully.
+
+Fixing that properly belongs in the recompiler, and it is the follow-up: it
+would benefit every future title, which is the whole point of conquertron.
+
+WHAT THIS BUILD DOES
+--------------------
+tools/fix_module_range_bound.py sets the low bound to 0, giving [0, 7387536):
+
+    static data   synthetic 8192 .. 1585552   inside   -> kept     (correct)
+    guest heap    0x4000000 upward            outside  -> released (correct)
+
+Text sits above B and is released, which is harmless -- literals live in
+.rodata, not .text.
+
+This one is a fix rather than a probe. It is grounded in a measured value and
+a ground-truth reference for what the value is supposed to mean, which is a
+different footing from the three theories earlier today that were reasoned
+from the recompiled C alone and were all wrong.
+
+WHAT TO LOOK FOR
+----------------
+    poolrange A should now read 0x0, B unchanged at 0x70b990
+    relstr bad should drop from 1 to 0
+    registration should walk past #54 igStringRefList
+
+If bad stays 1, the released string is genuinely heap memory and something
+upstream corrupted its header instead. If registration passes 54 and stalls
+later, that is real forward progress and the next blocker.
+
+BUILD
+-----
+18:07, links clean, 174,466,425 bytes.
