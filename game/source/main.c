@@ -616,6 +616,21 @@ static void debug_watch_sink(uint32_t pc, uint32_t value) {
 /* Not static: probe patches call this from generated_*.c (see
    game/probes/). Declared in ppc_runtime.h-adjacent scope by the patch
    itself would be fragile, so it is a plain external symbol. */
+/* A computed jump table whose index lands outside its case list. That should
+ * be impossible -- the hardware bounds-checks immediately above every table --
+ * so if it happens the fault is in the rewrite, most likely a base constant
+ * taken from the wrong register. Silence here would look exactly like the
+ * original bug, where ppc_dispatch matched nothing and returned. */
+void arkchemy_jt_miss(uint32_t ctr, uint32_t base);
+void arkchemy_jt_miss(uint32_t ctr, uint32_t base) {
+    static uint32_t misses = 0;
+    if (++misses <= 12u) {
+        checkpoint("[JT MISS] ctr=0x%x base=0x%x index=%d at pc=0x%x lr=0x%x",
+                   (unsigned)ctr, (unsigned)base, (int)(((int32_t)ctr - (int32_t)base) >> 2),
+                   g_ppc_current_pc, g_ppc_last_caller_lr);
+    }
+}
+
 void arkchemy_probe4(const char *label,
                             const char *n0, uint32_t v0,
                             const char *n1, uint32_t v1,

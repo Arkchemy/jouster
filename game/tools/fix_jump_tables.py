@@ -68,7 +68,12 @@ def fix(path, apply):
                 out.append("  switch ((ctx->ctr - %su) >> 2) {" % base)
                 for idx, lbl in enumerate(entries):
                     out.append("    case %du: goto %s;" % (idx, lbl))
-                out.append("    default: break;")
+                # A miss should be impossible: the hardware bounds-checks
+                # immediately above every table. If one happens, the base
+                # constant was taken from the wrong register and the result
+                # would look exactly like the original bug -- a silent return.
+                # Log it rather than repeat that mistake in a new costume.
+                out.append("    default: arkchemy_jt_miss(ctx->ctr, %su); break;" % base)
                 out.append("  }")
                 out.append("  return;")
                 i += 2
