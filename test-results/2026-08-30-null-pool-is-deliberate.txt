@@ -1,0 +1,63 @@
+2026-08-30 — passing a null pool is the game's own code; the fault is upstream
+==============================================================================
+
+Build 00:23:
+
+    poolact:  acts=17 nullacts=17 lr=0x215020c this=0x49f4c90
+    poolgrow: hits=0
+
+Every one of the 17 calls to igPool::activate arrives with a null pool. And
+poolgrow hits=0 -- grow was never involved at all, despite being where the
+previous trace pointed. That path was reached through activate, not through
+grow reading a null member.
+
+WHY THE NULL IS NOT THE BUG
+---------------------------
+The caller is Core::igObjectHandleManager::userInstantiate(bool):
+
+    21501d4: bl   igDataList::setCapacity
+    21501e4: bl   igHandleRedirectPool::instantiateFromPool
+    21501e8: stw  r3, 0x2c(r28)
+    21501ec: lwz  r8, 0x18(r3)     ; the new pool's +0x18
+    21501f0: cmpwi r8, 0
+    21501f4: bne  0x2150220        ; non-zero -> the normal path
+    2150204: li   r7, 0            ; else pool = 0
+    2150208: bl   igPool::activate
+
+`li r7, 0` is a hardcoded literal in the game's own code. Passing null to
+activate is deliberate, on a branch taken only when the freshly created pool's
++0x18 reads zero. The real game takes the other branch.
+
+So four rounds of "find the null" were chasing a value the binary sets on
+purpose. The actual fault is that +0x18 is zero on an object that was just
+instantiated.
+
+WHERE THAT LEADS
+----------------
+The call immediately before it is igDataList::setCapacity -- the same function
+whose type-index lookup was broken earlier today and was fixed by reading the
+real value (2) off the retail game in Cemu. This lands back in the same
+machinery, one layer along.
+
+THIS BUILD (00:43)
+------------------
+    hpool: hits=%u obj=0x%x pool=0x%x w=[8 words of the new object]
+
+w[6] is +0x18, the word the branch tests.
+
+  all words zero        -> allocated and never constructed
+  some set, +0x18 zero  -> constructed, but that field never written, which
+                           points at whatever should write it
+  obj = 0               -> instantiateFromPool returned nothing
+
+A NOTE ON METHOD
+----------------
+This is the fifth time today that a trace has pointed at the wrong place and
+been corrected by measuring rather than reasoning: _main, _savegpr_14_l,
+igMetaField::construct, the field-array loop, and now grow. Each time the
+correction came from a probe placed at a specific instruction, and each time
+the reasoning that led there had looked sound.
+
+BUILD
+-----
+00:43, links clean, 175,940,985 bytes.

@@ -162,6 +162,10 @@ unsigned int g_arkchemy_ce_buf = 0, g_arkchemy_ce_pool = 0;
 unsigned int g_arkchemy_pa_acts = 0, g_arkchemy_pa_nullacts = 0;
 unsigned int g_arkchemy_pa_lr = 0, g_arkchemy_pa_this = 0, g_arkchemy_pa_pool = 0;
 unsigned int g_arkchemy_pg_hits = 0, g_arkchemy_pg_this = 0, g_arkchemy_pg_lr = 0;
+/* The freshly instantiated igHandleRedirectPool whose +0x18 the branch tests
+ * -- see tools/probe_handle_pool_state.py. w[6] is that word. */
+unsigned int g_arkchemy_hp_hits = 0, g_arkchemy_hp_obj = 0, g_arkchemy_hp_pool = 0;
+unsigned int g_arkchemy_hp_w[8] = {0,0,0,0,0,0,0,0};
 /* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
  * volatile globals, emitted alongside the dispatch default case, so they are
  * no longer defined here. */
@@ -3441,6 +3445,7 @@ int main(int argc, char *argv[]) {
                        " -- ctorelem: hits=%u lr=0x%x this=0x%x buf=0x%x pool=0x%x"
                        " -- poolact: acts=%u nullacts=%u lr=0x%x this=0x%x"
                        " poolgrow: hits=%u this=0x%x lr=0x%x"
+                       " -- hpool: hits=%u obj=0x%x pool=0x%x w=[0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x]"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3532,6 +3537,9 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_ce_buf, g_arkchemy_ce_pool,
                        g_arkchemy_pa_acts, g_arkchemy_pa_nullacts, g_arkchemy_pa_lr, g_arkchemy_pa_this,
                        g_arkchemy_pg_hits, g_arkchemy_pg_this, g_arkchemy_pg_lr,
+                       g_arkchemy_hp_hits, g_arkchemy_hp_obj, g_arkchemy_hp_pool,
+                       g_arkchemy_hp_w[0], g_arkchemy_hp_w[1], g_arkchemy_hp_w[2], g_arkchemy_hp_w[3],
+                       g_arkchemy_hp_w[4], g_arkchemy_hp_w[5], g_arkchemy_hp_w[6], g_arkchemy_hp_w[7],
                        loopwatch_buf);
         }
 
