@@ -1069,6 +1069,55 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
                    (unsigned)info);
     }
 
+    /* Prove the second half of the pipeline before chasing the first.
+     *
+     * The green screen already showed that convert -> upload -> present works:
+     * BT.601 turns an all-zero YUV frame into exactly RGB(0,135,0), so a green
+     * panel means real frames really are reaching the display every frame.
+     * What it cannot show is whether the planes would be drawn correctly if
+     * they held actual picture.
+     *
+     * So write a known pattern into the very buffers Bink was given -- colour
+     * bars with an animated luma ramp -- and present those. If the bars appear
+     * and move, then plane addressing, pitches, YUV->RGB, the staging upload,
+     * the swapchain blit and the present are all correct, and the ONLY
+     * remaining unknown is getting Bink to decode into these buffers. If the
+     * bars do not appear, the fault is on this side and Bink was never the
+     * problem. Either way it converts a vague "green screen" into a fact. */
+    if (arkchemy_video_staging_init()) {
+        uint32_t set0 = info + VID_FB_FRAMES;
+        uint32_t ty  = ppc_load_u32(&g_ctx, set0 + 4u);
+        uint32_t tcr = ppc_load_u32(&g_ctx, set0 + 16u);
+        uint32_t tcb = ppc_load_u32(&g_ctx, set0 + 28u);
+        int t;
+        checkpoint("[video] self-test: writing colour bars into the Bink planes");
+        for (t = 0; t < 90 && ty && tcr && tcb; t++) {
+            uint32_t x, y;
+            for (y = 0; y < yah; y++) {
+                for (x = 0; x < yaw; x += 1u) {
+                    ppc_store_u8(&g_ctx, ty + y * yaw + x, (uint8_t)((x + (uint32_t)t * 4u) & 0xFFu));
+                }
+            }
+            for (y = 0; y < ch; y++) {
+                for (x = 0; x < cw; x++) {
+                    /* eight vertical colour bars */
+                    uint32_t bar = (x * 8u) / cw;
+                    ppc_store_u8(&g_ctx, tcr + y * cw + x, (uint8_t)(bar & 1u ? 200u : 60u));
+                    ppc_store_u8(&g_ctx, tcb + y * cw + x, (uint8_t)(bar & 2u ? 200u : 60u));
+                }
+            }
+            arkchemy_video_yuv_to_rgba(ty, yaw, tcr, tcb, cw, yaw, yah);
+            arkchemy_video_present();
+        }
+        checkpoint("[video] self-test done -- if you saw moving colour bars, everything except Bink's decode is proven");
+        /* leave the planes zeroed again so the real decode is not mistaken
+           for leftover test pattern */
+        for (t = 0; t < (int)yah; t++) {
+            uint32_t x;
+            for (x = 0; x < yaw; x += 4u) ppc_store_u32(&g_ctx, ty + (uint32_t)t * yaw + x, 0);
+        }
+    }
+
     if (!arkchemy_video_staging_init()) {
         checkpoint("[video] could not create the deko3d staging block -- is GX2Init done?");
         return;
