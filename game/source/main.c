@@ -971,6 +971,22 @@ static void arkchemy_bink_video_play(uint32_t hbink, int frames_to_play) {
     checkpoint("[video] BinkGetFrameBuffersInfo: totalFrames=%u Y=%ux%u chroma=%ux%u",
                (unsigned)total, (unsigned)yaw, (unsigned)yah, (unsigned)cw, (unsigned)ch);
 
+    /* The header fields (TotalFrames/Y/chroma) came back correct, but every
+     * plane read as Allocate=0 pitch=0 -- so the plane sub-structs are not
+     * where RAD's documented layout puts them in this build. Dump the raw
+     * struct once instead of guessing the offsets a second time: the pitches
+     * (~1280) and Allocate flags (1) are unmistakable in a hex dump. */
+    {
+        char dump[1024];
+        int n = 0, w;
+        for (w = 0; w < 40 && n < (int)sizeof(dump) - 16; w++) {
+            n += snprintf(dump + n, sizeof(dump) - (size_t)n, "%s%u:%x",
+                          w ? " " : "", (unsigned)(w * 4),
+                          (unsigned)ppc_load_u32(&g_ctx, info + (uint32_t)w * 4u));
+        }
+        checkpoint("[video] BINKFRAMEBUFFERS raw: %s", dump);
+    }
+
     if (total == 0 || total > 4u || yaw == 0 || yaw > 4096u || yah == 0 || yah > 4096u) {
         checkpoint("[video] frame-buffer info is not usable -- struct layout or decoder state is wrong, stopping here");
         return;
