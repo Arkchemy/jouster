@@ -1,0 +1,67 @@
+2026-08-29 — igFile was never missing; it is past the frontier
+===============================================================
+
+A CORRECTION
+------------
+igFile has been treated as a missing class for several rounds -- probed for,
+written up as the last of five filesystem classes that never register, and
+reported that way in commits and to the project owner.
+
+It is not missing. Tracing the only static table that contains its
+arkRegister address:
+
+    .rodata 1152044  arkRegister(igFile)          <- first entry
+            1152048  arkRegister(igMetaFieldList)
+            1152052  arkRegister(igMetaObjectList)
+            1152056  arkRegister(igMetaField)
+            1152060  arkRegister(igIntList)
+            1152064  arkRegister(igObjectList)
+            1152068  arkRegister(igIntIntHashTable)
+
+and the only function that references that address:
+
+    arkRegisterInternal__Q2_4Core9igIGBFileSFv
+
+So igFile is a dependency of igIGBFile, and igIGBFile is retail #127 while we
+reach #125. Registration is recursive -- a class's dependencies fire before it
+does -- which is why retail logs igFile at #80 while its owner appears at
+#127. igFile is beyond our frontier, not skipped.
+
+WHAT ELSE THIS UNDERMINES
+-------------------------
+"Our lists are being built short", from maxlist=11 against a retail 21, is
+probably also wrong for the same reason. The retail 21-entry list is
+igIGBFile's, which we never reach. A shorter maximum is exactly what walking
+only the first 125 classes should produce.
+
+Both conclusions came from comparing our numbers against retail numbers taken
+at a point in the boot we have not reached. Comparing against the right point
+is the fix, and that is what the ground-truth capture should have been aimed
+at from the start.
+
+WHAT IS ACTUALLY TRUE
+---------------------
+    124 of the retail first 125 register, in the correct order
+    the one absent is igFile, whose owner is #127
+    so the frontier is clean: we stop at #125 and go no further
+
+The question is not "why is a class skipped" but "why does registration stop".
+
+THIS BUILD (23:02)
+------------------
+    frontier: mask=0x%02x
+      bit0 arkRegister(igDirectory)            bit3 arkRegister(igIGBFile)
+      bit1 arkRegisterInternal(igDirectory)    bit4 arkRegisterInternal(igIGBFile)
+      bit2 arkRegisterInitialize(igDirectory)  bit5 arkRegisterInitialize(igIGBFile)
+
+igDirectory is retail #126, the very next class due, and igIGBFile #127.
+
+  all clear      -> nothing asks for either; registration has run out of work
+                    and the question is what SHOULD ask
+  bits 0-2 set   -> igDirectory runs, the frontier has moved, something after
+                    it fails
+  bit 0 set only -> entered and failing inside
+
+BUILD
+-----
+23:02, links clean, 175,940,985 bytes.
