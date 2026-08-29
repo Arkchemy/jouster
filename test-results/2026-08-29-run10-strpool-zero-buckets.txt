@@ -1,0 +1,69 @@
+2026-08-29 (run 10) — handle collision fixed; hang is a zero-bucket string pool
+===============================================================================
+
+THE HEAP FIX WORKED
+-------------------
+    mem: fail=1  ->  fail=0
+
+No allocation fails any more. Reserving a 0x40 heap header so a child heap
+cannot inherit its parent's base address removed every allocation failure.
+
+BUT THE HANG IS UNCHANGED, AND WAS NEVER CAUSED BY THEM
+--------------------------------------------------------
+    calls frozen at 35,692 (was 35,687)
+    last_pc 0x21a55cc = igStringPool::remove, same as before
+
+Essentially identical trajectory. The allocation failures and the hang were
+two separate problems that happened to sit next to each other; fixing the
+first changed nothing about the second. Worth remembering -- I had assumed
+the string pool broke *because* allocation failed.
+
+ROOT CAUSE OF THE HANG
+----------------------
+The frame line reports r5 = 0x811C9DC5 at the hang. r5 is the bucket index
+argument to remove(pool, item, index), and remove indexes buckets[r5]
+immediately.
+
+0x811C9DC5 is the FNV-1a offset basis. igStringPool::searchForString builds
+it at 21a54e8/21a54f4 (lis -0x7ee4 / ori 0x9dc5), mixes the string's bytes
+in, then reduces it:
+
+    21a5518: lwz   r9, 0x1c(r3)     ; bucketCount
+    21a551c: divwu r10, r0, r9
+    21a5520: mullw r10, r10, r9
+    21a5524: subf  r0, r10, r0      ; r0 = hash % bucketCount
+
+For the untouched basis to survive that sequence, the modulo must be a
+no-op, which happens exactly when bucketCount == 0: divwu by zero gives 0,
+0 * 0 = 0, and subf leaves the hash intact. remove() then walks
+buckets[0x811C9DC5] and never terminates, because its only loop exit is
+finding the item and our masked loads mean walking off the end cannot trap.
+
+So the string pool has ZERO buckets. That is the real defect, and it is the
+same family as the NULL _handleList: an object whose fields were never
+populated.
+
+SEPARATE REAL RECOMPILER BUG FOUND WHILE READING THIS
+-------------------------------------------------------
+conquertron emitted divwu as a bare C division:
+
+    ctx->r[10] = ctx->r[0] / ctx->r[9];
+
+PowerPC leaves rD undefined on a zero divisor but does NOT trap. A bare C
+division is undefined behaviour, which is strictly worse than the hardware:
+the compiler may assume the divisor is non-zero and optimise accordingly.
+Same for signed divw on INT_MIN / -1.
+
+Fixed in codegen.cpp and applied to the existing tree: 540 divwu and 190
+divw sites. This does not change the current symptom (0 either way) but it
+removes real UB on a path this game genuinely exercises.
+
+NEXT RUN ANSWERS
+----------------
+New probe STRPOOL_NOBUCKETS reports, the first six times bucketCount is 0:
+the pool pointer, its bucket array pointer (+0xc) and its count (+0x8).
+
+  buckets == 0 -> the pool was never given its bucket array at all
+  buckets != 0 -> the array exists but the count field was never set,
+                  which points at the field-reset path already under
+                  suspicion for _handleList

@@ -1,0 +1,21 @@
+--- a/generated_0161.c
++++ b/generated_0161.c
+@@ igStringPool::searchForString -- 21a5518 @@
+   /* 21a5518: lwz r9, 0x1c(r3) */
+   ctx->r[9] = ppc_load_u32(ctx, ctx->r[3] + (int32_t)28);
++  /* ARKCHEMY PROBE: hash %% bucketCount is computed here as
++     divwu/mullw/subf. A bucketCount of 0 makes the modulo a no-op, so the
++     raw FNV-1a basis 0x811C9DC5 reaches igStringPool::remove as a bucket
++     index and remove() walks buckets[0x811C9DC5] forever. Report the
++     pool's own state instead of inferring why it has no buckets. */
++  if (ctx->r[9] == 0) {
++      static int probe_n = 0;
++      if (probe_n < 6) {
++          probe_n++;
++          arkchemy_probe4("STRPOOL_NOBUCKETS",
++                          "pool", ctx->r[3],
++                          "bucketCount", ctx->r[9],
++                          "buckets@0xc", ppc_load_u32(ctx, ctx->r[3] + (int32_t)12),
++                          "count@0x8", ppc_load_u32(ctx, ctx->r[3] + (int32_t)8));
++      }
++  }
