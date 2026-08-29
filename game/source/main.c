@@ -138,10 +138,9 @@ unsigned int g_arkchemy_storagereg_n[6] = {0,0,0,0,0,0};
  * registers successfully, so its bits show what a working chain looks like. */
 unsigned int g_arkchemy_regchain = 0;
 unsigned int g_arkchemy_regdrv_lr = 0, g_arkchemy_regdrv_n = 0;
-/* Indirect calls ppc_dispatch could not resolve. Without the default case
- * added by tools/probe_dispatch_miss.py these vanish silently. */
-unsigned int g_ppc_dispatch_miss_count = 0;
-unsigned int g_ppc_dispatch_miss_addr = 0, g_ppc_dispatch_miss_pc = 0;
+/* g_ppc_dispatch_miss_* now live in conquertron's ppc_runtime.h as weak
+ * volatile globals, emitted alongside the dispatch default case, so they are
+ * no longer defined here. */
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the

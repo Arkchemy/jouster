@@ -1,0 +1,85 @@
+2026-08-29 — the root cause: .rela.rodata and .rela.data were never read
+=========================================================================
+
+HOW IT WAS FOUND
+----------------
+Build 20:40 reported, for the first time, what indirect calls were doing:
+
+    dispatchmiss: n=187 addr=0x0 pc=0x215ff38
+
+187 unresolved indirect calls, the first through a NULL pointer, from
+Core::igObject::createCopy -- and that call is virtual:
+
+    215ff54: lwz r11, 0(r3)     ; this->vtable
+    215ff58: lwz r8, 0xc(r11)   ; vtable slot +0xc
+    215ff68: bctrl              ; -> 0
+
+Vtable slots were NULL. Vtables are arrays of function pointers living in
+.rodata, and pointers stored in data are filled in by relocations.
+
+Reading the RPX's section table directly (headers are not compressed, though
+their sh_size values describe the COMPRESSED payload):
+
+    .rela.text     targets .text      PROCESSED
+    .rela.rodata   targets .rodata    IGNORED
+    .rela.data     targets .data      IGNORED
+
+load_elf contained exactly one line for this:
+
+    if (name == ".rela.text" && sh_type == SHT_RELA) rela_text_idx = i;
+
+Every other relocation section was dropped. Actual count once decompressed:
+48,625 relocations, 33,260 of them pointing at functions.
+
+WHAT IT EXPLAINS
+----------------
+This was behind a long series of findings that each looked like its own bug:
+
+  vtable slots NULL          -> 187 silent indirect calls, and every virtual
+                                call through an unrelocated slot doing nothing
+  "(null)/" at address 0     -> a string pointer in data left NULL, formatted
+                                with %s
+  1,335 .bss globals
+  "never written"            -> many are pointers that relocations should fill
+  five storage classes
+  never registering          -> their registration functions are reached only
+                                through those pointers
+  TLSF free list poisoned    -> ASCII from address 0 read as a block size,
+                                giving size class 24 against a valid 0..23
+
+None of those needed fixing on its own. They were one missing loader step.
+
+THE FIX
+-------
+conquertron now processes every SHT_RELA section, not just .rela.text, records
+them as ElfImage::SectionReloc, gives synthetic bases to sections reachable
+only through data relocations, and writes the pointers in ppc_init_globals
+beside the existing data-import stores.
+
+    data-section relocations: 48625 written, 0 imported-function slots skipped, 0 unmapped
+
+REGENERATED AND REBUILT (20:55)
+-------------------------------
+19,623 functions, 218 chunks, 1,091 init_globals sub-functions. The NRO grew
+from 174,552,441 to 174,769,529 bytes, consistent with 48,625 added stores.
+
+Two workarounds written earlier today no longer apply and were NOT forced back
+in: fix_module_range_bound and experiment_null_meta_global both refused to
+match their sites after regeneration. Both existed to compensate for pointers
+that should have come from data relocations, so a clean build is the honest
+test of whether they are still needed.
+
+Two bridge scripts are now redundant because codegen does the work natively:
+fix_record_forms and fix_jump_tables both report 0 sites, and
+probe_dispatch_miss finds no tail to patch because the default case is emitted
+by codegen now.
+
+Adds tools/probe_registration_log.py. The registration log was previously an
+inline edit to a generated file; it was lost on regeneration, and its
+hard-coded 45 < n < 62 window is what was misread for several builds as the
+boot stalling at class 61. It is a script now, logging the first 200 and then
+every 25th.
+
+BUILD
+-----
+20:55, links clean, 174,769,529 bytes.
