@@ -2488,6 +2488,58 @@ static void game_thread_func(void *arg) {
      * from ppc_init_globals' own byte stores. */
     checkpoint("[game thread] string pool params at rest: .data+5064=%u .data+5068=%u (expect 16384 and 1024)",
                ppc_load_u32(&g_ctx, 13256u), ppc_load_u32(&g_ctx, 13260u));
+
+    /* Hunt for the movie filenames in guest memory, and watch the one the
+     * owner expects the game to ask for.
+     *
+     * The strings are not greppable in the RPX (its sections are zlib
+     * compressed) nor in the generated C, but ppc_init_globals writes .data
+     * and .rodata out byte by byte, so after it runs they are simply there in
+     * the arena. Finding them proves the game really does reference these
+     * files, and gives an address worth watching.
+     *
+     * The FS shim already logs every open, success or failure, and no game
+     * open has ever appeared -- only our own bash.mov test. A load watch on
+     * the filename tells us something the open log cannot: whether the game
+     * ever even READS the name, which happens well before it would try to
+     * open it. */
+    {
+        static const char *needles[] = { "atvinewlogo", "movies/", ".mov" };
+        uint32_t found[3] = { 0, 0, 0 };
+        uint32_t addr, n;
+        /* .data and .rodata live low in the arena -- every synthetic address
+           seen so far has been under a few megabytes -- so 16MB is generous
+           and keeps this to well under a second. */
+        for (addr = 0; addr < 0x1000000u; addr++) {
+            for (n = 0; n < 3u; n++) {
+                size_t len = strlen(needles[n]), k;
+                if (found[n]) continue;
+                for (k = 0; k < len; k++) {
+                    if (ppc_load_u8(&g_ctx, addr + (uint32_t)k) != (uint8_t)needles[n][k]) break;
+                }
+                if (k == len) found[n] = addr;
+            }
+        }
+        checkpoint("[hunt] atvinewlogo=0x%x  \"movies/\"=0x%x  \".mov\"=0x%x",
+                   (unsigned)found[0], (unsigned)found[1], (unsigned)found[2]);
+
+        if (found[0]) {
+            /* read back what is actually there, so the log shows the whole
+               filename rather than just an address to trust */
+            char name[64];
+            uint32_t i2;
+            for (i2 = 0; i2 < sizeof(name) - 1; i2++) {
+                uint8_t c = ppc_load_u8(&g_ctx, found[0] + i2);
+                if (!c || c < 32 || c > 126) break;
+                name[i2] = (char)c;
+            }
+            name[i2] = 0;
+            checkpoint("[hunt] the string reads \"%s\" -- arming a load watch on it", name);
+            g_ppc_watch_load_addr = found[0];
+        } else {
+            checkpoint("[hunt] filename not present in the first 16MB of guest memory");
+        }
+    }
     checkpoint("[game thread] calling ppc_run_static_initializers (114 real C++ static initializers)...");
     ppc_run_static_initializers(&g_ctx);
     g_static_init_done = true;

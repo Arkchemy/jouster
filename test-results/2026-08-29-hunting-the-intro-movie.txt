@@ -1,0 +1,52 @@
+2026-08-29 — hunting atvinewlogo_640.mov
+=========================================
+
+THE CLAIM AND WHAT IS KNOWN
+---------------------------
+The owner expects the game to request atvinewlogo_640.mov -- the Activision
+logo that opens the game. The file is on the card (62 movies in
+content/movies/, atvinewlogo_640.mov among them).
+
+Against that, the FS shim logs EVERY open, success and failure alike, and no
+game open has ever appeared in any run -- the only FSOpenFile line is our own
+bash.mov test. The game also reaches the filesystem through exactly one entry
+point: FSOpenFile, four call sites, all of them shimmed and logged. So either
+the game never gets that far, or it asks in a way the open log cannot see.
+
+WHY A SIMPLE GREP FINDS NOTHING
+--------------------------------
+"atvinewlogo", "movies/" and ".mov" appear in neither the RPX nor the
+generated C. The RPX's sections are zlib-compressed (SHF_RPL_ZLIB), so its
+strings are not greppable on disk, and conquertron emits .data and .rodata as
+byte stores rather than literals.
+
+They are, however, in guest memory the moment ppc_init_globals finishes, since
+that is exactly what it writes out.
+
+WHAT THIS BUILD ADDS
+--------------------
+A scan of the first 16MB of the guest arena immediately after globals init,
+looking for all three strings. Every synthetic .data/.rodata address seen so
+far has been under a few megabytes, so the range is generous.
+
+If the filename is found the build prints it back verbatim -- the whole
+string, not just an address to be trusted -- and arms a load watch on it.
+
+That watch answers something the open log cannot. Reading the filename happens
+well before opening it: the engine has to resolve the name, build a path and
+hand it to a loader first. So:
+
+  string not found        -> the game does not reference this filename at all,
+                             and the expectation is worth revisiting
+  found, watch never fires -> the game never even reads the name, which fits
+                             the boot stalling long before video
+  found, watch fires       -> the game IS asking, and the failure is between
+                             reading the name and reaching FSOpenFile -- a
+                             much smaller place to look
+
+CONTEXT
+-------
+The boot currently stops in igStringPool::remove, and igArkCore::init has
+never run, so nothing has yet opened a game file of any kind. The four
+recompiler fixes today took guest work from 35,689 calls to 441,359 without
+changing that endpoint.
