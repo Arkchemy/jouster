@@ -110,6 +110,8 @@ unsigned int g_arkchemy_tlsfh_seen = 0, g_arkchemy_tlsfh_ctrl = 0;
 unsigned int g_arkchemy_tlsfh_flbits = 0, g_arkchemy_tlsfh_slbits = 0;
 unsigned int g_arkchemy_tlsfh_slot = 0, g_arkchemy_tlsfh_idx = 0;
 unsigned int g_arkchemy_tlsfh_neigh[4] = {0,0,0,0};
+unsigned int g_arkchemy_tlsfc_calls = 0, g_arkchemy_tlsfc_bail = 0;
+unsigned int g_arkchemy_tlsfc_mem = 0, g_arkchemy_tlsfc_size = 0;
 
 // Appends to the SD-card log, flushed after every line -- same reasoning
 // as switch/gx2_test's own checkpoint(). Also printed live to the
@@ -3334,6 +3336,7 @@ int main(int argc, char *argv[]) {
                        " -- baditem: hdr=[0x%x,0x%x,0x%x,0x%x] str=\"%s\""
                        " -- tlsf: tripped=%u ctrl=0x%x nodes=[0x%x,0x%x,0x%x,0x%x,0x%x,0x%x]"
                        " -- tlsfh: seen=%u ctrl=0x%x fl=0x%x sl=0x%x slot=0x%x idx=%u neigh=[0x%x,0x%x,0x%x,0x%x]"
+                       " -- tlsfc: calls=%u bail=%u mem=0x%x size=0x%x"
                        "%s",
                        frame, GAME_TEST_AUTO_EXIT_FRAMES, g_globals_init_done, g_static_init_done,
                        g_game_thread_started, g_game_thread_done,
@@ -3399,6 +3402,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_tlsfh_slbits, g_arkchemy_tlsfh_slot, g_arkchemy_tlsfh_idx,
                        g_arkchemy_tlsfh_neigh[0], g_arkchemy_tlsfh_neigh[1],
                        g_arkchemy_tlsfh_neigh[2], g_arkchemy_tlsfh_neigh[3],
+                       g_arkchemy_tlsfc_calls, g_arkchemy_tlsfc_bail,
+                       g_arkchemy_tlsfc_mem, g_arkchemy_tlsfc_size,
                        loopwatch_buf);
         }
 

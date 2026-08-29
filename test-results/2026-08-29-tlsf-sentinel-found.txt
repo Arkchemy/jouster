@@ -1,0 +1,94 @@
+2026-08-29 — Cemu: an empty TLSF free list points at the control block, not NULL
+=================================================================================
+
+THE ANSWER
+----------
+Breaking at tlsf_largest_free_block_size (0x21f0450) in the real game, control
+block at 0x115d9300:
+
+    header +0x00 .. 0x2f
+      +0x08  0x115d9300     <- self
+      +0x0c  0x115d9f84
+      +0x10  0x00002000     fl bitmap
+      +0x14  0x00000000     sl bitmaps
+
+    free list heads at +0x74, sixteen words, every single one:
+      0x115d9300  0x115d9300  0x115d9300  0x115d9300
+      0x115d9300  0x115d9300  0x115d9300  0x115d9300
+      0x115d9300  0x115d9300  0x115d9300  0x115d9300
+      0x115d9300  0x115d9300  0x115d9300  0x115d9300
+
+Every head holds the control block's OWN address. An empty free list points
+back at the sentinel, which is exactly what the walk tests:
+
+    21f04bc: cmplw r7, r3
+    21f04c4: beq done          ; head == control -> empty, stop immediately
+
+Ours hold 0. 0 != r3, so the walk starts, reads ->next from guest address 8,
+gets 0, and never terminates. The loop was never wrong; the data was.
+
+WHAT IS ALREADY RULED OUT
+-------------------------
+tlsf_create's initialisation translates correctly, checked instruction by
+instruction rather than assumed:
+
+    stwu r0, 8(r6)      -> store AND the register update, both emitted
+    stwu r3, 0x20(r4)   -> same
+    bdnz 0x21f05a8      -> if (--ctx->ctr != 0) goto ...
+    addic. r9, r9, -1   -> followed by the CR0 update our record-form fix adds,
+                           and the bne reads cr0_eq correctly
+
+These mattered individually: stwu losing its update would write one slot
+repeatedly, and addic. losing CR0 would end the outer loop after one pass.
+Both would leave most heads at 0, which is exactly the symptom. Neither is
+happening.
+
+Also already ruled out, earlier today: no dropped displacements anywhere in
+the tlsf_* family, and the bitmaps cannot be empty because a zero fl bitmap
+exits before the walk is reached.
+
+WHAT THIS BUILD TESTS (19:13)
+-----------------------------
+Whether tlsf_create ran on this pool at all. It has an early-out that is easy
+to miss:
+
+    21f0524: cmplwi r31, 0xc          ; size below 12 -> reject
+    21f0530: lis r0, 0x4000
+    21f0538: ble 0x21f0570            ; size above 0x40000000 -> reject
+    21f053c: ...                      ; report an error and
+    21f0568: li r3, 0                 ; return 0, having initialised NOTHING
+
+A rejected pool returns with every free-list head still zero, which is the
+state we observe.
+
+    tlsfc: calls=N bail=N mem=0x... size=0x...
+    tlsfh: seen=N ctrl=0x... fl=0x... sl=0x... slot=0x... idx=N neigh=[...]
+
+  calls=0            -> the control block was never created here at all; some
+                        other path produced it and the walk is reading memory
+                        that was never a TLSF pool
+  calls>0, bail>0    -> the size check rejected it; the fix is whatever
+                        computes that size
+  calls>0, bail=0    -> it ran and initialised, and something cleared the
+                        heads afterwards; neigh tells apart one lost slot from
+                        a scribbled region
+
+CEMU ACCESS, WITHOUT DISTURBING ANYTHING
+----------------------------------------
+Cemu's stub hardcodes port 1337 and arRPC holds it; Equibop respawns arRPC
+immediately when killed, so freeing the port means restarting the Discord
+client. Not worth doing to somebody's running client.
+
+Instead, Cemu and gdb both run inside a private network namespace, where 1337
+is free and nothing outside is touched:
+
+    unshare -rn <script>
+      ip link set lo up
+      flatpak run info.cemu.Cemu -g <rpx> --enable-gdbstub &
+      gdb -batch -x <cmds>          # same namespace, reaches localhost:1337
+
+flatpak works fine inside the namespace. This is the recipe to reuse.
+
+BUILD
+-----
+19:13, links clean, 174,466,425 bytes.
