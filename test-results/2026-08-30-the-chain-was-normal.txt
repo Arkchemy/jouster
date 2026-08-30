@@ -1,0 +1,68 @@
+2026-08-30 — the chain I was chasing is what the retail game does
+==================================================================
+
+Build 00:56 captured the object, and Cemu then showed it is correct.
+
+OURS                                RETAIL (same instruction, real game)
+  obj=0x45badcc                       obj=0x11793e7c
+  +0x00  0x11fdf0   (vtable)          +0x00  0x10068a70  (vtable)
+  +0x04  0x800001                     +0x04  0x00800001
+  +0x08  0x0                          +0x08  0x0
+  +0x0c  0x0                          +0x0c  0x0
+  +0x10  0x0                          +0x10  0x0
+  +0x14  0x0                          +0x14  0x0
+  +0x18  0x0        <- tested word    +0x18  0x0         <- ALSO ZERO
+  +0x1c  0x45bae00  (heap ptr)        +0x1c  0x11793eb0  (heap ptr)
+
+Structurally identical. +0x18 is zero in the retail game too, so the branch
+that leads to the null-pool path is the branch the real game takes.
+
+Confirmed again one level down, breaking on igPool::activate in the retail
+game:
+
+    r3=0x1176cc88  r4=0x18  r5=0x4  r6=0x19e1  r7=0x0
+
+r7 is the pool argument, and it is 0. The retail game passes a null pool to
+activate exactly as ours does.
+
+WHAT THIS MEANS
+---------------
+The chain traced over the last several rounds -- null pool into activate, into
+allocateBucket, into constructElement, into createInstanceInPlace -- is normal
+engine behaviour, not a defect. Every step of it matches the retail game.
+
+Re-reading our own numbers with that in mind: ctorelem reports buf=0x47430, a
+valid buffer, on 24,645 calls. The null-mem case, nullinst, fired exactly ONCE
+in a two-minute run. The single unrepresentative sample is what the
+dispatch-miss probe happened to record first, and it set the direction for
+several builds.
+
+THE ACTUAL MISTAKE
+------------------
+g_ppc_dispatch_miss_* recorded only the FIRST miss. With ~74,000 of them,
+describing the population from its first arrival was never sound, and here it
+picked a one-off whose this=0 pointed at machinery that turns out to be
+correct.
+
+THIS BUILD (01:09)
+------------------
+    missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x
+
+Null targets and real unresolved addresses counted separately, with the most
+recent real one and its call site kept.
+
+  null ~= n, real ~= 0   -> the misses really are all null targets, and the
+                            question becomes which of them are legitimate
+                            (the retail game evidently tolerates some) versus
+                            genuinely wrong
+  real large             -> there are real unresolved addresses hiding behind
+                            the null ones, and lastaddr names one
+
+Stale fields in this run: frontier, nullfield, nullinst, ctorelem, poolact,
+poolgrow and hpool all read zero now -- their generated-side probes were
+removed by regeneration and only the harness-side printing remains. Ignore
+them; they are not results.
+
+BUILD
+-----
+01:09, links clean, 175,936,889 bytes.
