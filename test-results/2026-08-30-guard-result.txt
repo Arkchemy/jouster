@@ -1,0 +1,63 @@
+2026-08-30 — the guard, and what was actually one bug
+=====================================================
+
+Suppressing 6,625 stray writes removed essentially every symptom measured
+this week. Before, and after:
+
+                              before        after
+    calls executed            710,046   1,337,074    +88%
+    cur_mem_ctx                0x80001   0x4400170    survives
+    memwatch transitions             5           2    never cleared
+    defpool nullret                  1           0    all 18 resolve
+    poolarg nullarg                  1           0
+    badbuf hits                 24,602           0
+    dispatchmiss                73,308          53    -99.9%
+    nullwrite                    1,726          66
+    reallocCommon calls          2,420      42,260    pool 0x4500274, real
+
+So the null context, the null pool, the 24,000 bad buffers and the 73,000
+silent dispatches were not four problems. They were one failed allocation,
+seen four ways, and every one of them dissolved when the loop that scribbled
+through the data section was contained. Days of investigation went into
+symptoms; the guard is what proved they were symptoms.
+
+The table also settles which fault it is. flag (the byte at pool+8) is 1 on
+all 18 calls including the failing one, so reallocCommon's early bail --
+`lbz r9, 8(r3)` / `beq`, which returns null before attempting anything -- is
+ruled out. The pool is switched on and the arena is what refused.
+
+WHAT REMAINS, WHICH IS REAL
+---------------------------
+Two things, and neither is the old cascade.
+
+1. nullbucket hits=2. Allocations still fail. Six cycles of three allocations
+   from pool 0x4500274, buffers climbing ~971KB a cycle; five cycles fit and
+   the sixth does not. That is a sizing or lifetime question about the pool,
+   not a translation bug.
+
+2. The boot now runs to 1.34M calls and settles at a dead-steady ~20,025
+   calls per 60 frames. Constant to a fraction of a percent is a loop, not
+   slow progress. Registration is still 124 classes, so it is looping rather
+   than advancing.
+
+THIS BUILD (14:25)
+------------------
+A sampling profiler and a pool dump.
+
+    pcsample: n=%u 0xPC/0xLR ...
+
+Every 4096th function entry goes into a 32-slot ring, sharing the poll's
+existing call site so it costs nothing extra. The per-frame last_pc already
+flickers between half a dozen addresses without saying which loop they belong
+to; duplicates in the ring are the loop, and anything incidental appears once.
+
+    ok_pool=[w0..w11] bad_pool=[w0..w11]
+
+Twelve words of the pool object from the first healthy call and from the call
+that refused. One dump says nothing; two say what changed -- base, extent and
+high-water mark are in there, and the difference between them is how much the
+arena actually had.
+
+BUILD
+-----
+14:25, links clean, 176,338,297 bytes.

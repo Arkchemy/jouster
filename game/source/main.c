@@ -122,6 +122,7 @@ unsigned int g_arkchemy_ab_bucket[16], g_arkchemy_ab_count[16], g_arkchemy_ab_es
 unsigned int g_arkchemy_ab_caller[16];
 unsigned int g_arkchemy_ab_flag[16], g_arkchemy_ab_arena[16];
 unsigned int g_arkchemy_nb_hits = 0, g_arkchemy_nb_lr = 0, g_arkchemy_nb_count = 0;
+unsigned int g_arkchemy_nb_w[12], g_arkchemy_ok_w[12];
 unsigned int g_arkchemy_dp_failcount = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
@@ -1939,6 +1940,35 @@ static void arkchemy_boot_show_splash(void) {
  * A buffer of 0x34D0 means nothing on its own; it means something next to the
  * sixteen calls that returned a real address. Printing all of them makes the
  * odd one out visible instead of asserted. */
+/* The 32-slot PC sample ring, as a list.
+ *
+ * Duplicates are the point: a loop body appears many times over, anything
+ * incidental appears once. Printed in ring order rather than sorted, so the
+ * repeating shape of the loop stays visible. */
+static const char *arkchemy_pcsample_list(void) {
+    static char buf[1024];
+    unsigned int n = g_ppc_pcsample_n < ARKCHEMY_PCSAMPLE_SLOTS
+                   ? g_ppc_pcsample_n : ARKCHEMY_PCSAMPLE_SLOTS;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (unsigned int i = 0; i < n && off + 32 < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off, " 0x%x/0x%x",
+                         g_ppc_pcsample[i], g_ppc_pcsample_lr[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return buf;
+}
+
+static const char *arkchemy_poolwords(const unsigned int *w) {
+    static char buf[2][160];
+    static int which = 0;
+    char *b = buf[which]; which ^= 1;
+    snprintf(b, 160, "0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x",
+             w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11]);
+    return b;
+}
+
 static const char *arkchemy_allocbucket_table(void) {
     /* 2048, not 1024: at ~75 characters a row, seventeen rows overflowed a
      * 1KB buffer and the formatter stopped at twelve -- silently, and the
@@ -3546,6 +3576,8 @@ int main(int argc, char *argv[]) {
                        " -- memwatch: n=%u%s"
                        " -- allocbucket: calls=%u n=%u%s"
                        " -- nullbucket: hits=%u lr=0x%x cnt=%u"
+                       " ok_pool=[%s] bad_pool=[%s]"
+                       " -- pcsample: n=%u%s"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3654,6 +3686,9 @@ int main(int argc, char *argv[]) {
                        g_ppc_memwatch_n, arkchemy_memwatch_history(),
                        g_arkchemy_ab_calls, g_arkchemy_ab_n, arkchemy_allocbucket_table(),
                        g_arkchemy_nb_hits, g_arkchemy_nb_lr, g_arkchemy_nb_count,
+                       arkchemy_poolwords(g_arkchemy_ok_w),
+                       arkchemy_poolwords(g_arkchemy_nb_w),
+                       g_ppc_pcsample_n, arkchemy_pcsample_list(),
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
