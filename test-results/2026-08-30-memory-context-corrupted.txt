@@ -1,0 +1,64 @@
+2026-08-30 — the memory-context global is being overwritten with 0x80001
+=========================================================================
+
+Build 02:35:
+
+    defpool: hits=17 ctx=0x0 idx=2 ret=0x0 nullret=1
+    cur_mem_ctx(.data+5336) = 0x80001
+    missplit: null=48310 real=24152
+
+THE FALLBACK MOSTLY WORKS
+-------------------------
+17 calls to the default-pool lookup, and only ONE returned null. So
+getMemoryPoolByIndex is not broken -- the theory from the previous build,
+that the lookup was failing, is wrong for 16 of the 17 cases. The index is
+2 throughout, which is sane.
+
+THE REAL FINDING
+----------------
+    cur_mem_ctx(.data+5336) = 0x80001
+
+That global held 0x4400170 for days. It is the current memory context pointer
+that igObject::getMemoryPool reads before every pool lookup. It now holds
+0x80001 -- and 0x80001 is exactly the value that has been turning up as a
+bogus dispatch target for the last several builds.
+
+So 0x80001 was never a mysterious function pointer. It is this corrupted
+context being read and called through. The 24,152 "real unresolved addresses"
+and the null-pool chain below them are both downstream of one overwritten
+global.
+
+WHAT THIS RETIRES
+-----------------
+Several conclusions from the last few builds were built on top of the
+corruption rather than on the cause:
+
+  "the misses are calls on unconstructed statics"  -- no, the pointer was
+      corrupt, and the .bss address it landed on is empty in retail too
+  "the default-pool lookup returns null"           -- it succeeds 16 times
+      out of 17
+  "allocateBucket returns static-data memory"      -- a consequence of being
+      handed a corrupted context, not a defect of its own
+
+Each was measured honestly and each described a real symptom. None of them was
+the cause.
+
+THIS BUILD (02:42)
+------------------
+The runtime store watch was armed on 435928 -- the metaobject global whose
+mystery the data-relocation fix already settled, since it was always written
+by a relocation the loader never read. That address is no longer interesting.
+
+Repointed to 13528, the memory-context global, so the next run reports the
+value written and the function that wrote it:
+
+    loopwatch(storewatch_value)      the value stored
+    loopwatch(storewatch_writer_pc)  the function that stored it
+
+If the writer is a legitimate setter storing a bad value, the fault is in what
+computes it. If it is unrelated code, this is a stray write into .data and the
+question becomes what pointer it thought it had.
+
+BUILD
+-----
+02:42, links clean, 175,940,985 bytes.

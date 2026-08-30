@@ -2147,7 +2147,14 @@ static void game_thread_func(void *arg) {
      * Structurally identical to the igStringPool::getDefault /
      * bootstrapInitialize bug described further up -- a global that a
      * bootstrap function is supposed to write, read while still NULL. */
-    g_ppc_watch_store_addr = 435928u;
+    /* Repointed 2026-08-30 from 435928, whose mystery the data-relocation
+     * fix settled: it was always written, by a relocation the loader never
+     * read. The live question is 13528 -- .data+5336, the current memory
+     * context pointer that igObject::getMemoryPool reads before every pool
+     * lookup. It read 0x4400170 for days and now reads 0x80001, the same
+     * bogus value that kept surfacing as a dispatch target. Something
+     * overwrites it, and this catches the writer. */
+    g_ppc_watch_store_addr = 13528u;
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
