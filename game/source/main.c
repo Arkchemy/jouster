@@ -124,6 +124,9 @@ unsigned int g_arkchemy_ab_flag[16], g_arkchemy_ab_arena[16];
 unsigned int g_arkchemy_nb_hits = 0, g_arkchemy_nb_lr = 0, g_arkchemy_nb_count = 0;
 unsigned int g_arkchemy_nb_w[12], g_arkchemy_ok_w[12];
 unsigned int g_arkchemy_ci_lr = 0, g_arkchemy_ci_this = 0;
+unsigned int g_arkchemy_ear_calls = 0, g_arkchemy_ear_idx = 0, g_arkchemy_ear_cnt = 0;
+unsigned int g_arkchemy_ear_drains = 0, g_arkchemy_ear_maxidx = 0;
+unsigned int g_arkchemy_dr_call[8], g_arkchemy_dr_idx[8], g_arkchemy_dr_cnt[8];
 unsigned int g_arkchemy_ohm_n = 0, g_arkchemy_mhc_n = 0;
 unsigned int g_arkchemy_ohm_call[8], g_arkchemy_ohm_lr[8], g_arkchemy_ohm_gp[8], g_arkchemy_ohm_meta[8];
 unsigned int g_arkchemy_mhc_call[8], g_arkchemy_mhc_lr[8], g_arkchemy_mhc_gp[8], g_arkchemy_mhc_meta[8];
@@ -1969,6 +1972,27 @@ static const char *arkchemy_pcsample_list(void) {
  * The immediate caller is the same generic site (constructInstance) for every
  * class, so it is the grandparent that distinguishes "one guard that never
  * takes" from "six separate requesters" -- and those need different fixes. */
+/* Every time endArkRegister finds the class list drained.
+ *
+ * Retail drains it once, after roughly a thousand classes. Whether ours is
+ * refilled between drains or simply rewound is the difference between a list
+ * that is being rebuilt and an index that is being reset, so both the index
+ * and the count are kept for each. */
+static const char *arkchemy_drain_list(void) {
+    static char buf[384];
+    unsigned int n = g_arkchemy_ear_drains < 8u ? g_arkchemy_ear_drains : 8u;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (unsigned int i = 0; i < n && off + 48 < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off, " [%u]@%u idx=%u cnt=%u",
+                         i, g_arkchemy_dr_call[i], g_arkchemy_dr_idx[i],
+                         g_arkchemy_dr_cnt[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return buf;
+}
+
 static const char *arkchemy_singleton_list(const unsigned int *call,
                                            const unsigned int *lr,
                                            const unsigned int *gp,
@@ -3607,6 +3631,7 @@ int main(int argc, char *argv[]) {
                        " -- nullbucket: hits=%u lr=0x%x cnt=%u"
                        " ok_pool=[%s] bad_pool=[%s]"
                        " -- pcsample: n=%u%s"
+                       " -- endark: calls=%u idx=%u cnt=%u maxidx=%u drains=%u%s"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3720,6 +3745,8 @@ int main(int argc, char *argv[]) {
                        arkchemy_poolwords(g_arkchemy_ok_w),
                        arkchemy_poolwords(g_arkchemy_nb_w),
                        g_ppc_pcsample_n, arkchemy_pcsample_list(),
+                       g_arkchemy_ear_calls, g_arkchemy_ear_idx, g_arkchemy_ear_cnt,
+                       g_arkchemy_ear_maxidx, g_arkchemy_ear_drains, arkchemy_drain_list(),
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

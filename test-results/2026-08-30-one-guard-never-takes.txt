@@ -1,0 +1,56 @@
+2026-08-30 — six identical grandparents, and a list drained six times
+======================================================================
+
+The singleton probe answered its question cleanly:
+
+    singleton: ohm=6
+      [0]@111817 lr=0x215bec0 gp=0x21669d8 meta=0x44232b8
+      [1]@172933 lr=0x215bec0 gp=0x21669d8 meta=0x44232b8
+      [2]@231569 ... identical ...  [3]@290233 ... [4]@348869 ...
+    mhc=6
+      [0]@122905 lr=0x215bec0 gp=0x215bcf8 meta=0x440a104   (x6, identical)
+
+Same caller, same grandparent, same metaobject, six times. So this is one
+guard that never takes, not six separate requesters -- and the gaps are
+dead regular: 58,636 calls between cycles, 8,608 between the two singletons
+within a cycle. That regularity is a loop, not a coincidence.
+
+0x21669d8 is inside igSingleton::userRegister, which walks a linked list of
+singleton descriptors and constructs each. Retail (Cemu, break *0x2166964)
+calls it EXACTLY ONCE, from lr=0x2155070 -- inside igArkCore::endArkRegister.
+
+WHICH JOINS THE TWO OPEN PROBLEMS INTO ONE
+------------------------------------------
+endArkRegister takes one class per call: index at this->0x40, count at
+*(this->0x1c), and when the index catches up it branches to the drained path,
+which is where userRegister is reached. Retail:
+
+    endArkRegister      846+ calls, all from lr=0x215baa4
+    userRegister        1 call
+
+So retail drains the list once, at the end of roughly a thousand classes. Ours
+reaches that same drained path six times -- and registration has been stuck at
+124 classes for days.
+
+Those have been tracked as two separate problems. They are one: a list that is
+short, drained, refilled, and drained again. The pool exhaustion is the third
+face of it, since each drain reconstructs the same singletons and re-allocates
+the same 971KB.
+
+THIS BUILD (15:13)
+------------------
+    endark: calls=%u idx=%u cnt=%u maxidx=%u drains=%u [i]@call idx= cnt=
+
+The index and the count at every call, the high-water index, and the first
+eight drains with their call counts. What that separates:
+
+    cnt grows between drains   -> the list really is being refilled, and the
+                                  question is what appends to it late
+    cnt constant, idx reset    -> the index is being rewound under us, which
+                                  is a different bug in a different place
+    cnt ~124 throughout        -> only 124 classes ever reach the list, and
+                                  the drains are the honest consequence
+
+BUILD
+-----
+15:13, links clean, 176,342,393 bytes.
