@@ -1,0 +1,70 @@
+2026-08-30 — seventh bug: 64-bit shim arguments read one register short
+========================================================================
+
+The import counter did exactly what it was built for:
+
+    frame  calls      imports        lastlr
+    6900   204131     84,307,208     0x21d9e48
+    7140   204131     89,738,526     0x21d9e48
+
+    per 60 frames:  calls +0        imports +1,390,000
+
+Forward progress at 1.39 million import calls per 60 frames, with the
+recompiled-call counter frozen. That is a shim spin, and it was invisible
+until now -- a Cafe OS shim sets no PC and increments no call counter, so the
+whole loop looked like a hang inside __gh_memclr32, the last recompiled
+function entered. memclr32 clears 1,542 words in 192 bounded iterations and
+translates faithfully; it was never a candidate, and only the import counter
+could say so.
+
+lastlr names the site exactly: OSCompareAndSwapAtomic64 in Core::igJobQueue::
+init, a lock-free retry loop that never succeeds.
+
+THE BUG
+-------
+Not the shim's semantics, and not the carry idiom that reads its result --
+ppc_addic and ppc_subfe both handle XER[CA] correctly, and the CAS body is
+textbook. The argument registers were wrong.
+
+PPC EABI passes a 64-bit argument in a register pair whose first register is
+ODD-numbered: (r3,r4), (r5,r6), (r7,r8), (r9,r10). With the pointer in r3, the
+first 64-bit argument SKIPS r4 and lands in r5:r6, and the second in r7:r8.
+
+Every Atomic64 shim read r4:r5 and r6:r7 -- one register short. The retail
+call site says so plainly:
+
+    21d9e5c: lwz  r6, 4(r10)     low word of the current value
+    21d9e60: lwz  r8, 0(r10)     high word
+    21d9e68: mr   r5, r8         so r5:r6 is `compare`
+    21d9e3c: andc r8, r6, r10    and r7:r8 is `value`
+
+Reading r4:r5 made the comparand garbage, the CAS could never match, and the
+retry loop spun forever.
+
+Worth recording: the file's own header comment asserted "r4:r5 for the first
+one after ptr in r3" and rated the CAS "high confidence". The confidence was
+in the semantics, which were right; the ABI note beside it was wrong, and
+every function in the file had been written to match the comment rather than
+the ABI. Four shims fixed: OSAddAtomic64, OSAndAtomic64, OSOrAtomic64,
+OSCompareAndSwapAtomic64.
+
+Checked the rest: the only other 64-bit argument assembled from registers
+anywhere in the shims is GX2WaitTimeStamp, whose u64 is the FIRST argument and
+therefore correctly in (r3,r4). Return values in r3(high):r4(low) were always
+right.
+
+WHERE THE BOOT NOW STANDS
+-------------------------
+The 16:04 run had already passed the frontier that held for days:
+
+    registration   124 -> 157, including igFile (#147) and the three object
+                   loaders igIGB/igIGX/igIGZObjectLoader (#155-157)
+    igArkCore::init  runs
+    allocbucket    3 calls, retail's count exactly
+    dispatchmiss   0
+
+igJobQueue::init is past registration and into engine startup proper.
+
+BUILD
+-----
+17:03, links clean, 176,420,217 bytes.
