@@ -1,0 +1,62 @@
+2026-08-30 — registration stalling at 124 is a symptom, not a cause
+====================================================================
+
+    endark: calls=105 idx=124 cnt=124 maxidx=124 drains=35
+      [0]@6109  idx=6  cnt=6      [4]@27704 idx=36 cnt=36
+      [1]@6859  idx=8  cnt=8      [5]@27963 idx=36 cnt=36
+      [2]@21528 idx=30 cnt=30     [6]@28891 idx=38 cnt=38
+      [3]@26978 idx=35 cnt=35     [7]@32523 idx=43 cnt=43
+
+This corrects yesterday's framing twice over.
+
+The list is not drained six times, it is drained THIRTY-FIVE times, and every
+drain has idx == cnt with the count climbing 6, 8, 30, 35, 36, 38, 43 ... 124.
+Draining is the normal rhythm of registration, not a fault: classes are
+appended, what is there is processed, more are appended. Only 6 of those 35
+drains reach userRegister.
+
+And registration stopping at 124 is not itself a bug. Retail calls
+getClassMetaSafeInternal 13,567 times from many different call sites -- it is
+demand-driven, the metaobject being built the first time something asks for
+it. Ours asks 105 times. We do not stall because registration stops; we stop
+registering because the boot stalls, and 124 is simply how far it gets. The
+frontier class, #125, is igInternalLockableHandleMemoryPool, and nothing is
+wrong with it -- nothing asks.
+
+THE GUARD, AND WHAT IT IS NOT
+-----------------------------
+endArkRegister's drained path has exactly the guard that should make this run
+once:
+
+    2154f28: lwz r8, 0x18(r31)    nesting depth
+    2154f30: cmpwi r8, 1
+    2154f34: stw r0, 0x18(r31)    depth - 1
+    2154f38: bne 0x215507c        only at depth 1
+    2154f40: lwz r27, 0x44(r31)   high-water mark
+    2154f44: lwz r0, 4(r7)        table count
+    2154f4c: stw r0, 0x44(r31)    mark := count
+    2154f50: bge 0x215507c        nothing new -> return
+    2154f54: subf r28, r27, r0    run only entries [mark, count)
+
+The translation is faithful: cmpw reads r8 before the store, and 0x44 is
+written with the count. So this is not a seventh recompiler bug, and the
+depth==1 test explains why only 6 of 35 drains get this far.
+
+THIS BUILD (15:28)
+------------------
+    deferred: n=%u [i]@call nest= done= cnt=
+
+The nesting depth, the high-water mark before the run, and the table count, at
+each drain that gets past the depth test. Two possibilities remain and no
+counter separates them:
+
+    cnt grows       -> the same callback is appended again and again, and the
+                       fix is wherever registration appends it
+    done resets     -> the high-water mark is being cleared between drains,
+                       which is a different bug in a different place
+
+They produce identical symptoms and need opposite fixes.
+
+BUILD
+-----
+15:28, links clean, 176,342,393 bytes.
