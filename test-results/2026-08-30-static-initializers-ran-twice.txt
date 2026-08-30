@@ -1,0 +1,67 @@
+2026-08-30 — the ring's origin: static initializers run twice
+==============================================================
+
+    stiruns: driver=1 ctor=2 heads=[0x0,0x6b640,0x0,0x0]
+
+The harness calls ppc_run_static_initializers exactly once. The initializer
+runs TWICE. And the heads tell the whole story without inference:
+
+    pass 0 read head = 0x0        correct prepend onto an empty list
+    pass 1 read head = 0x6b640    a node already IN the list
+
+Pass 1 stores that into the second node's next pointer, and the list closes
+into a ring. One walk then visits 37,285 nodes instead of 5.
+
+WHERE THE SECOND PASS COMES FROM
+--------------------------------
+Both references exist in the generated C:
+
+    generated_0136.c:12930   direct call from ppc_run_static_initializers
+    generated_0136.c:22812   case 35434924u in ppc_dispatch  (= 0x21CB1AC)
+
+The dispatch case is the game's own GHS runtime walking the same constructor
+table after the harness has already walked it. So this is not a recompiler
+bug and not a harness bug on its own -- it is two correct callers doing the
+same one-time work.
+
+WHY REMOVING THE HARNESS CALL IS NOT THE FIX
+--------------------------------------------
+It is the obvious move and it would have been wrong. arkchemy_mem_bootstrap_
+heap_init is deliberately sequenced AFTER that call: one of the 114
+initializers zero-constructs the struct the bootstrap heap handle lives in,
+and an earlier attempt at running it first was measured failing, with the
+handle reading back 0x0 at the constructor's own read site. Dropping the
+harness pass moves all 114 initializers to after that init, silently
+reintroducing a bug fixed on 2026-08-21.
+
+THE FIX (16:04 build)
+---------------------
+Guard each initializer instead. C++ static initialization runs once per
+translation unit on any real target, so running each at most once is faithful
+rather than a workaround: whichever caller arrives first does the work, the
+other returns immediately, and nothing is reordered.
+
+    tools/guard_static_init_once.py -- 114 guards, one per __sti__ function
+
+    stiguard: total=%u distinct=%u blocked=%u
+
+The counts also settle a question the fix does not need but the project does:
+whether the game's own pass covers all 114. distinct=114 with blocked=114 says
+both callers walk the whole table, and the harness call could be dropped once
+the bootstrap-heap ordering is handled another way. Anything less says the
+game's pass is partial and the harness call is load-bearing.
+
+WHAT SHOULD FOLLOW IF THIS IS RIGHT
+-----------------------------------
+    singlist n         37,285 -> 5, terminating
+    the ring           gone
+    nullbucket hits    2 -> 0, since the pool is no longer asked for six
+                       copies of the same buckets
+    registration       past 124, because the boot stops re-doing this work
+
+If the ring closes but registration does not advance, then the repetition was
+costing memory without being what stalls the boot, and the stall is elsewhere.
+
+BUILD
+-----
+16:04, links clean, 176,354,681 bytes.
