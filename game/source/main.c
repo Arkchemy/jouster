@@ -123,6 +123,10 @@ unsigned int g_arkchemy_ab_caller[16];
 unsigned int g_arkchemy_ab_flag[16], g_arkchemy_ab_arena[16];
 unsigned int g_arkchemy_nb_hits = 0, g_arkchemy_nb_lr = 0, g_arkchemy_nb_count = 0;
 unsigned int g_arkchemy_nb_w[12], g_arkchemy_ok_w[12];
+unsigned int g_arkchemy_ci_lr = 0, g_arkchemy_ci_this = 0;
+unsigned int g_arkchemy_ohm_n = 0, g_arkchemy_mhc_n = 0;
+unsigned int g_arkchemy_ohm_call[8], g_arkchemy_ohm_lr[8], g_arkchemy_ohm_gp[8], g_arkchemy_ohm_meta[8];
+unsigned int g_arkchemy_mhc_call[8], g_arkchemy_mhc_lr[8], g_arkchemy_mhc_gp[8], g_arkchemy_mhc_meta[8];
 unsigned int g_arkchemy_dp_failcount = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
@@ -1960,6 +1964,31 @@ static const char *arkchemy_pcsample_list(void) {
     return buf;
 }
 
+/* Every call to a singleton constructor retail makes exactly once.
+ *
+ * The immediate caller is the same generic site (constructInstance) for every
+ * class, so it is the grandparent that distinguishes "one guard that never
+ * takes" from "six separate requesters" -- and those need different fixes. */
+static const char *arkchemy_singleton_list(const unsigned int *call,
+                                           const unsigned int *lr,
+                                           const unsigned int *gp,
+                                           const unsigned int *meta,
+                                           unsigned int total) {
+    static char buf[4][320];
+    static int which = 0;
+    char *b = buf[which]; which = (which + 1) & 3;
+    unsigned int n = total < 8u ? total : 8u;
+    size_t off = 0;
+    b[0] = '\0';
+    for (unsigned int i = 0; i < n && off + 64 < 320; i++) {
+        int w = snprintf(b + off, 320 - off, " [%u]@%u lr=0x%x gp=0x%x meta=0x%x",
+                         i, call[i], lr[i], gp[i], meta[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return b;
+}
+
 static const char *arkchemy_poolwords(const unsigned int *w) {
     static char buf[2][160];
     static int which = 0;
@@ -3578,6 +3607,8 @@ int main(int argc, char *argv[]) {
                        " -- nullbucket: hits=%u lr=0x%x cnt=%u"
                        " ok_pool=[%s] bad_pool=[%s]"
                        " -- pcsample: n=%u%s"
+                       " -- singleton: ohm=%u%s"
+                       " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3689,6 +3720,8 @@ int main(int argc, char *argv[]) {
                        arkchemy_poolwords(g_arkchemy_ok_w),
                        arkchemy_poolwords(g_arkchemy_nb_w),
                        g_ppc_pcsample_n, arkchemy_pcsample_list(),
+                       g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
+                       g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,

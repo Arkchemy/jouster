@@ -1,0 +1,61 @@
+2026-08-30 — Cemu as oracle: retail does it once, we do it six times
+=====================================================================
+
+The remaining question was whether retail fits six cycles of bucket
+allocations into the 5MB pool, or whether six cycles is itself the bug. Retail
+answers it flatly.
+
+RETAIL (Cemu, gdbstub, break *0x2164a24)
+----------------------------------------
+    AB this=1176cc88 cnt=0x19e1 esz=0x18 pool=116d9314    6625 x 24
+    AB this=11793e7c cnt=0x40   esz=0xc  pool=116d9314      64 x 12
+    AB this=1179428c cnt=0x4650 esz=0xc  pool=116d9314   18000 x 12
+    ...then 28 more calls, all against a DIFFERENT pool 115e1e04
+
+The triple appears ONCE. Identical counts, identical element sizes to ours --
+so nothing is misparsed and no configuration is being read wrongly. We simply
+run the same three allocations six times over, and 6 x 971,328 does not fit in
+5,242,880 bytes.
+
+The three activations come from three separate singleton constructors, each
+called exactly once, and both from the same site:
+
+    igObjectHandleManager::userInstantiate  0x214ff78   1 call, lr=0x215bec0
+    igMemoryHandleContext::userInstantiate  0x214ea3c   1 call, lr=0x215bec0
+
+0x215bec0 is inside igMetaObject::constructInstance. So the pool exhaustion is
+not an allocator problem, not a sizing problem, and not a lifetime problem. It
+is six constructions of objects that should exist once.
+
+WHAT THIS RETIRES
+-----------------
+"The arena is too small" -- no. The game asks for 5,242,888 bytes (MEM EVENT
+#3) and retail lives within it comfortably. Growing the pool would have hidden
+a construction bug behind a bigger buffer, and the boot would still have been
+wrong six times over.
+
+THIS BUILD (14:59)
+------------------
+    singleton: ohm=%u [i]@call lr= gp= meta=   mhc=%u ...
+
+constructInstance is generic -- it constructs whatever it is handed -- so its
+own address is the immediate caller for every class and says nothing. The
+probe records the grandparent: constructInstance's lr and metaobject at the
+moment each singleton constructor runs.
+
+    six identical grandparents  -> one guard that never takes
+    six different grandparents  -> six separate requesters
+
+Those need entirely different fixes and no counter can tell them apart, which
+is why the frame line now carries the callers rather than a count.
+
+METHOD NOTE
+-----------
+Cemu's gdbstub port is hardcoded to 1337 and was held by another process, so
+the first two connection attempts were talking to something else entirely and
+reported "Remote connection closed". Worth checking what owns the port before
+concluding the stub is broken.
+
+BUILD
+-----
+14:59, links clean, 176,338,297 bytes.
