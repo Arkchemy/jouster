@@ -116,6 +116,7 @@ unsigned int g_arkchemy_bb2_meta = 0, g_arkchemy_bb2_pool = 0;
 unsigned int g_arkchemy_pa2_calls = 0, g_arkchemy_pa2_nullarg = 0;
 unsigned int g_arkchemy_pa2_lr = 0, g_arkchemy_pa2_this = 0;
 unsigned int g_arkchemy_pa2_arg = 0, g_arkchemy_pa2_member = 0;
+unsigned int g_arkchemy_dp_failcount = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
 unsigned int g_arkchemy_relstr_last_lr = 0;
@@ -3481,6 +3482,7 @@ int main(int argc, char *argv[]) {
                        " -- mallocret: calls=%u bad=%u lastret=0x%x lastsize=%u lastpool=0x%x"
                        " -- badbuf: hits=%u lr=0x%x buf=0x%x meta=0x%x pool=0x%x"
                        " -- poolarg: calls=%u nullarg=%u lr=0x%x this=0x%x member=0x%x"
+                       " -- order: ctxfail@%u firstwrite@%u val=0x%x lr=0x%x"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3584,6 +3586,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_bb2_meta, g_arkchemy_bb2_pool,
                        g_arkchemy_pa2_calls, g_arkchemy_pa2_nullarg, g_arkchemy_pa2_lr,
                        g_arkchemy_pa2_this, g_arkchemy_pa2_member,
+                       g_arkchemy_dp_failcount, g_ppc_first_store_count,
+                       g_ppc_first_store_val, g_ppc_first_store_lr,
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,

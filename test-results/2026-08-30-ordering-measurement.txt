@@ -1,0 +1,50 @@
+2026-08-30 — measuring the ordering rather than assuming it
+============================================================
+
+The first fault is that .data+5336, the memory-context pointer, is still zero
+when igPool::activate reads it. The harness has shown that global holding
+0x4400170 for days, so something does publish it -- the question is whether
+that happens before or after this one call needs it.
+
+That is an ordering question, and the instruments were only reporting latest
+values, which cannot answer it.
+
+THIS BUILD (12:45)
+------------------
+    order: ctxfail@%u firstwrite@%u val=0x%x lr=0x%x
+
+Both events timestamped against g_ppc_fn_call_count, the recompiled-call
+counter that already appears throughout the log:
+
+  ctxfail@     when getMemoryPoolByIndex was called with a null context
+  firstwrite@  when .data+5336 was FIRST written, with the value and call site
+
+Reading it:
+
+  firstwrite > ctxfail   -> a straightforward ordering bug. The pool is
+                            activated before anything publishes the context,
+                            and the fix is to find what should have run first.
+  firstwrite < ctxfail   -> the context WAS published and then cleared or
+                            overwritten before this call, which is a different
+                            problem and val/lr name the write.
+  firstwrite = 0         -> nothing writes it before the corrupting store, so
+                            the 0x4400170 seen in earlier runs arrives later
+                            still, and the boot is running for a long time with
+                            no memory context at all.
+
+conquertron's store watch now keeps the first write as well as the latest. It
+reported only the most recent, which is right for catching a corrupting store
+and useless for ordering -- and every remaining question here is about order.
+
+WHAT IS SETTLED
+---------------
+    16 of 17 pool resolutions succeed
+    the one failure has ctx = 0, so the null pool is a consequence
+    activate reads that context from .data+5336
+    the bad buffer's flag write lands on .data+5336 itself, writing 0x80001
+    every instruction in the chain is correctly translated, checked against
+        the retail game call by call
+
+BUILD
+-----
+12:45, links clean, 175,957,369 bytes.
