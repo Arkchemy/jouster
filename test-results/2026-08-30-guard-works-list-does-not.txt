@@ -1,0 +1,53 @@
+2026-08-30 — the guard works; the list it guards does not
+==========================================================
+
+    deferred: n=35
+      [0]@6859  nest=1 done=0 cnt=0     nothing to run
+      [1]@27963 nest=1 done=0 cnt=1     runs entry 0, mark := 1
+      [2]@28891 nest=1 done=1 cnt=1     bge taken, no-op
+      [3..7]    nest=1 done=1 cnt=1     no-op, no-op, no-op...
+
+All 35 drains pass the depth test, and the high-water mark behaves exactly as
+designed: the table holds one entry, it runs once, and every later drain is a
+no-op. Neither of the two possibilities this build was written to separate is
+what happened -- the count does not grow and the mark does not reset.
+
+So igSingleton::userRegister runs ONCE, and the six constructions of
+igObjectHandleManager all happen inside a SINGLE traversal.
+
+That relocates the fault again. It is not the guard, not the drain rhythm, and
+not endArkRegister. It is the singleton descriptor list that userRegister
+walks:
+
+    21669a0: lis r31, 0x100d        head at .data+5272
+    21669a4: lwz r31, -0x2d28(r31)
+    21669b0: lwz r0, 0(r31)         node->provider
+    21669b8: bctrl                  -> metaobject
+    21669d4: bl 0x215bcb0           constructInstance
+    21669d8: lwz r31, 4(r31)        node->next
+    21669e0: bne 0x21669b0
+
+Six constructions of the same metaobject in one walk means the walk visits six
+nodes that resolve to it. The 58,636-call spacing is simply how long
+constructing one of these takes, not evidence of an outer loop -- which is
+what it looked like, and I read it that way for two builds.
+
+THIS BUILD (15:33)
+------------------
+    singlist: walks=%u head=0x%x n=%u [i]n=0x.. f=0x..
+
+Every node as it is visited, with its provider function, plus the head and the
+number of walks. Two shapes, two different defects:
+
+    repeated node addresses     -> node->next cycles back through nodes
+                                   already visited, a corrupt link
+    distinct addresses, same f  -> the list genuinely holds duplicate
+                                   descriptors, and the fault is wherever
+                                   registration appends them
+
+The list is built by registration, so its shape is the actual defect, and a
+count of constructions was never going to reveal it.
+
+BUILD
+-----
+15:33, links clean, 176,342,393 bytes.

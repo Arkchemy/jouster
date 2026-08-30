@@ -128,6 +128,8 @@ unsigned int g_arkchemy_ear_calls = 0, g_arkchemy_ear_idx = 0, g_arkchemy_ear_cn
 unsigned int g_arkchemy_ear_drains = 0, g_arkchemy_ear_maxidx = 0;
 unsigned int g_arkchemy_dr_call[8], g_arkchemy_dr_idx[8], g_arkchemy_dr_cnt[8];
 unsigned int g_arkchemy_df_n = 0;
+unsigned int g_arkchemy_sl_n = 0, g_arkchemy_sl_calls = 0, g_arkchemy_sl_head = 0;
+unsigned int g_arkchemy_sl_node[16], g_arkchemy_sl_fn[16];
 unsigned int g_arkchemy_df_call[8], g_arkchemy_df_nest[8], g_arkchemy_df_done[8], g_arkchemy_df_cnt[8];
 unsigned int g_arkchemy_ohm_n = 0, g_arkchemy_mhc_n = 0;
 unsigned int g_arkchemy_ohm_call[8], g_arkchemy_ohm_lr[8], g_arkchemy_ohm_gp[8], g_arkchemy_ohm_meta[8];
@@ -1986,6 +1988,26 @@ static const char *arkchemy_pcsample_list(void) {
  * grows means callbacks are being appended repeatedly; a done that falls back
  * to zero means the mark is being reset. Both produce the same repeated
  * construction and need opposite fixes. */
+/* The singleton descriptor list, node by node as it is walked.
+ *
+ * Repeated node addresses mean node->next cycles back; distinct addresses
+ * carrying the same provider mean the list genuinely holds duplicates. Those
+ * are different defects in different places, and a count of constructions
+ * cannot tell them apart. */
+static const char *arkchemy_singlist(void) {
+    static char buf[512];
+    unsigned int n = g_arkchemy_sl_n < 16u ? g_arkchemy_sl_n : 16u;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (unsigned int i = 0; i < n && off + 40 < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off, " [%u]n=0x%x f=0x%x",
+                         i, g_arkchemy_sl_node[i], g_arkchemy_sl_fn[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return buf;
+}
+
 static const char *arkchemy_deferred_list(void) {
     static char buf[384];
     unsigned int n = g_arkchemy_df_n < 8u ? g_arkchemy_df_n : 8u;
@@ -3656,6 +3678,7 @@ int main(int argc, char *argv[]) {
                        " -- pcsample: n=%u%s"
                        " -- endark: calls=%u idx=%u cnt=%u maxidx=%u drains=%u%s"
                        " -- deferred: n=%u%s"
+                       " -- singlist: walks=%u head=0x%x n=%u%s"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3772,6 +3795,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_ear_calls, g_arkchemy_ear_idx, g_arkchemy_ear_cnt,
                        g_arkchemy_ear_maxidx, g_arkchemy_ear_drains, arkchemy_drain_list(),
                        g_arkchemy_df_n, arkchemy_deferred_list(),
+                       g_arkchemy_sl_calls, g_arkchemy_sl_head, g_arkchemy_sl_n, arkchemy_singlist(),
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
