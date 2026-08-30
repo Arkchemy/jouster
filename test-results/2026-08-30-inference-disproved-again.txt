@@ -1,0 +1,61 @@
+2026-08-30 — the metaobject inference was wrong, and a probe said so
+====================================================================
+
+Build 03:02:
+
+    badmeta: hits=0 lr=0x0 meta=0x0 mem=0x0 pool=0x0 w=[all zero]
+
+Zero hits. No call into createInstanceInPlace arrives with a metaobject below
+the MEM2 heap base, so the pointer it receives is never .data+5312.
+
+WHAT WAS INFERRED, AND WHY IT LOOKED SOLID
+-------------------------------------------
+The store watch put the write at lr=0x2160dac. The instructions there are an
+atomic refcount increment:
+
+    2160dac: addi   r11, r29, 0x18
+    2160dbc: stwcx. r9, 0, r11
+
+r29 is set once at entry, from r3, the metaobject. The corrupted global is
+.data+5336 and the increment offset is 0x18, so .data+5336 - 0x18 =
+.data+5312, and that had to be the metaobject. The arithmetic was exact, the
+register was traced to its only assignment, and the conclusion was written up
+as the root cause.
+
+It is wrong. The probe built specifically to catch that caller never fired
+once in a full run.
+
+WHERE THE REASONING BROKE
+-------------------------
+lr is set by the bctrl at 0x2160da8, one instruction before. Any function
+DISPATCHED from there runs with lr still holding 0x2160dac, and its own stores
+report that lr. So the write need not be in createInstanceInPlace at all -- it
+is in a callee, and the refcount increment sitting a few instructions later
+was a coincidence that fit the arithmetic perfectly.
+
+Eighth time in this investigation that a confident reading from our build
+alone has been overturned, and the first time it was overturned by a probe
+rather than by Cemu. That is an improvement in method, if not in the
+conclusion.
+
+WHAT STILL STANDS
+-----------------
+    .data+5336 is written with 0x80001, four times
+    it held 0x4400170 for days beforehand
+    0x80001 is the value that keeps surfacing as a bogus dispatch target
+    the store happens while lr = 0x2160dac
+    the default-pool lookup is fine, 16 of 17 calls return a real pool
+
+THIS BUILD (03:11)
+------------------
+Rather than infer the producing register a second time, the store watch now
+records r3, r29 and r31 at the moment of the store:
+
+    storewatch_lr    storewatch_r3    storewatch_r29    storewatch_r31
+
+Whichever of those equals 13528, or 13528 minus a small displacement, is the
+pointer at fault -- a lookup instead of an argument.
+
+BUILD
+-----
+03:11, links clean, 175,949,177 bytes.
