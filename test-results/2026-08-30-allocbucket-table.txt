@@ -1,0 +1,42 @@
+2026-08-30 — all 17 allocateBucket calls, twelve of them anyway
+===============================================================
+
+The table came back truncated at twelve rows of seventeen, and the five it
+dropped are exactly the ones that matter -- the corrupting call is at 408,510
+and row [11] is at 299,067. A 1KB buffer with a 96-byte guard stops at about
+twelve 75-character rows. Widened to 2048, and it now prints "...TRUNCATED"
+rather than ending quietly, because a table that silently loses its
+interesting rows is worse than no table.
+
+WHAT THE TWELVE STILL SHOW
+--------------------------
+A clean repeating pattern, four full cycles of three allocations:
+
+    [0]@112270  cnt=6625  esz=24   buf=0x4593c40   pool=0x4500274
+    [1]@119204  cnt=64    esz=12   buf=0x45bae34   pool=0x4500274
+    [2]@123131  cnt=18000 esz=12   buf=0x45bb244   pool=0x4500274
+    [3]@173379  cnt=6625  esz=24   buf=0x4680e80   pool=0x4500274
+    [4]@180313  cnt=64    esz=12   buf=0x46a8074   pool=0x4500274
+    [5]@181767  cnt=18000 esz=12   buf=0x46a8484   pool=0x4500274
+    ... same triple again at 232k and at 290k ...
+
+Every one healthy: the same pool 0x4500274, buffers climbing steadily through
+MEM2, buckets 0x1c below their buffers, the same caller 0x2164c08. Four
+identical cycles is the shape of a per-something setup running repeatedly --
+and it establishes exactly what a correct call looks like, which is the thing
+that makes row 15 or 16 legible when it arrives.
+
+WHAT IS STILL OPEN
+------------------
+Rows [12]..[16]. The clearing at 408,510 is one of them. The other open
+question the full table answers is whether the corrupting call is the
+null-pool call (poolarg nullarg=1) or a call that has a real pool and gets a
+bad buffer anyway -- those need different fixes, and the twelve visible rows
+cannot distinguish them.
+
+Every one of the 17 calls returns to 0x2164c08, so all of them come from the
+same site in igPool::activate, and defpool's 17 hits are one per call.
+
+BUILD
+-----
+13:13, links clean, 176,166,265 bytes.

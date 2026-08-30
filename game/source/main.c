@@ -1938,7 +1938,12 @@ static void arkchemy_boot_show_splash(void) {
  * sixteen calls that returned a real address. Printing all of them makes the
  * odd one out visible instead of asserted. */
 static const char *arkchemy_allocbucket_table(void) {
-    static char buf[1024];
+    /* 2048, not 1024: at ~75 characters a row, seventeen rows overflowed a
+     * 1KB buffer and the formatter stopped at twelve -- silently, and the
+     * five it dropped were the only ones that mattered. Hence both the room
+     * for all of them and the explicit marker below when it still runs out:
+     * a table that quietly loses its interesting rows is worse than none. */
+    static char buf[2048];
     unsigned int n = g_arkchemy_ab_n < 16u ? g_arkchemy_ab_n : 16u;
     size_t off = 0;
     buf[0] = '\0';
@@ -1952,6 +1957,8 @@ static const char *arkchemy_allocbucket_table(void) {
         if (w <= 0) break;
         off += (size_t)w;
     }
+    if (n < g_arkchemy_ab_n || (n && off + 96 >= sizeof(buf)))
+        snprintf(buf + off, sizeof(buf) - off, " ...TRUNCATED");
     return buf;
 }
 
