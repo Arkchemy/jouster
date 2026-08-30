@@ -1,0 +1,36 @@
+2026-08-30 — the same call, both sides
+=======================================
+
+Core::igMetaObject::createInstanceInPlace(meta, buf, pool), entry:
+
+                 retail                 ours
+    meta    0x115FCCE4  heap       0x04423B64  heap, healthy
+    buf     0x11793EE4  heap       0x0000000C  garbage
+    pool    0x116D9314  heap       0x00000000  NULL
+
+and retail's buffer holds real content (0x116d9390 twice, then zeros), so it
+is genuine memory rather than an address that merely looks plausible.
+
+That is the entire divergence in three registers. The metaobject is fine on
+both sides. The pool is real in retail and null here, and the buffer follows
+from it: a null pool yields a null allocation, element addresses get computed
+from that null base, and out come small integers -- 0xc, 0x34D4, 0x47430 --
+used as pointers.
+
+WHAT REMAINS
+------------
+Retail reaches this call with a real pool. Ours does not, even though
+igPool::activate resolves a default pool successfully 16 times out of 17 and
+stores it at +0x20. So either the failing path does not go through activate's
+fallback, or it reads +0x20 before the store lands.
+
+That is one narrow question and it is the last one in this chain.
+
+WHAT IS SETTLED
+---------------
+Every instruction along the way translates correctly. The refcount increment,
+the flag write at buffer+4, the size-class mapping, the free-list walk, the
+vtable dispatch -- all verified against the retail game and all faithful. The
+failure is a single null value propagating through correct code, and the
+guest-memory mask is what turns each consequence into silence rather than a
+crash.
