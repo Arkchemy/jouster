@@ -1,0 +1,53 @@
+2026-08-30 — retail resolves a default pool; we pass the null straight through
+==============================================================================
+
+THE DIVERGENCE POINT, MEASURED ON BOTH SIDES
+---------------------------------------------
+Same function, Core::igMemory::mallocAligned(size, align, igMemoryPool*), the
+last step before memory is actually obtained:
+
+    retail   r6 (pool) = 0x115d9284      a real igMemoryPool
+    ours     r6 (pool) = 0                NULL
+
+And the retail pool object is exactly what it should be:
+
+    0x115d9284:  0x100541dc   vtable
+                 0x00000005
+                 0x01000000
+                 0x00000000
+                 0x115d9300   <- the TLSF control block seen earlier
+                 0x00100000   <- 1 MiB, the size tlsf_create was called with
+
+So it is a fully constructed pool backed by the TLSF heap this project already
+traced end to end.
+
+WHY THIS IS THE INTERESTING PART
+--------------------------------
+Both builds pass a NULL pool into igPool::activate -- Cemu confirmed r7=0
+there in the retail game too, which is what ruled that out as a bug. Yet by
+the time execution reaches mallocAligned, retail has a real pool and we still
+have null.
+
+So between activate and mallocAligned the retail engine substitutes a default
+pool, and ours does not. That substitution is the missing behaviour, and it is
+a much narrower target than anything in this chain so far.
+
+WHAT NULL COSTS US, CONCRETELY
+------------------------------
+    igMemory::mallocAligned(size, align, NULL)
+      -> igMemoryPool::mallocAligned with this = NULL
+        -> reallocCommon on a null pool
+          -> a buffer at 0x47430, in static data rather than the heap
+            -> an object whose first word is zero
+              -> vtable[+0x34] reads guest address 0x34 -> 0x80001
+                -> 24,882 dispatch misses to an address that was never a
+                   function pointer
+
+Every step of that was traced separately over the last several rounds. It is
+one missing default-pool resolution.
+
+BUILD
+-----
+No new build. The next probe belongs between activate and mallocAligned, on
+the path where retail acquires a pool from somewhere, and finding where that
+happens in the retail game is a Cemu question rather than another counter.
