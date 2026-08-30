@@ -1,0 +1,64 @@
+2026-08-30 — the whole chain, and it is one null pool
+======================================================
+
+Build 12:14:
+
+    badbuf: hits=24827 lr=0x21cfbf8 buf=0xc meta=0x4423b64 pool=0x0
+
+24,827 hits, which matches the ~24,800 real dispatch misses -- so this is the
+population, not another one-off. The buffer is 0xc. Twelve. Not a corrupted
+pointer but a small integer being used as one, which is what an offset
+computed from a NULL base looks like.
+
+THE CHAIN, EVERY STEP MEASURED
+------------------------------
+    the pool is NULL at igMemory::mallocAligned        (lastpool=0x0)
+      mallocAligned correctly returns NULL             (bad=0 over 17 calls)
+        element addresses are computed from that null base
+          giving small values used as pointers: 0xc, 0x34D4, 0x47430
+            createInstanceInPlace writes a flag at buffer+4
+              stw r0, 4(r31) -- ordinary, correct code
+                with r31 = 0x34D4 that lands on .data+5336
+                  the memory-context pointer becomes 0x80001
+                    later reads treat 0x80001 as an object and call through it
+                      24,152 dispatch misses to a value that was never a pointer
+
+Nothing in that sequence is mistranslated. Every instruction does what the
+original does. The single wrong input is the null pool.
+
+WHY THE NULL POOL IS NOT ITSELF THE BUG
+---------------------------------------
+Cemu was clear about this: the retail game also passes a null pool into
+igPool::activate (r7=0), also has +0x18 zero on a freshly created
+igHandleRedirectPool, and also takes the same branch. Passing null there is
+normal. What retail does differently is arrive at allocateBucket with a REAL
+pool (r8=0x116d9314), because activate resolves a default one:
+
+    2164bcc: bl igMemoryContext::getMemoryPoolByIndex
+    2164bd8: stw r31, 0x20(r27)
+
+and that lookup works here too -- 16 of 17 calls return a real pool. So the
+resolution happens and still a null reaches mallocAligned, which means the
+path that fails is not going through activate's fallback, or is reading the
++0x20 member before it is written.
+
+That is the one open question, and it is a narrow one.
+
+EIGHT OVERTURNED READINGS
+-------------------------
+For the record, since the pattern shaped the whole investigation. Each was
+measured honestly and each was wrong: unconstructed statics, a failing
+default-pool lookup, allocateBucket returning static memory, the metaobject as
+the corrupting pointer (twice), igPool::grow, a field-array loop, and
+mallocAligned producing static addresses.
+
+Every one was overturned by measurement, never by better reasoning. The
+instruments now record lr and registers by default because inference kept
+picking the wrong function and the wrong argument -- and both mistakes are
+invisible in a log that only shows counters.
+
+BUILD
+-----
+No new build. The remaining question is which path reaches mallocAligned
+without activate's resolved pool, and that wants a probe on the +0x20 member
+rather than another counter downstream.
