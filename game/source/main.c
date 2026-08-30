@@ -101,6 +101,12 @@ unsigned int g_arkchemy_dp_ret = 0, g_arkchemy_dp_nullret = 0;
  * named the wrong function seven times in this investigation. */
 unsigned int g_arkchemy_bm_hits = 0, g_arkchemy_bm_lr = 0, g_arkchemy_bm_meta = 0;
 unsigned int g_arkchemy_bm_mem = 0, g_arkchemy_bm_pool = 0, g_arkchemy_bm_w[4] = {0,0,0,0};
+/* What igMemory::mallocAligned actually returns -- see
+ * tools/probe_malloc_returns.py. Buffers of 0x34D4 and 0x47430 are static
+ * data, not heap, and a flag write at buffer+4 is what corrupts the
+ * memory-context pointer. */
+unsigned int g_arkchemy_mr_calls = 0, g_arkchemy_mr_bad = 0;
+unsigned int g_arkchemy_mr_lastret = 0, g_arkchemy_mr_size = 0, g_arkchemy_mr_pool = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
 unsigned int g_arkchemy_relstr_last_lr = 0;
@@ -3463,6 +3469,7 @@ int main(int argc, char *argv[]) {
                        " -- missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x lastthis=0x%x lastvt=0x%x"
                        " -- defpool: hits=%u ctx=0x%x idx=%d ret=0x%x nullret=%u"
                        " -- badmeta: hits=%u lr=0x%x meta=0x%x mem=0x%x pool=0x%x w=[0x%x,0x%x,0x%x,0x%x]"
+                       " -- mallocret: calls=%u bad=%u lastret=0x%x lastsize=%u lastpool=0x%x"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3560,6 +3567,8 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_bm_hits, g_arkchemy_bm_lr, g_arkchemy_bm_meta,
                        g_arkchemy_bm_mem, g_arkchemy_bm_pool,
                        g_arkchemy_bm_w[0], g_arkchemy_bm_w[1], g_arkchemy_bm_w[2], g_arkchemy_bm_w[3],
+                       g_arkchemy_mr_calls, g_arkchemy_mr_bad, g_arkchemy_mr_lastret,
+                       g_arkchemy_mr_size, g_arkchemy_mr_pool,
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,

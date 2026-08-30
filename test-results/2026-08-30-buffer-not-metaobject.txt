@@ -1,0 +1,62 @@
+2026-08-30 — it is the buffer, not the metaobject
+==================================================
+
+Build 03:11, with the store watch reporting registers instead of inviting
+another inference:
+
+    storewatch_lr    0x2160dac
+    storewatch_r3    0x000034D4
+    storewatch_r29   0x04423B64
+    storewatch_r31   0x000034D4
+    storewatch_value 0x00080001
+
+    watched address  0x34D8  =  r31 + 4     exactly
+
+THE INSTRUCTION
+---------------
+    2160dc4: lwz  r0, 4(r31)
+    2160dc8: oris r0, r0, 8      ; |= 0x80000
+    2160dcc: stw  r0, 4(r31)
+
+0x1 | 0x80000 = 0x80001, which is the value observed. So this is an ordinary
+flag write on the newly constructed object, and it is correct code.
+
+r31 is `mem`, the element buffer, and it is 0x34D4 = .data+5332. Setting a
+flag four bytes into a static-data address lands on the memory-context pointer
+at .data+5336.
+
+THE PREVIOUS PROBE CHECKED THE WRONG ARGUMENT
+----------------------------------------------
+badmeta tested r3 at entry to createInstanceInPlace and found nothing, which
+was correct: r3 is the METAOBJECT and it is a healthy heap pointer,
+0x4423B64, visible in this very capture as storewatch_r29. The faulty
+argument is r4, the buffer.
+
+Two inferences in a row went to the wrong argument -- first the metaobject via
+the +0x18 refcount, then the metaobject again via the probe. Recording the
+registers ended it in one run, and is the reason the store watch now does that
+by default.
+
+THE BUFFERS SEEN SO FAR
+-----------------------
+    0x000034D4   .data+5332
+    0x00047430   also static-data space
+
+Both are far below the MEM2 heap at 0x04000000, and both come from
+igMemory::mallocAligned via igPool::allocateBucket.
+
+THIS BUILD (12:07)
+------------------
+    mallocret: calls=%u bad=%u lastret=0x%x lastsize=%u lastpool=0x%x
+
+Captured at the call site, because mallocAligned falls through rather than
+returning -- an attempt to instrument its return paths found zero of them.
+
+  bad > 0   -> the allocator itself hands back static-data addresses, and
+               lastpool says whether it happens only for a particular pool
+  bad = 0   -> mallocAligned is fine and the buffer is corrupted somewhere
+               between it and createInstanceInPlace
+
+BUILD
+-----
+12:07, links clean, 175,949,177 bytes.
