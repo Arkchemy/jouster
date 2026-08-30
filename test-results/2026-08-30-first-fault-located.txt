@@ -1,0 +1,62 @@
+2026-08-30 — the first fault, located
+=====================================
+
+The polled watch gave the whole history of .data+5336 (synthetic 0x34D8):
+
+    [0]@1      = 0x0        pc=0x2006064                  initial
+    [1]@3626   = 0x4400170  pc=0x217a5ac lr=0x21472b4      correct publish
+    [2]@408510 = 0x0        pc=0x21cf79c lr=0x2164b0c      CLEARED  <-- first fault
+    [3]@428343 = 0x1        pc=0x215bb38 lr=0x2160d20
+    [4]@428352 = 0x80001    pc=0x21cfb5c lr=0x2164b0c
+
+pc 0x21cf79c is
+igTPool<Core::igHandle::Data>::__constructElement(unsigned char*, igMemoryPool*),
+and lr 0x2164b0c is the `bctrl` at 0x2164b08 inside igPool::allocateBucket.
+
+That settles the causal order, which was previously guessed at and guessed
+wrong twice:
+
+    408,510  constructElement zeroes the context global
+    414,746  activate loads that global, gets 0, resolves a null pool
+    428,352  the 0x80001 flag write lands on the same address
+
+The null context is a CONSEQUENCE, 6,236 calls downstream of the real fault.
+Both the "published too late" story and the "0x80001 is the corruption" story
+were downstream symptoms.
+
+WHY IT LANDS THERE
+------------------
+allocateBucket's loop:
+
+    2164ad4: bl 0x214ae78          allocate the bucket's buffer
+    2164ae0: stw r25, 0x10(r26)    bucket->count
+    2164ae8: lwz r29, 0xc(r26)     r29 = bucket->buffer
+    2164af0: lwz r8, 0(r28)        vtable
+    2164af4: lwz r0, 0x84(r8)      vtable+0x84 = __constructElement
+    2164b00: mr r4, r29            element pointer
+    2164b08: bctrl
+
+constructElement writes through the pointer it is handed. For the write to
+land on 0x34D8, bucket->0xc held a value around 0x34D0 -- not an allocation,
+a small number. So the allocation at 0x214ae78 is where this begins.
+
+THIS BUILD (13:06)
+------------------
+    allocbucket: calls=%u n=%u [i]@call buf= pool= bkt= cnt= esz= lr=
+
+allocateBucket runs 17 times in the entire boot, so this records ALL of them
+rather than sampling: the incoming pool and caller at entry, and the bucket,
+the buffer that came back, the element count and element size at the loop
+head. Deliberately not filtered to the failing call -- a buffer of 0x34D0
+means nothing on its own, and means a great deal beside sixteen calls that
+returned real addresses.
+
+Note the failing call is NOT the one with the null pool. poolarg's nullarg
+case returns to 0x2164c08, which is past the default-pool resolution at
+0x2164bcc, so it happens after 414,746 -- after the clearing. The call that
+corrupts memory at 408,510 has a pool and still gets a bad buffer, which is a
+different fault from the one I had been chasing.
+
+BUILD
+-----
+13:06, links clean, 176,166,265 bytes.

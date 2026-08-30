@@ -116,6 +116,10 @@ unsigned int g_arkchemy_bb2_meta = 0, g_arkchemy_bb2_pool = 0;
 unsigned int g_arkchemy_pa2_calls = 0, g_arkchemy_pa2_nullarg = 0;
 unsigned int g_arkchemy_pa2_lr = 0, g_arkchemy_pa2_this = 0;
 unsigned int g_arkchemy_pa2_arg = 0, g_arkchemy_pa2_member = 0;
+unsigned int g_arkchemy_ab_lr = 0, g_arkchemy_ab_calls = 0, g_arkchemy_ab_n = 0;
+unsigned int g_arkchemy_ab_call[16], g_arkchemy_ab_buf[16], g_arkchemy_ab_pool[16];
+unsigned int g_arkchemy_ab_bucket[16], g_arkchemy_ab_count[16], g_arkchemy_ab_esize[16];
+unsigned int g_arkchemy_ab_caller[16];
 unsigned int g_arkchemy_dp_failcount = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
@@ -1928,6 +1932,29 @@ static void arkchemy_boot_show_splash(void) {
  * correctly at call 3,625 and reads back as zero at call 414,746. Printing
  * every recorded transition, rather than the last, shows which one wrote
  * the zero and what was running when it did. */
+/* Every igPool::allocateBucket call, not just the failing one.
+ *
+ * A buffer of 0x34D0 means nothing on its own; it means something next to the
+ * sixteen calls that returned a real address. Printing all of them makes the
+ * odd one out visible instead of asserted. */
+static const char *arkchemy_allocbucket_table(void) {
+    static char buf[1024];
+    unsigned int n = g_arkchemy_ab_n < 16u ? g_arkchemy_ab_n : 16u;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (unsigned int i = 0; i < n && off + 96 < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off,
+                         " [%u]@%u buf=0x%x pool=0x%x bkt=0x%x cnt=%u esz=%u lr=0x%x",
+                         i, g_arkchemy_ab_call[i], g_arkchemy_ab_buf[i],
+                         g_arkchemy_ab_pool[i], g_arkchemy_ab_bucket[i],
+                         g_arkchemy_ab_count[i], g_arkchemy_ab_esize[i],
+                         g_arkchemy_ab_caller[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return buf;
+}
+
 static const char *arkchemy_memwatch_history(void) {
     static char buf[512];
     unsigned int n = g_ppc_memwatch_n;
@@ -3508,6 +3535,7 @@ int main(int argc, char *argv[]) {
                        " -- poolarg: calls=%u nullarg=%u lr=0x%x this=0x%x member=0x%x"
                        " -- order: ctxfail@%u firstwrite@%u val=0x%x lr=0x%x"
                        " -- memwatch: n=%u%s"
+                       " -- allocbucket: calls=%u n=%u%s"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3614,6 +3642,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_dp_failcount, g_ppc_first_store_count,
                        g_ppc_first_store_val, g_ppc_first_store_lr,
                        g_ppc_memwatch_n, arkchemy_memwatch_history(),
+                       g_arkchemy_ab_calls, g_arkchemy_ab_n, arkchemy_allocbucket_table(),
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
