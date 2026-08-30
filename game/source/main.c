@@ -3683,6 +3683,7 @@ int main(int argc, char *argv[]) {
                        " -- singlist: walks=%u head=0x%x n=%u%s"
                        " -- stiruns: driver=%u ctor=%u heads=[0x%x,0x%x,0x%x,0x%x]"
                        " stiguard: total=%u distinct=%u blocked=%u"
+                       " -- imports: n=%u lastlr=0x%x"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3804,6 +3805,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_sti_head[0], g_arkchemy_sti_head[1],
                        g_arkchemy_sti_head[2], g_arkchemy_sti_head[3],
                        g_arkchemy_stig_total, g_arkchemy_stig_distinct, g_arkchemy_stig_blocked,
+                       g_ppc_import_count, g_ppc_last_import_lr,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

@@ -1,0 +1,64 @@
+2026-08-30 — the run-once guard worked, and the boot moved
+===========================================================
+
+    singlist:  walks=1 head=0x6b640 n=5   [terminating, was 37,285]
+    stiruns:   driver=1 ctor=1 heads=[0x0,...]
+    stiguard:  total=227 distinct=114 blocked=113
+    nullbucket: hits=0                     [was 2]
+    allocbucket: calls=3                   [was 18 -- retail's count exactly]
+    dispatchmiss: n=0                      [was 73,308 before the first guard]
+    appendToArkCore: 157                   [was 124]
+
+The ring is gone. The bucket triple now runs ONCE, matching retail call for
+call. Registration passed the frontier that had held for days, and reached
+classes the whole investigation had been circling:
+
+    #147 igFile              -- the class long suspected of never registering
+    #155 igIGBObjectLoader
+    #156 igIGXObjectLoader
+    #157 igIGZObjectLoader   -- the three object loaders igArkCore::init
+                                registers, and the start of file loading
+
+`w6(igArkCore::init) hits=1`. It runs now.
+
+AND IT ANSWERS THE OPEN QUESTION ABOUT THE HARNESS CALL
+-------------------------------------------------------
+distinct=114, blocked=113. Both callers walk the table, but one initializer
+runs only once across the whole boot -- so the two passes are not identical
+and the harness call is load-bearing for at least that one. Removing it, which
+was the tempting fix, would have lost an initializer as well as reordering the
+bootstrap heap. Keep it.
+
+THE NEW FAILURE, WHICH IS A REAL ONE
+------------------------------------
+Hard hang at frame ~3480: calls frozen at 204,131, all twenty tail samples at
+last_pc=0x25834a8 with caller_lr=0x21d9b00 -- __gh_memclr32 called from
+Core::igJobQueue::init.
+
+It is NOT in memclr32. That call is `li r4, 0x606` / `bl 0x25834a8`, so 1,542
+words, 192 iterations of the unrolled loop, and the translation is faithful
+(rlwinm to r4>>3, bdnz decrementing, stwu updating). It cannot spin.
+
+The reason it LOOKS like memclr32 is a gap in the harness. A Cafe OS shim is
+not a recompiled function: it sets no g_ppc_current_pc and increments no
+g_ppc_fn_call_count. So a loop built from shims and inline code advances no
+counter at all, and looks exactly like a hang inside the last recompiled
+function entered. igJobQueue::init calls OSGetCurrentThread twice within a few
+instructions of that memclr, and a job queue that starts workers and waits for
+them is precisely the shape that spins when the wait is a shim.
+
+THIS BUILD (16:15)
+------------------
+    imports: n=%u lastlr=0x%x
+
+ppc_note_import at all 6,865 import call sites. The return address written
+immediately before each call uniquely identifies the site, so the last one
+names the shim. A climbing import count beside a frozen call count is the
+signature of progress no other counter can see; a frozen import count says the
+spin is inline code and the hang is elsewhere again.
+
+Added to conquertron's codegen too, so a regenerated tree carries it.
+
+BUILD
+-----
+16:15, links clean, 176,420,217 bytes.
