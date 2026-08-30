@@ -91,6 +91,11 @@ unsigned int g_arkchemy_nullmeta_hits = 0;
  * the guilty one is captured here instead. first_bad_lr is the return address
  * inside that caller. */
 unsigned int g_arkchemy_relstr_calls = 0;
+/* The default-pool fallback in igPool::activate -- see
+ * tools/probe_default_pool.py. Retail reaches allocateBucket with a real pool
+ * here; we reach it with null. */
+unsigned int g_arkchemy_dp_hits = 0, g_arkchemy_dp_ctx = 0, g_arkchemy_dp_idx = 0;
+unsigned int g_arkchemy_dp_ret = 0, g_arkchemy_dp_nullret = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
 unsigned int g_arkchemy_relstr_last_lr = 0;
@@ -3440,6 +3445,7 @@ int main(int argc, char *argv[]) {
                        " regdrv: lr=0x%x n=%u"
                        " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x"
                        " -- missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x lastthis=0x%x lastvt=0x%x"
+                       " -- defpool: hits=%u ctx=0x%x idx=%d ret=0x%x nullret=%u"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3532,6 +3538,8 @@ int main(int argc, char *argv[]) {
                        g_ppc_dispatch_miss_null, g_ppc_dispatch_miss_real,
                        g_ppc_dispatch_miss_last_addr, g_ppc_dispatch_miss_last_lr,
                        g_ppc_dispatch_miss_last_r3, g_ppc_dispatch_miss_last_vt,
+                       g_arkchemy_dp_hits, g_arkchemy_dp_ctx, (int)g_arkchemy_dp_idx,
+                       g_arkchemy_dp_ret, g_arkchemy_dp_nullret,
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,

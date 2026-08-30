@@ -1,0 +1,63 @@
+2026-08-30 — narrowed to a single call: the default-pool lookup
+================================================================
+
+WHERE RETAIL AND OURS PART COMPANY
+-----------------------------------
+    igPool::activate entry        retail r7 = 0        ours r7 = 0    same
+    igPool::allocateBucket entry  retail r8 = 0x116d9314   ours r8 = 0  DIFFER
+
+Both receive a null pool. Retail arrives at allocateBucket with a real one, we
+arrive with null, so the substitution between them is the whole difference.
+
+activate already contains that substitution, correctly translated:
+
+    2164bb4: cmpwi r31, 0        ; pool argument null?
+    2164bbc: bne   0x2164bd4     ; non-null -> use it
+    2164bcc: bl    0x217b058     ; null -> fetch the default pool
+    2164bd0: mr    r31, r3
+    2164bd8: stw   r31, 0x20(r27); remember it on the igPool
+    2164be4: mr    r8, r31       ; hand it to allocateBucket
+
+0x217b058 is Core::igMemoryContext::getMemoryPoolByIndex(int), and in our
+build it returns null.
+
+WHAT IS ALREADY EXCLUDED
+------------------------
+The memory context is not missing. The harness has reported
+cur_mem_ctx = 0x4400170 on every run for days -- a valid, non-null context. So
+the lookup is failing with a good context, which leaves the index or the table
+it indexes.
+
+Also excluded, all by measurement rather than argument: the null pool at
+activate (retail does the same), the pool object's zero fields (retail's are
+zero too), the vtable (correctly populated, real .text address at the failing
+slot), and the .bss address the object landed on (empty in retail as well).
+
+WHAT THIS BUILD MEASURES (02:35)
+--------------------------------
+    defpool: hits=%u ctx=0x%x idx=%d ret=0x%x nullret=%u
+
+  ret non-null        -> the fallback works and the null arrives another way,
+                         which would contradict the trace and is worth knowing
+  ret null, idx sane  -> the pool table is empty at that index; the question
+                         becomes what fills it
+  idx wild            -> the index itself is wrong, a different bug pointing
+                         back at whatever computes it
+
+THE CHAIN THIS SITS AT THE TOP OF
+---------------------------------
+    getMemoryPoolByIndex returns null
+      activate forwards null to allocateBucket
+        mallocAligned called with a null pool
+          igMemoryPool::mallocAligned with this = NULL
+            a buffer at 0x47430, static data rather than heap
+              an object whose first word is zero
+                vtable[+0x34] reads guest address 0x34 -> 0x80001
+                  24,882 dispatch misses to something that was never a pointer
+
+Each of those was investigated separately across several builds. They are one
+lookup returning null.
+
+BUILD
+-----
+02:35, links clean, 175,940,985 bytes.
