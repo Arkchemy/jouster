@@ -1,0 +1,68 @@
+2026-08-30 — the first fault is ordering, and the corruption is self-inflicted
+===============================================================================
+
+Build 12:29:
+
+    poolarg: calls=17 nullarg=1 lr=0x2164c08 this=0x49f4c90 member=0x0
+    defpool: hits=17 ctx=0x0 idx=2 ret=0x0 nullret=1
+    badbuf:  hits=24961 lr=0x21cfbf8 buf=0xc meta=0x4423b64 pool=0x0
+
+The numbers line up exactly. igPool::allocateBucket is called 17 times and
+only ONE arrives with a null pool. getMemoryPoolByIndex is called 17 times and
+returns null exactly once. Sixteen of seventeen allocations are completely
+fine.
+
+And for that one failure, ctx = 0. The memory CONTEXT was already null.
+
+WHERE THE CONTEXT COMES FROM
+----------------------------
+    2164bb8: lis r26, 0x100d
+    2164bc4: lwz r3, -0x2ce8(r26)    ; r3 = *(0x100CD318)
+    2164bcc: bl  getMemoryPoolByIndex
+
+0x100CD318 - 0x100CBE40 (.data's real base) = 0x14D8 = 5336. So activate reads
+the context from .data+5336 -- which is the same global that later ends up
+holding 0x80001.
+
+THE LOOP
+--------
+    .data+5336 is still 0 when this activate runs
+      the context is null, so getMemoryPoolByIndex returns null
+        the pool is null, so the allocation returns null
+          element addresses computed from a null base give 0x34D4
+            createInstanceInPlace writes a flag at 0x34D4 + 4
+              0x34D8 IS .data+5336
+                the global becomes 0x80001
+                  every later read treats that as an object and calls through it
+                    24,961 bad buffers and ~24,000 silent indirect calls
+
+The corruption is self-inflicted. The bad buffer lands on the exact global
+whose emptiness produced it, and the value written -- 0x1 | 0x80000 -- is what
+made 0x80001 appear everywhere.
+
+SO IT IS NOT A CORRUPTION BUG
+-----------------------------
+The first fault is that a pool is activated BEFORE the memory context is
+published. The harness has reported cur_mem_ctx = 0x4400170 for days, so the
+context does get set -- just not before this one call needs it. In the retail
+game it is set by then; Cemu shows that call receiving a real context and a
+real pool.
+
+That reframes the target completely. Nothing needs to be protected from
+corruption; something needs to run earlier, or this activate needs to run
+later.
+
+WHAT IS ALREADY EXCLUDED
+------------------------
+Every instruction in the chain translates correctly -- verified against the
+retail game one call at a time: the refcount increment, the flag write, the
+size-class mapping, the free-list walk, the vtable dispatch, mallocAligned's
+null return, and activate's own fallback. Sixteen of seventeen pool
+resolutions succeed. This is an ordering problem in a correctly translated
+program.
+
+NEXT
+----
+Find what publishes .data+5336 and why it has not run at this point. That is a
+boot-sequence question rather than a translation one, which makes it a
+different kind of investigation from everything in this chain so far.
