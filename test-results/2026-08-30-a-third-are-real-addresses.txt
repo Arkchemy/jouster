@@ -1,0 +1,66 @@
+2026-08-30 — a third of the misses were never null at all
+==========================================================
+
+Build 01:09, the first to describe the miss population instead of one arrival:
+
+    dispatchmiss: n=75829 addr=0x0 pc=0x214d258 lr=0x2160d88 this=0x0 vt=0x0
+    missplit: null=50555 real=25274 lastaddr=0x80001 lastlr=0x2160dac
+
+25,274 of the 75,829 misses -- a third -- are REAL unresolved addresses, not
+null targets. They were completely invisible while the probe reported only its
+first arrival, which happened to be a null.
+
+WHAT THE NEWEST REAL TARGET IS
+------------------------------
+    lastaddr = 0x80001
+
+Not 4-byte aligned, and outside .text (0x2000020..0x258881C). PowerPC function
+addresses are always 4-byte aligned, so this is not a function pointer that
+failed to resolve -- it is not a function pointer at all.
+
+The call site, lastlr=0x2160dac, is a virtual call in
+igMetaObject::createInstanceInPlace:
+
+    2160d94: lwz  r9, 0(r31)      ; the object's vtable
+    2160d98: lwz  r0, 0x34(r9)    ; vtable[+0x34]
+    2160da8: bctrl
+
+AND THE VTABLE IS FINE
+----------------------
+Checking what init_globals writes around the vtable our sampled object points
+at (0x11fdf0):
+
+    +0x0c  0x021CFDC0     +0x2c  0x0215F5C8
+    +0x14  0x0215F5BC     +0x34  0x021CFA60   <- a real .text address
+    +0x1c  0x021649A0     +0x3c  0x0215F5D0
+    +0x24  0x0215F5C4     +0x44  0x0215F5D4
+
+Function pointers every 8 bytes, and +0x34 -- the exact slot the failing call
+reads -- holds a valid function. So that vtable is correctly populated, and
+the object behind the failing call must be a different one.
+
+WHICH IS THE POINT
+------------------
+this and vt were only ever captured for the FIRST miss. That arrival was a
+one-off with a null object; the object behind the 25,274 real misses has never
+been looked at. Reasoning from the first sample is exactly what sent several
+builds into machinery Cemu later showed was correct.
+
+THIS BUILD (01:18)
+------------------
+    missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x lastthis=0x%x lastvt=0x%x
+
+lastthis and lastvt now describe the object behind the most recent real miss.
+
+  lastvt a plausible vtable -> the slot at that offset is wrong, and the
+                               vtable can be matched against what init_globals
+                               wrote to name the class
+  lastvt small or odd       -> the object's vtable pointer itself is corrupt,
+                               and the object is the problem rather than the
+                               table
+  lastthis = 0              -> another null object, and the real misses share
+                               a cause with the null ones after all
+
+BUILD
+-----
+01:18, links clean, 175,936,889 bytes.

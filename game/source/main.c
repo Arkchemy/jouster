@@ -3439,7 +3439,7 @@ int main(int argc, char *argv[]) {
                        " -- regchain=0x%02x"
                        " regdrv: lr=0x%x n=%u"
                        " -- dispatchmiss: n=%u addr=0x%x pc=0x%x lr=0x%x this=0x%x vt=0x%x"
-                       " -- missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x"
+                       " -- missplit: null=%u real=%u lastaddr=0x%x lastlr=0x%x lastthis=0x%x lastvt=0x%x"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3531,6 +3531,7 @@ int main(int argc, char *argv[]) {
                        g_ppc_dispatch_miss_count, g_ppc_dispatch_miss_addr, g_ppc_dispatch_miss_pc, g_ppc_dispatch_miss_lr, g_ppc_dispatch_miss_r3, g_ppc_dispatch_miss_vt,
                        g_ppc_dispatch_miss_null, g_ppc_dispatch_miss_real,
                        g_ppc_dispatch_miss_last_addr, g_ppc_dispatch_miss_last_lr,
+                       g_ppc_dispatch_miss_last_r3, g_ppc_dispatch_miss_last_vt,
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
