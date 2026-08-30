@@ -1,0 +1,71 @@
+2026-08-30 — registration COMPLETE, and the game opens its own data files
+==========================================================================
+
+420-second run of the 17:03 build.
+
+    appendToArkCore   965        complete
+    registration      finished at frame 9,180
+    bootstrap.bld     OPENED at frame 9,120
+
+965 is not a milestone number picked to sound good -- it is the exact line
+count of docs/registration-order-real.txt, the retail capture taken from Cemu.
+Every class the retail game registers during boot, we now register, in order.
+This morning it was 124.
+
+And immediately after, the engine did the thing this has been aiming at all
+along:
+
+    [FSOpenFile] /vol/content/permanent/bootstrap.arc  (NOT FOUND) handle=0
+    [FSOpenFile] /vol/content/permanent/bootstrap.bld  (found)     handle=1
+
+igArkCore::init's whole purpose is registering the three object loaders and
+starting file loading. It reaches file loading. The .arc miss then .bld hit is
+the engine's own fallback order, not an error.
+
+THE NEW STALL, AND WHY IT IS NOT LIKE THE OLD ONES
+--------------------------------------------------
+From frame 9,180 to 25,140 -- 266 seconds -- execution keeps running at a
+steady 8,260 calls and 146,000 imports per 60 frames, and nothing else
+happens: no further file opens, no further registrations, and
+w3(reallocCommon) last fired at call 1,610,900 against a current 3,808,372. No
+allocations for 2.2 million calls is not an engine loading a file.
+
+The imports are jqWorkerSleep calling OSWaitEventWithTimeout. Something is
+waiting.
+
+THE LIKELY CAUSE, AND A REAL BUG FIXED REGARDLESS
+-------------------------------------------------
+cafeos_coreinit_atomic.h opened with this justification:
+
+    "Atomic" only matters when something else could run between the read and
+    the write -- this runtime has exactly one PpcContext executing
+    sequentially (no threads), so a plain read-modify-write is genuinely
+    atomic here, not just a shortcut standing in for one.
+
+That was true when written. It is not true now: OSResumeThread calls
+pthread_create, so guest threads are real host threads sharing one
+PpcSharedMemory. Every function in that file was an unsynchronised
+read-modify-write on memory two threads touch at once -- and a lock-free job
+queue is precisely what leans on those being atomic.
+
+Fixed by taking one mutex across each operation. Two details worth stating:
+the lock is weak rather than static, because a file-scope static in a header
+of static inline functions gives every translation unit its own lock and would
+serialise against nothing; and a single global lock is coarse, but these are
+rare calls on a handful of words and correctness under real threads is the
+entire point of the function.
+
+Whether that is the stall is not yet established -- it is a real defect found
+while investigating it, and the sort that produces exactly this symptom.
+
+THIS BUILD (17:59)
+------------------
+    threads: created=%u started=%u
+
+Nothing in the harness reported how many threads existed. jqWorkerSleep
+polling 146,000 times a second reads identically whether the queue has idle
+workers or no workers at all, and those need completely different fixes.
+
+BUILD
+-----
+17:59, links clean, 176,420,217 bytes. test-seconds.txt on the card is 420.
