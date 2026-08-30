@@ -1920,6 +1920,30 @@ static void arkchemy_boot_show_splash(void) {
     checkpoint("[boot] splash presented");
 }
 
+/* The polled memory watch's history, rendered for the frame line.
+ *
+ * The store watch reports only the latest write, which answers "who
+ * corrupted this" and not "in what order did this change" -- and the memory
+ * context question is entirely about order: the global is published
+ * correctly at call 3,625 and reads back as zero at call 414,746. Printing
+ * every recorded transition, rather than the last, shows which one wrote
+ * the zero and what was running when it did. */
+static const char *arkchemy_memwatch_history(void) {
+    static char buf[512];
+    unsigned int n = g_ppc_memwatch_n;
+    unsigned int shown = n < ARKCHEMY_MEMWATCH_HISTORY ? n : ARKCHEMY_MEMWATCH_HISTORY;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (unsigned int i = 0; i < shown && off + 64 < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off, " [%u]@%u=0x%x pc=0x%x lr=0x%x",
+                         i, g_ppc_memwatch_call[i], g_ppc_memwatch_val[i],
+                         g_ppc_memwatch_pc[i], g_ppc_memwatch_lr[i]);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    return buf;
+}
+
 static void arkchemy_boot_play_sound(void) {
     const char *path = "sdmc:/switch/Jouster/meta/bootSound.btsnd";
     FILE *f = fopen(path, "rb");
@@ -3483,6 +3507,7 @@ int main(int argc, char *argv[]) {
                        " -- badbuf: hits=%u lr=0x%x buf=0x%x meta=0x%x pool=0x%x"
                        " -- poolarg: calls=%u nullarg=%u lr=0x%x this=0x%x member=0x%x"
                        " -- order: ctxfail@%u firstwrite@%u val=0x%x lr=0x%x"
+                       " -- memwatch: n=%u%s"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3588,6 +3613,7 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_pa2_this, g_arkchemy_pa2_member,
                        g_arkchemy_dp_failcount, g_ppc_first_store_count,
                        g_ppc_first_store_val, g_ppc_first_store_lr,
+                       g_ppc_memwatch_n, arkchemy_memwatch_history(),
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,

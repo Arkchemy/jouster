@@ -1,0 +1,71 @@
+2026-08-30 — the ordering measurement, and what it overturned
+=============================================================
+
+Measured, not inferred:
+
+    order: ctxfail@414746 firstwrite@3625 val=0x4400170 lr=0x21472ac
+
+The memory-context global .data+5336 (real 0x100CD318, synthetic 0x34D8) is
+written CORRECTLY at call 3,625 with 0x4400170 -- the same object and the same
+call at which w1(userInstantiate) fires. It then reads back as ZERO at call
+414,746, 411,121 calls later.
+
+So the standing explanation was wrong. This is not a global that has yet to be
+published when a pool is activated. It is published early and correctly, and
+something clears it in between. "Publish it sooner" would have been a fix for a
+problem that does not exist.
+
+Confirmed the read really is that global: igPool::activate at 0x2164bb8 does
+`lis r26, 0x100d` / `lwz r3, -0x2ce8(r26)`, which conquertron folds to
+`ppc_load_u32(ctx, 13528)` -- 13528 is 0x34D8, the watched address.
+
+WHY THE STORE WATCH CANNOT FINISH THIS
+--------------------------------------
+It reports four writes to 0x34D8, and only the latest of them:
+
+    storewatch_value hits=4 changed=4 last=0x80001 @428351
+    storewatch_writer_pc last=0x214cf24  lr=0x2160dac  r31=0x34d4
+
+The 0x80001 arrives at call 428,351, which is AFTER the null read at 414,746.
+That write is a consequence, not the cause -- it is the badbuf flag store
+(`stw r0, 4(r31)` with r31=0x34d4 landing on 0x34d8), and by then the damage
+has already been read. Writes two and three are unaccounted for, and one of
+them must have written the zero.
+
+Two candidates, which the store watch cannot separate:
+  - one of the four writes wrote 0, and only the last is reported
+  - something wrote it WITHOUT calling ppc_store_u32 at all -- a memset shim,
+    a memcpy, anything writing ctx->shared->mem directly, all of which the
+    store watch is structurally blind to
+
+THIS BUILD (13:00)
+------------------
+A polled watch, which has neither limitation:
+
+    memwatch: n=%u [i]@call=0xVAL pc=0x.. lr=0x..
+
+ppc_poll_watch_mem reads the watched address at every recompiled function
+entry and records each TRANSITION -- the call count, the new value, and the
+function running at the time -- keeping the first eight rather than the latest.
+It sees changes whoever made them, including writers that never route through
+ppc_store_u32, and it answers a question about history with history.
+
+Expect entry [0] to be the publish at 3,625 = 0x4400170. The interesting one is
+[1]: the call count where it becomes 0, and the pc/lr that were executing.
+
+Also corrected here: poolarg shows the null pool arriving as `this->+0x20`
+already zero (`calls=17 nullarg=1 this=0x49f4c90 member=0x0`), which is
+consistent -- activate resolved null because the context was null, then stored
+that null in the member.
+
+WIRING
+------
+conquertron: ppc_poll_watch_mem in ppc_runtime.h; codegen.cpp emits the call at
+every function entry, so a regenerated tree has it without any patching.
+jouster: tools/probe_memwatch_poll.py applies the same line to an existing
+generated tree, idempotently -- a full regeneration to pick up one line would
+have meant re-applying a dozen live probes, which is how probes get lost.
+
+BUILD
+-----
+13:00, links clean, 176,166,265 bytes.
