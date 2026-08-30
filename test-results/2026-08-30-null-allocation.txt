@@ -1,0 +1,61 @@
+2026-08-30 — the root cause: an allocation returns null and nobody checks
+=========================================================================
+
+The full allocateBucket table, all 17 rows:
+
+    [0]@112270  buf=0x4593c40  pool=0x4500274  cnt=6625   esz=24
+    [1]@119204  buf=0x45bae34  pool=0x4500274  cnt=64     esz=12
+    [2]@123131  buf=0x45bb244  pool=0x4500274  cnt=18000  esz=12
+    [3..14]     four more identical cycles, every buffer real
+    [15]@407945 buf=0x0        pool=0x4500274  cnt=6625   esz=24   <-- null
+    [16]        the null-pool call, later still
+
+Six identical cycles of three allocations. Five succeed; the sixth cycle's
+first allocation returns NULL, from a pool that is NOT null and that had
+served the previous fifteen calls.
+
+THE ARITHMETIC, CHECKED
+-----------------------
+6625 elements of 24 bytes from a null base. The element covering 0x34D8 is
+13528/24 = 563, spanning 13512..13535. Call 407,945 + 563 = 408,508, and the
+polled watch recorded the global being zeroed at 408,510. The two agree to
+within the loop's own overhead. This is no longer inference:
+
+    allocation returns 0
+      -> allocateBucket does not check
+      -> __constructElement is called on elements at 0, 24, 48, ...
+      -> element 563 writes over 0x34D8, the memory-context global
+      -> 6,236 calls later igPool::activate loads it, gets 0, null pool
+      -> 24,000+ silent dispatches, and the boot never finishes
+
+On hardware the first of those 6,625 writes faults and the game stops at the
+failed allocation. Here the guest-memory mask makes every one of them legal,
+which is why this took days to find: the mask turned an immediate crash at the
+real bug into silent corruption surfacing somewhere unrelated.
+
+THIS BUILD (13:19), two changes
+-------------------------------
+1. WHY the allocation returned null. reallocCommon's first act is
+   `lbz r9, 8(r3)` / `beq` -- if the byte at pool+8 is zero it returns null
+   before attempting anything. So a null buffer from a live pool has two very
+   different explanations, "the arena is exhausted" and "the pool was switched
+   off", needing different fixes. Each table row now carries that byte and the
+   arena handle at pool+0x18, for all 17 calls, so rows 0-14 are the control.
+
+2. A guard: when bucket->0xc is null, skip the construct loop.
+
+   Not "correct" -- nothing is correct once an allocation has failed -- but
+   far closer to hardware than scribbling through the data section, and it
+   stops one bug becoming three. It is the same principle as the existing
+   null-write drop, and counted the same way, so suppression cannot hide the
+   diagnosis (`nullbucket: hits= lr= cnt=`).
+
+   The point is not to paper over the failure. It is that 6,625 stray writes
+   into the data section corrupt whatever else the boot touches next, and
+   every downstream symptom measured this week -- the null context, the null
+   pool, the 24,000 dispatch misses -- may be that corruption rather than
+   independent bugs. With the loop contained, whatever remains is real.
+
+BUILD
+-----
+13:19, links clean, 176,166,265 bytes.

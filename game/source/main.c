@@ -120,6 +120,8 @@ unsigned int g_arkchemy_ab_lr = 0, g_arkchemy_ab_calls = 0, g_arkchemy_ab_n = 0;
 unsigned int g_arkchemy_ab_call[16], g_arkchemy_ab_buf[16], g_arkchemy_ab_pool[16];
 unsigned int g_arkchemy_ab_bucket[16], g_arkchemy_ab_count[16], g_arkchemy_ab_esize[16];
 unsigned int g_arkchemy_ab_caller[16];
+unsigned int g_arkchemy_ab_flag[16], g_arkchemy_ab_arena[16];
+unsigned int g_arkchemy_nb_hits = 0, g_arkchemy_nb_lr = 0, g_arkchemy_nb_count = 0;
 unsigned int g_arkchemy_dp_failcount = 0;
 unsigned int g_arkchemy_relstr_bad = 0;
 unsigned int g_arkchemy_relstr_first_bad_lr = 0;
@@ -1949,11 +1951,11 @@ static const char *arkchemy_allocbucket_table(void) {
     buf[0] = '\0';
     for (unsigned int i = 0; i < n && off + 96 < sizeof(buf); i++) {
         int w = snprintf(buf + off, sizeof(buf) - off,
-                         " [%u]@%u buf=0x%x pool=0x%x bkt=0x%x cnt=%u esz=%u lr=0x%x",
+                         " [%u]@%u buf=0x%x pool=0x%x flag=%u arena=0x%x cnt=%u esz=%u",
                          i, g_arkchemy_ab_call[i], g_arkchemy_ab_buf[i],
-                         g_arkchemy_ab_pool[i], g_arkchemy_ab_bucket[i],
-                         g_arkchemy_ab_count[i], g_arkchemy_ab_esize[i],
-                         g_arkchemy_ab_caller[i]);
+                         g_arkchemy_ab_pool[i], g_arkchemy_ab_flag[i],
+                         g_arkchemy_ab_arena[i],
+                         g_arkchemy_ab_count[i], g_arkchemy_ab_esize[i]);
         if (w <= 0) break;
         off += (size_t)w;
     }
@@ -3543,6 +3545,7 @@ int main(int argc, char *argv[]) {
                        " -- order: ctxfail@%u firstwrite@%u val=0x%x lr=0x%x"
                        " -- memwatch: n=%u%s"
                        " -- allocbucket: calls=%u n=%u%s"
+                       " -- nullbucket: hits=%u lr=0x%x cnt=%u"
                        " -- frontier: mask=0x%02x"
                        " -- nullfield: hits=%u meta=0x%x n=%u nulls=%u name=\"%s\""
                        " -- nullinst: hits=%u lr=0x%x meta=0x%x pool=0x%x name=\"%s\""
@@ -3650,6 +3653,7 @@ int main(int argc, char *argv[]) {
                        g_ppc_first_store_val, g_ppc_first_store_lr,
                        g_ppc_memwatch_n, arkchemy_memwatch_history(),
                        g_arkchemy_ab_calls, g_arkchemy_ab_n, arkchemy_allocbucket_table(),
+                       g_arkchemy_nb_hits, g_arkchemy_nb_lr, g_arkchemy_nb_count,
                        g_arkchemy_frontier_mask,
                        g_arkchemy_nf_hits, g_arkchemy_nf_meta, g_arkchemy_nf_n,
                        g_arkchemy_nf_nulls, g_arkchemy_nf_name,
