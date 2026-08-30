@@ -1,0 +1,63 @@
+2026-08-30 — the buffers land in static space, not the heap
+============================================================
+
+A CORRECTION FIRST
+------------------
+The previous entry concluded that the 24,882 real dispatch misses were virtual
+calls on "static objects in .bss whose constructors never ran". That is wrong.
+
+Cemu, at the same call site in the retail game:
+
+    r31 (the object) = 0x11793ee4     <- a HEAP address
+    r9  (its vtable) = 0x100689f0     <- real .rodata, slots correct
+
+and the .bss address our pointer maps to:
+
+    0x10112E4C = all zeros            <- empty in retail too
+
+So that location is not a constructed static object in the retail game either.
+It is simply unused .bss. Our pointer is not an unconstructed static -- it is a
+bogus pointer that happens to land in static space.
+
+WHAT IS ACTUALLY DIVERGENT
+--------------------------
+    our buffer   0x00047430   .bss / static data
+    our object   0x00048F3C   .bss / static data
+    retail       0x11793EE4   heap
+
+Our MEM2 ExpHeap starts at 0x04000000, so neither of our addresses came from
+it. The retail equivalents are heap pointers around 0x117xxxxx.
+
+igPool::allocateBucket is returning a pointer into static data instead of heap
+memory. Everything downstream follows from that: the buffer is not real
+memory, the object written there has a zero first word, reading vtable[+0x34]
+reads guest address 0x34, and the target comes out as 0x80001 -- unaligned and
+outside .text, which is why it looked like nonsense rather than a lookup
+failure.
+
+WHY THE EARLIER READING WAS TEMPTING
+------------------------------------
+0x48f3c really is inside .bss, and a .bss object with a null vtable really
+would mean an unconstructed static. The address was consistent with that
+story, and nothing in our own build contradicted it. What settled it was
+asking the retail game what lives at the same place, which took one
+breakpoint.
+
+This is the sixth time in two days that a conclusion drawn from our build
+alone was overturned by a single measurement against the retail game. The
+pattern is consistent enough to be worth stating plainly: an address that
+looks meaningful in our address space is not evidence of anything until the
+same address is checked in the real one.
+
+WHERE THIS POINTS
+-----------------
+allocateBucket, and whatever it uses to obtain memory when handed a null
+igMemoryPool -- which Cemu has already confirmed is the normal case, since the
+retail game passes r7=0 there too. In retail that path yields heap memory. In
+ours it yields a static-data address.
+
+BUILD
+-----
+No new build. The finding is a correction plus a narrowed target, and the
+right probe is inside allocateBucket rather than another counter at the far
+end of the chain.
