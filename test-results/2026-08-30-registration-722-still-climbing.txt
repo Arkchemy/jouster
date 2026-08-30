@@ -1,0 +1,57 @@
+2026-08-30 — the EABI fix: 157 -> 722 classes, and still climbing at cutoff
+============================================================================
+
+    appendToArkCore   722        [was 157, and 124 this morning]
+    calls             1,208,848  and advancing +13,000 to +15,000 per 60 frames
+    imports           +147,000 per 60 frames -- an ordinary rate, not a spin
+    allocbucket       3 calls    retail's count exactly
+    nullbucket        0
+    endark            629 calls, 164 drains
+
+The spin is gone. igJobQueue::init completes and the boot runs on into engine
+startup proper, registering classes that are no longer engine plumbing:
+
+    #600 OpCheckMembership     #675 AnimationBlendInfoList
+    #625 OpCheckFOV            #700 ViewportFogEffectInfo
+    #650 OpMacroInterface
+
+Gameplay and rendering reflection, roughly 570 classes past where this morning
+ended.
+
+NOT A STALL -- THE TEST ENDED FIRST
+-----------------------------------
+Registration at the last four samples: 698, 707, 718, 722. Still moving when
+the run was cut off.
+
+    frames 2400-3600   +169 classes   0.141/frame
+    frames 3600-4800   +163 classes   0.136/frame
+    frames 4800-6000   +231 classes   0.193/frame
+    frames 6000-7140   +151 classes   0.132/frame
+
+A steady rate that does not decay, so nothing is winding down. At 0.132 per
+frame, the remaining 285 classes need about 2,150 frames -- roughly 36 more
+seconds. The 120-second window simply expired mid-boot.
+
+No rebuild needed for that: the harness reads its duration from
+sdmc:/switch/Jouster/test-seconds.txt, which did not exist, so it was using
+the 120-second default. Written as 420, which gives the boot about five
+minutes of headroom past where registration should complete.
+
+The 17:03 NRO is unchanged and correct -- run it again as-is.
+
+WHAT TO WATCH IN THE LONGER RUN
+-------------------------------
+    registration reaching ~1007 and stopping there   the list is complete
+    registration stopping short and STAYING short    a real frontier again,
+                                                     and the class it stops on
+                                                     names the next problem
+    dispatchmiss growing from 1,824                  it appeared only in this
+                                                     new territory; 0 through
+                                                     the whole earlier boot
+    what runs after registration                     file loading is the point
+                                                     of igArkCore::init, and
+                                                     nothing has reached it yet
+
+BUILD
+-----
+17:03, unchanged, 176,420,217 bytes.
