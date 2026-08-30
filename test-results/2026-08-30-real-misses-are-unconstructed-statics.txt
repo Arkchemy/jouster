@@ -1,0 +1,55 @@
+2026-08-30 — the real misses are virtual calls on unconstructed static objects
+===============================================================================
+
+Build 01:18:
+
+    missplit: null=49770 real=24882 lastaddr=0x80001 lastlr=0x2160dac
+              lastthis=0x48f3c lastvt=0x0
+
+DECODED
+-------
+    this   = 0x00048F3C   -> .bss + 183884, so a STATIC object, not heap
+    vtable = 0x00000000   -> its first word is zero
+    target = 0x00080001   -> *(0 + 0x34), garbage read out of low memory
+
+The chain is complete and needs no inference: the object's vtable pointer is
+null, so reading vtable[+0x34] reads guest address 0x34, which holds 0x80001 --
+unaligned, outside .text, not a function pointer at all. That is why the
+target looked like nonsense rather than like an address that failed to
+resolve.
+
+WHAT IT MEANS
+-------------
+This is a different category from everything traced before it. The null-target
+misses come from objects that are themselves null. These 24,882 come from
+objects that EXIST, live in .bss, and have never had their vtable pointer
+written -- static objects whose construction never happened.
+
+That is worth separating clearly, because the two look identical in the miss
+counter and have nothing to do with each other. Only splitting the population
+made the distinction visible; before that, every sample taken happened to be a
+null object.
+
+WHAT IS RULED OUT
+-----------------
+Not a missing data relocation: the vtable that the earlier sampled object
+pointed at is correctly populated, function pointers every 8 bytes, with a
+real .text address at exactly the +0x34 slot that fails here. The tables are
+fine; this object never got a pointer to one.
+
+Not a frontier problem either -- these are statics, not classes waiting to
+register.
+
+WHERE IT POINTS
+---------------
+A .bss object's vtable is written by its constructor. All 114 static
+initialisers do run, and 0x48f3c is not materialised directly anywhere in the
+output -- it is reached through a computed base -- so which object it is
+cannot be answered by reading the code, and the next step is to identify it at
+runtime rather than guess.
+
+BUILD
+-----
+No new build. This run identified a category rather than a fix, and the
+obvious next probe -- naming the object -- needs a different approach than the
+address-matching used so far.
