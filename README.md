@@ -128,9 +128,29 @@ What does work:
 
 What does not:
 
-- **The engine boot.** Registration reaches roughly 99 of about 1,007 classes.
-  Two filesystem classes, `igFile` and `igVirtualStorageDevice`, still never
-  register.
+- **The engine boot.** Registration reaches 124 of about 1,007 classes, in
+  exactly the retail order, and then the boot stops making progress.
+
+  Registration is demand-driven: Alchemy builds a class's metaobject the first
+  time something asks for it, and retail asks 13,567 times during boot against
+  our 105. So 124 is a measure of how far the boot gets, not a fault in
+  registration, and nothing is wrong with the class at the frontier. An earlier
+  version of this file named `igFile` and `igVirtualStorageDevice` as classes
+  that never register; both are dependencies of classes beyond the frontier,
+  and were never skipped.
+
+  The current fault is one unchecked null allocation. `igPool::allocateBucket`
+  asks for 6,625 elements of 24 bytes, the allocation returns null, nothing
+  checks, and the element constructor writes through a null base until element
+  563 lands on the engine's memory-context global. On hardware the first of
+  those writes would fault at the bug; guest-memory masking makes every one of
+  them legal, so it surfaced 6,236 calls later as an unrelated null pool.
+  Containing that loop took execution from 710,046 to 1,337,074 calls and
+  dispatch misses from 73,308 to 53 -- what looked like four problems was one.
+
+  The allocation fails because we run the same three bucket allocations six
+  times. Retail, under a debugger, runs them once, with identical counts and
+  element sizes.
 - **Game rendering.** Graphics calls are honest no-ops pending a Switch
   backend; nothing the game itself draws reaches the screen.
 
@@ -144,7 +164,14 @@ address 0.
 
 - `docs/registration-order-real.txt` -- 965 classes in the retail game's own
   registration order, captured from Cemu by breaking on `appendToArkCore`.
-  Diffing our order against it is what identified the missing classes.
+  Diffing our order against it is how the frontier is located.
+
+Cemu with `--enable-gdbstub` is the reference for anything about what the
+retail game does. Two things make it usable rather than misleading: gdb needs
+`set architecture powerpc:750` **and** `set endian big`, without which
+breakpoints silently never fire; and the stub's port is hardcoded to 1337, so
+if something else owns it gdb reports "Remote connection closed" as though the
+stub were broken. Guest addresses need no rebasing.
 
 ## Licence
 
