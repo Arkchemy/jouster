@@ -1,0 +1,60 @@
+2026-08-30 — the store watch named a nine-instruction getter
+=============================================================
+
+Build 02:42:
+
+    loopwatch(storewatch_value)     hits=4 changed=4 last=0x80001
+    loopwatch(storewatch_writer_pc) hits=4 changed=4 last=0x214cf24
+    cur_mem_ctx(.data+5336) = 0x80001
+
+Four writes of 0x80001 into the memory-context global, which is the finding
+that matters and stands. The writer, however, does not.
+
+0x214cf24 is Core::igMetaField::getDefaultMemory() const, and its entire body
+is nine instructions:
+
+    214cf24: lwz   r12, 0x20(r3)
+    214cf28: srwi  r0, r12, 0x1f
+    214cf2c: xori  r12, r0, 1
+    214cf30: cmpwi r12, 0
+    214cf34: addi  r0, r3, 0x24
+    214cf38: beq   0x214cf40
+    214cf3c: lwz   r0, 0x24(r3)
+    214cf40: mr    r3, r0
+    214cf44: blr
+
+A getter with no store in it at all, let alone one to 13528. It was simply the
+last function entered.
+
+THE SAME MISTAKE, SEVENTH TIME
+------------------------------
+The store watch recorded g_ppc_current_pc, which is set at function ENTRY and
+never restored on return. For a store made by code that is not a recompiled
+function -- a Cafe OS shim, a memory helper calling ppc_store_u32 directly --
+it names whatever ran last rather than the writer.
+
+The same correction was already made to the dispatch-miss probe hours earlier,
+and this instrument was left with the old behaviour. Previous victims of it:
+_main, _savegpr_14_l, igMetaField::construct, a field-array loop, grow, and a
+one-off null object. That is enough repetitions to treat it as a property of
+the instrument rather than a series of accidents.
+
+FIXED IN conquertron
+--------------------
+ppc_store_u32's watch now records ctx->lr as well, under debug-watch id
+0xf0000020 -- 0xf0000007 was already taken by control_bytevalue in the harness
+and would have reported the lr under another watch's name.
+
+    loopwatch(storewatch_lr)   the code that actually performed the store
+
+WHAT STILL STANDS
+-----------------
+    the global is overwritten with 0x80001, four times
+    it held 0x4400170 for days before that
+    0x80001 is the same value that has been appearing as a bogus dispatch
+        target, so that whole class of miss is downstream of this corruption
+    the default-pool lookup is fine: 16 of 17 calls return a real pool
+
+BUILD
+-----
+02:49, links clean, 175,940,985 bytes.
