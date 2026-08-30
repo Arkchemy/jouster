@@ -1,0 +1,66 @@
+2026-08-30 — the singleton list is a ring
+==========================================
+
+    singlist: walks=1 head=0x6b640 n=38154
+      [0]n=0x6b640 f=0x21cc974   [5]n=0x6b640 f=0x21cc974
+      [1]n=0x6b670 f=0x21cf3b8   [6]n=0x6b670 f=0x21cf3b8
+      [2]n=0x6b658 f=0x21ce8b0   [7]n=0x6b658 f=0x21ce8b0
+      [3]n=0x6b688 f=0x21cfdcc   [8]n=0x6b688 f=0x21cfdcc
+      [4]n=0x6b690 f=0x21d0278   [9]n=0x6b690 f=0x21d0278
+
+walks=1 confirms userRegister runs once. It then visits 38,154 nodes, because
+the five it has close into a ring:
+
+    0x6b640 -> 0x6b670 -> 0x6b658 -> 0x6b688 -> 0x6b690 -> 0x6b640
+
+7,630 laps in one traversal. The loop is `while (node) construct(node)`, and a
+circular list never reaches null.
+
+Repeated node ADDRESSES, not distinct nodes with equal payloads -- so this is
+a corrupt link, not a list holding duplicates. Of the two shapes the probe was
+written to separate, it is the first.
+
+WHERE THE RING COMES FROM
+-------------------------
+__sti___26_igCoreMetaSource_cpp prepends two nodes:
+
+    21cb1e4: stwu r11, 0x5598(r7)   [0x6B688] = provider     B.provider
+    21cb1dc: lwz  r0, -0x2d28(r31)  r0 = current head
+    21cb1ec: stw  r0, 4(r12)        [0x6B694] = head         A.next = head
+    21cb20c: stw  r9, 0(r12)        [0x6B690] = provider     A.provider
+    21cb218: stw  r12, 4(r7)        [0x6B68C] = 0x6B690      B.next = A
+    21cb220: stw  r7, -0x2d28(r31)  [13464]  = 0x6B688       head = B
+
+Every fold is correct, including the stwu whose displacement is folded into r7
+(and whose register update is then a no-op, which is why dropping it is safe
+here).
+
+Run once from a zero head this is an ordinary prepend ending in null. Run a
+SECOND time and A.next is set to whatever the head has since become -- a node
+already in the list -- and the list closes. The observed ring is exactly the
+shape a second pass produces, with the nodes from the later initializer
+(0x6b640, 0x6b670, 0x6b658) sitting in front and A pointing back at them.
+
+Nothing writes these next fields statically: no store to 439876, 439900,
+439924, 439948 or 439956 exists anywhere in ppc_init_globals. They are built
+at runtime, so this is about how often the code runs, not about the image.
+
+THIS BUILD (15:56)
+------------------
+    stiruns: driver=%u ctor=%u heads=[...]
+
+The harness calls ppc_run_static_initializers exactly once, so counting the
+driver and the individual initializer separately says where a second pass
+comes from:
+
+    driver=1 ctor=2   the game's own GHS runtime re-walks the same table
+    driver=2 ctor=2   something calls the driver twice
+    driver=1 ctor=1   the ring predates the initializer and both readings
+                      above are wrong
+
+The head each pass reads is recorded too: pass 0 should read 0 and pass 1
+should read a real node, which is the write that closes the ring.
+
+BUILD
+-----
+15:56, links clean, 176,342,393 bytes.
