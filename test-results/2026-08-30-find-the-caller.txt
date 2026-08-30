@@ -1,0 +1,50 @@
+2026-08-30 — the last unknown: who supplies the static-data metaobject
+=======================================================================
+
+Everything below the bad pointer is now accounted for, and none of it is a
+translation fault:
+
+    createInstanceInPlace bumps its own `this` refcount at +0x18
+      the arithmetic puts that object at .data+5312
+        the increment lands on .data+5336, the memory-context pointer
+          the context becomes 0x80001
+            pool lookups run against it and yield nothing usable
+              buffers come back in static data instead of the heap
+                objects get a zero first word
+                  vtable[+0x34] reads guest address 0x34 and returns 0x80001
+                    24,152 dispatch misses to a value that was never a pointer
+
+The increment, the offset and the store are all correct. Only the input is
+wrong, so the single remaining question is which caller supplies it.
+
+THIS BUILD (03:02)
+------------------
+Catches the first call into createInstanceInPlace whose metaobject is not a
+heap pointer. MEM2 starts at 0x04000000 and real metaobjects in this build sit
+around 0x442xxxx, so the test is simply "below the heap".
+
+    badmeta: hits=%u lr=0x%x meta=0x%x mem=0x%x pool=0x%x w=[4 words at meta]
+
+  lr    the call site -- the whole question
+  meta  expected to be 13504 (.data+5312)
+  w     what actually lives there, which separates a mistaken pointer to a
+        real structure from arithmetic that went wrong
+
+lr is deliberate. Every emitted bctrl and bl writes its own return address into
+ctx->lr on the line above the call, so it is exact. g_ppc_current_pc is set at
+function entry and never restored, and across this investigation it named
+_main, _savegpr_14_l, igMetaField::construct, a field-array loop, igPool::grow
+and a nine-instruction getter -- six wrong answers, none of them responsible.
+That is now a rule rather than a habit: probes record lr.
+
+WHAT TO LOOK FOR IN THE NEXT LOG
+--------------------------------
+  meta = 13504         confirms the arithmetic end to end
+  meta = something
+  else below the heap  a second bad-pointer source, worth knowing separately
+  hits = 0             the bad call comes in above 0x04000000 after all, and
+                       the threshold is wrong rather than the theory
+
+BUILD
+-----
+03:02, links clean, 175,945,081 bytes.
