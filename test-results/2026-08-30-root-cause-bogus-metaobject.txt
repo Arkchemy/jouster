@@ -1,0 +1,69 @@
+2026-08-30 — one bogus pointer explains the whole chain
+========================================================
+
+Build 02:49, with the store watch finally recording lr:
+
+    loopwatch(storewatch_lr)        hits=4 last=0x2160dac
+    loopwatch(storewatch_value)     hits=4 last=0x80001
+    loopwatch(storewatch_writer_pc) hits=4 last=0x214cf24   (stale, ignore)
+
+0x2160dac is in Core::igMetaObject::createInstanceInPlace, and what follows it
+is an ordinary atomic refcount increment:
+
+    2160dac: addi   r11, r29, 0x18   ; r11 = object + 0x18
+    2160db0: lwarx  r7, 0, r11
+    2160db8: addi   r9, r7, 1
+    2160dbc: stwcx. r9, 0, r11       ; the store the watch caught
+    2160dc0: bne    0x2160db0
+
+and r29 is the function's own first argument:
+
+    2160cd0: mr r29, r3              ; this, the metaobject
+
+THE ARITHMETIC IS EXACT
+-----------------------
+    corrupted global   13528 = .data + 5336
+    refcount offset    0x18
+    => the object      13504 = 0x34C0 = .data + 5312
+
+So createInstanceInPlace is being handed a metaobject pointer of .data+5312 --
+a static-data address rather than a heap object -- and incrementing that
+"metaobject's" refcount writes straight onto the memory-context pointer that
+happens to sit 24 bytes later.
+
+Nothing here is a translation bug. The refcount increment is correct, the
+offset is correct, and the store lands where the arithmetic says it must. The
+input is wrong.
+
+WHAT THIS EXPLAINS
+------------------
+    bogus metaobject at .data+5312
+      atomic increment at +0x18 corrupts .data+5336
+        the memory-context pointer becomes 0x80001
+          pool lookups run against a corrupt context
+            activate forwards a null pool
+              mallocAligned called with a null pool
+                buffers land in static data instead of the heap
+                  objects get a zero first word
+                    vtable[+0x34] reads guest address 0x34 -> 0x80001
+                      24,152 dispatch misses to a value that was never a pointer
+
+Every one of those was investigated separately over roughly a dozen builds,
+and several produced conclusions that were later retracted -- unconstructed
+statics, a failing default-pool lookup, allocateBucket returning static memory.
+They were all symptoms of this.
+
+It also explains why 0x80001 kept appearing on both sides of the
+investigation: it is the corrupted context value, read back and called through.
+
+WHAT IS NOT YET KNOWN
+---------------------
+Where the .data+5312 metaobject pointer comes from. That is the caller of
+createInstanceInPlace, and it is the next thing to measure rather than reason
+about -- .data+5312 is a plausible-looking address and there will be a
+tempting story about it.
+
+BUILD
+-----
+No new build. This identifies the cause; the next probe belongs at the caller,
+and it should record lr, not g_ppc_current_pc.
