@@ -1,0 +1,51 @@
+2026-08-30 — the allocator returns NULL, not a static address
+==============================================================
+
+Build 12:07:
+
+    mallocret: calls=17 bad=0 lastret=0x0 lastsize=768 lastpool=0x0
+
+Seventeen calls to igMemory::mallocAligned through igPool::allocateBucket, and
+bad=0: it never once returned a static-data address. What it returns when
+handed a null pool is NULL.
+
+So mallocAligned is not the source of the 0x34D4 buffer. The theory that the
+allocator was producing static-data pointers is wrong, and it was reasonable
+only because two such buffers had been observed downstream.
+
+WHAT IS ACTUALLY MEASURED NOW
+-----------------------------
+    the corrupting store        stw r0, 4(r31), an ordinary flag write
+    r31                         0x34D4 = .data+5332, the element buffer
+    the metaobject (r3)         0x4423B64, a healthy heap pointer
+    mallocAligned's returns     NULL when the pool is null, never static data
+    the pool at that call       0x0
+
+So a null pool produces a null allocation, correctly, and something else
+supplies 0x34D4 to createInstanceInPlace afterwards.
+
+THIS BUILD (12:14)
+------------------
+Checks r4 -- the buffer -- at entry to createInstanceInPlace, which is the
+argument the earlier badmeta probe should have tested. That probe checked r3,
+found nothing, and was right to: r3 is the metaobject and is healthy. Testing
+the wrong argument cost a build.
+
+    badbuf: hits=%u lr=0x%x buf=0x%x meta=0x%x pool=0x%x
+
+lr is the call site. buf should come back as 0x34D4 or similar; if it does not,
+the buffer is being modified inside createInstanceInPlace rather than passed
+in, which would be a different problem again.
+
+A NOTE ON THE SHAPE OF THIS
+---------------------------
+This chain has now produced eight readings that were later overturned, and
+every one of them was overturned by measuring rather than by better reasoning.
+The pattern is consistent: an address or offset that fits the arithmetic is
+not evidence about which code produced it. The instruments have been changed
+to record lr and registers by default precisely because inference kept
+choosing the wrong one.
+
+BUILD
+-----
+12:14, links clean, 175,949,177 bytes.
