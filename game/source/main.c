@@ -140,6 +140,7 @@ extern volatile uint32_t g_ppc_threads_created, g_ppc_threads_started;
 extern volatile uint32_t g_arkchemy_fs_read_calls, g_arkchemy_fs_read_bytes;
 extern volatile uint32_t g_arkchemy_fs_async_read_calls, g_arkchemy_fs_async_read_bytes;
 extern volatile uint32_t g_arkchemy_fs_open_calls, g_arkchemy_fs_last_read_handle, g_arkchemy_fs_last_read_pos;
+extern volatile uint32_t g_arkchemy_fs_cb_invoked, g_arkchemy_fs_cb_skipped, g_arkchemy_fs_last_cb, g_arkchemy_fs_last_msgq;
 extern unsigned g_arkchemy_sync_used[3];
 extern unsigned g_arkchemy_sync_exhausted[3];
 extern unsigned g_arkchemy_event_signals;
@@ -3704,6 +3705,7 @@ int main(int argc, char *argv[]) {
                        " -- sync: used=[%u,%u,%u] exhausted=[%u,%u,%u]"
                        " evt: sig=%u wake=%u tmo=%u lastsig=0x%x lastwait=0x%x"
                        " -- fs: open=%u rd=%u/%u ard=%u/%u lasth=%u lastpos=%u"
+                       " cb: ok=%u skip=%u lastcb=0x%x lastmsgq=0x%x"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3835,6 +3837,8 @@ int main(int argc, char *argv[]) {
                        (unsigned)g_arkchemy_fs_read_calls, (unsigned)g_arkchemy_fs_read_bytes,
                        (unsigned)g_arkchemy_fs_async_read_calls, (unsigned)g_arkchemy_fs_async_read_bytes,
                        (unsigned)g_arkchemy_fs_last_read_handle, (unsigned)g_arkchemy_fs_last_read_pos,
+                       (unsigned)g_arkchemy_fs_cb_invoked, (unsigned)g_arkchemy_fs_cb_skipped,
+                       (unsigned)g_arkchemy_fs_last_cb, (unsigned)g_arkchemy_fs_last_msgq,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
