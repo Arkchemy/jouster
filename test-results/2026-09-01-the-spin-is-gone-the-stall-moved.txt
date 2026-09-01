@@ -1,0 +1,118 @@
+2026-09-01 — the spin is gone, and the stall moved into file loading
+=====================================================================
+
+420-second run of the 21:41 build (the OSWaitEventWithTimeout fix), on
+hardware, to completion. 25,200 frames.
+
+THE FIX WORKED, AND THE MARGIN IS NOT SUBTLE
+--------------------------------------------
+                              17:59 build      21:41 build
+    imports, total             54,044,213          665,085
+    imports per 60 frames         149,465            1,884
+    calls per 60 frames             8,147            8,583
+
+Eighty-one times fewer shim calls over the same 420 seconds, with the
+recompiled-call rate unchanged. OSWaitEventWithTimeout actually waits now
+instead of returning instantly on an already-expired deadline.
+
+The dominant import site moved, which is the clearest single measurement:
+
+    17:59   0x21da168   100 of the last 100 samples
+            -> OSWaitEventWithTimeout, in jqWorkerSleep
+
+    21:41   0x21565ec    66 of the last 100
+            0x215676c    14
+            0x2156560    12
+            0x2156774     4
+            -> OSUnlockMutex / OSWaitSemaphore / OSLockMutex /
+               OSTryWaitSemaphore, in Core::igCafeMutex
+
+jqWorkerSleep no longer appears at all. What is left is ordinary mutex and
+semaphore traffic at about 31 calls per frame.
+
+AND IT DID NOT UNBLOCK THE BOOT
+-------------------------------
+Every other counter is identical to the previous run, to the digit:
+
+    appendToArkCore   965        endark   calls=847 idx=963 cnt=965
+    allocbucket       3 calls    nullbucket 0
+    mem               free=1839  reuse=1714      (frozen from frame ~9,300)
+    threads           created=2 started=2
+
+So the fix was necessary and correct, and it was not sufficient. Worth
+saying plainly rather than dressing up: the spin was real, it was costing
+149,000 shim calls a second, and removing it advanced the boot by zero
+classes.
+
+WHERE THE BOOT ACTUALLY IS NOW
+------------------------------
+The sampled PCs are the same set as before -- what changed is that they are
+no longer drowned out. Mapped through the generated C:
+
+    0x2170a34   igFileScheduler::update
+    0x216de10   igVirtualStorageDevice::update
+    0x2176f90   igPhysicalStorageDevice::update
+    0x216e638   igFileContext::update
+    0x2168900   igArchive::startNewTasks
+    0x2156510   igCafeMutex::lock
+    0x21a564c   igScopeLock::~igScopeLock
+    0x21aa110   igScopeLock::igScopeLock
+
+That is the file-loading pump, and it is running. igArkCore::init opened
+bootstrap.bld on 2026-08-30; this is the machinery that is supposed to read
+it. The engine polls its storage devices and asks igArchive to start new
+tasks, every frame, and nothing ever completes.
+
+THE SHAPE OF THE NEXT QUESTION
+------------------------------
+Two worker threads exist and are asleep. The file scheduler keeps calling
+startNewTasks. If those tasks are handed to the job queue and nothing ever
+wakes a worker, that is a deadlock with both halves visible: a producer that
+never stops producing and consumers that never wake.
+
+What has NOT been established, and should not be assumed:
+  * that the tasks are dispatched to the job queue at all
+  * that anything calls OSSignalEvent on the event the workers sleep on
+  * that two is the right number of workers
+
+The measurement that separates these is a counter on OSSignalEvent and
+OSSignalEventAll -- how many times each event address is signalled, against
+how many times a worker wakes.
+
+A LATENT BUG FOUND WHILE READING THAT PATH, NOT YET FIRED
+---------------------------------------------------------
+The OSMutex / OSEvent / OSSemaphore shims each keep a fixed table:
+
+    #define ARKCHEMY_SYNC_TABLE_SIZE 64
+
+arkchemy_event_get returns NULL when the table is full and there is no free
+slot. None of the 18 call sites check for it -- they go straight to
+pthread_mutex_lock(&e->lock). Exhausting any of the three tables is a null
+dereference, not a diagnosable failure.
+
+Nothing has hit it yet, so this is not today's bug. But 64 mutexes is not a
+large number for a game engine, igCafeMutex is clearly used freely, and the
+failure mode is a crash with no message pointing anywhere near the cause.
+Worth a bounds check and a loud error before it is hit for real, and worth
+counting the high-water mark of each table in the next build.
+
+BUILD PROVENANCE
+----------------
+Built here for the first time rather than in a container. devkitA64 gcc
+15.2.0, staged to /home/aaron/devkitpro-staging (no root needed).
+
+Verified, rather than assumed, that the toolchain was not a variable:
+rebuilding with the fix reverted produced a binary differing from the
+on-card 17:59 build by 48 bytes -- two 20-byte build IDs and the embedded
+timestamp. Same compiler, same output. The 22% of bytes that differ between
+the fixed and unfixed builds are address shifts propagating through branch
+offsets and pointer tables, which is what changing the size of a function
+inlined across 219 translation units does. Rebuilding the fixed binary a
+second time reproduced it to 43 bytes, same two causes. The build is
+deterministic.
+
+Also worth recording: game/build/ holds 584 generated_*.o against 218
+current sources -- 366 stale objects from an older regeneration, indices up
+to 0583. They are not linked, since OFILES derives from CFILES rather than
+a glob, so the binary is correct. They are about 600 MB of dead weight and
+a trap for anyone who ever changes the link to glob the build directory.
