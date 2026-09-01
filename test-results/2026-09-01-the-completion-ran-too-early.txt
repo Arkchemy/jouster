@@ -1,0 +1,126 @@
+2026-09-01 — the read was perfect; the completion ran one instruction too early
+================================================================================
+
+420-second run of the 23:08 build, on hardware, to completion.
+
+WHAT THE INSTRUMENTATION SAID
+-----------------------------
+    cb:  ok=1 skip=0 lastcb=0x2155b48 lastmsgq=0x0
+    rdq: sz=131072 cnt=1 res=1 buf=0x4530c40 fsz=198695
+         head=[0x4947411a,0x08000000,0x6a000000,0x02000000] cbwork=15
+
+Every part of the read is correct, and it is worth being explicit about that
+because four separate theories died here at once:
+
+    the callback was never delivered      NO -- ok=1, skip=0
+    the game used the ioMsgQueue shape    NO -- lastmsgq=0x0
+    the read returned the wrong status    NO -- see below
+    the data never landed in guest memory NO -- see the header
+
+head is the first 16 bytes in guest memory after the read:
+
+    49 47 41 1a   "IGA\x1a"   the igArchive magic
+    08 00 00 00   version 8
+    6a 00 00 00   106 files
+    02 00 00 00
+
+A valid igArchive header, correct, in the right place.
+
+The status is right too. The callback is
+igCafeStorageDevice::asyncCallback, and its third instruction pair is:
+
+    2155b88: cmpwi r30, 1        r30 is the status we passed
+    2155b8c: li    r4, 2
+    2155b94: beq   0x2155ba4     status == 1 -> skip the error conversion
+
+The game asked for ONE element of 131072 bytes (sz=131072 cnt=1), the shim
+read it and returned elements_read = 1, and the callback took its success
+path. Not an accident of ours matching: that is what Cafe OS returns.
+
+THE BUG IS ORDERING, AND IT IS ONE INSTRUCTION WIDE
+----------------------------------------------------
+igCafeStorageDevice::read(igFileWorkItem*):
+
+    2155cd0: bl   FSReadFileWithPosAsync      <- our shim ran the callback
+                                                 INSIDE this call
+    2155cd4: stw  r29, 0x1c(r31)              <- the caller writes state
+                                                 AFTER the call returns
+
+Cafe OS delivers an FS completion later, on its own I/O thread, after the
+call has returned. This shim invoked it inline. So the sequence on hardware
+was:
+
+    read() sets up the work item
+      FSReadFileWithPosAsync
+        igCafeStorageDevice::asyncCallback
+          igFileWorkItem::setStatus(...)     item marked complete
+          igMemoryPool::free(...)            async block released
+      returns
+    stw r29, 0x1c(r31)                       caller writes over that state,
+                                             storing a pointer to the block
+                                             that was just freed
+
+The completion finished the work item before the function that created it
+had finished setting it up. The file scheduler then polled a work item whose
+state had been overwritten, forever.
+
+cbwork=15 is the number of guest calls the callback made. It is not
+suspiciously small -- the function body is short, two virtual dispatches and
+three direct calls. It ran fully and correctly. It simply ran too early.
+
+THE FIX
+-------
+Completions are queued instead of invoked inline, and delivered at the next
+import call -- always between guest instructions, and always after the
+function that issued the read has returned.
+
+The pump is called from OSLockMutex. While the file scheduler is idle those
+are the hot path at roughly 31 calls per frame, so a completion is delivered
+within a frame of being queued. cafeos_coreinit_fs.h is included before
+cafeos_coreinit_sync.h in every generated translation unit, which is what
+makes that call legal.
+
+Re-entrancy is guarded, since a completion callback can itself call a shim
+that pumps. The queue is 16 deep and reports overflow rather than dropping
+silently:
+
+    asyncq: q=%u done=%u drop=%u pend=%u
+
+WHAT TO EXPECT IF THIS IS RIGHT
+-------------------------------
+    asyncq q=1 done=1 drop=0        the completion is delivered, once
+    ard climbs past 1               the loader asks for the rest of the file
+    fs read total -> 198,695        bootstrap.bld is finished, not abandoned
+    open= climbs past 2             bootstrap_lang.bld is the documented next
+                                    file in the boot order
+
+If ard stays at 1 with done=1, the completion is being delivered and the
+loader still is not advancing, and the fault is inside the work-item state
+machine rather than in the ordering.
+
+WHAT IS NOT ESTABLISHED
+-----------------------
+That OSLockMutex is the right delivery point rather than merely a workable
+one. Real Cafe OS delivers on a dedicated I/O thread; this delivers on
+whichever guest thread next takes a mutex. That is closer to correct than
+inline delivery and is not the same as correct. If the work item is expected
+to complete on a specific thread, this will need revisiting.
+
+UNCHANGED THIS RUN
+------------------
+    appendToArkCore 965      sync used=[41,3,7] exhausted=[0,0,0]
+    evt sig=2 wake=2 tmo=456
+    fs open=2 rd=0/0 ard=1/131072
+
+BUILD
+-----
+23:08 build produced the measurements above. The fix is built but NOT yet
+run: 176,424,313 bytes,
+sha256 5bf3e5d2ec9391f69bdbe4382426c7aa7e95196457ad11c6b4f7092c2c4f28ca
+
+METHOD NOTE
+-----------
+Instrumenting the whole read at once, rather than the single next question,
+is what made this a one-round answer instead of four. Four theories were
+alive going in; the same frame line killed all four and pointed at a fifth
+nobody had proposed. Breadth costs one build.

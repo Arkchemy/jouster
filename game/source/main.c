@@ -145,6 +145,7 @@ extern volatile uint32_t g_arkchemy_fs_last_size, g_arkchemy_fs_last_count, g_ar
 extern volatile int32_t  g_arkchemy_fs_last_result;
 extern volatile uint32_t g_arkchemy_fs_head[4];
 extern volatile uint64_t g_arkchemy_fs_cb_work;
+extern volatile uint32_t g_arkchemy_fs_queued, g_arkchemy_fs_delivered, g_arkchemy_fs_dropped, g_arkchemy_fs_pending_n;
 extern unsigned g_arkchemy_sync_used[3];
 extern unsigned g_arkchemy_sync_exhausted[3];
 extern unsigned g_arkchemy_event_signals;
@@ -3711,6 +3712,7 @@ int main(int argc, char *argv[]) {
                        " -- fs: open=%u rd=%u/%u ard=%u/%u lasth=%u lastpos=%u"
                        " cb: ok=%u skip=%u lastcb=0x%x lastmsgq=0x%x"
                        " rdq: sz=%u cnt=%u res=%d buf=0x%x fsz=%u head=[0x%08x,0x%08x,0x%08x,0x%08x] cbwork=%llu"
+                       " asyncq: q=%u done=%u drop=%u pend=%u"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3850,6 +3852,8 @@ int main(int argc, char *argv[]) {
                        (unsigned)g_arkchemy_fs_head[0], (unsigned)g_arkchemy_fs_head[1],
                        (unsigned)g_arkchemy_fs_head[2], (unsigned)g_arkchemy_fs_head[3],
                        (unsigned long long)g_arkchemy_fs_cb_work,
+                       (unsigned)g_arkchemy_fs_queued, (unsigned)g_arkchemy_fs_delivered,
+                       (unsigned)g_arkchemy_fs_dropped, (unsigned)g_arkchemy_fs_pending_n,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
