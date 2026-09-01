@@ -1,0 +1,151 @@
+2026-09-01 — the workers exist; the wait is what is broken
+===========================================================
+
+420-second run of the 17:59 build, on hardware, to completion.
+25,200 frames, 3,410,567 bytes of log, 824 samples.
+
+THE QUESTION THE BUILD WAS WRITTEN TO ANSWER
+--------------------------------------------
+    threads: created=2 started=2      from frame 3,420 onward
+
+Idle workers, not absent ones. Of the two possibilities the counter was
+added to separate, it is the first: the job queue has worker threads, they
+were created and started at igJobQueue::init, and they are asleep. Every
+fix aimed at "no workers were ever created" would have been aimed at
+nothing.
+
+Everything the 17:59 build was supposed to preserve, it preserved:
+
+    appendToArkCore   965        complete, unchanged
+    endark            calls=847 idx=963 cnt=965 maxidx=963 drains=220
+    singlist          walks=1 n=5   terminating, no ring
+    stiruns           driver=1 ctor=1
+    stiguard          total=227 distinct=114 blocked=113
+    allocbucket       3 calls -- 6625x24, 64x12, 18000x12, retail's triple
+    nullbucket        hits=0
+
+THE STEADY STATE
+----------------
+From roughly frame 9,000 to the 25,140 cutoff, every 60-frame sample:
+
+    calls     +8,150      imports   +149,000
+    registration 965      endark 847      free 1839  reuse 1714
+
+Not one of those moves again. 16,000 frames of a loop that allocates
+nothing, registers nothing, opens nothing. Roughly 18 shim calls per
+recompiled call.
+
+    imports: n=54,044,213   lastlr=0x21da168   in 363 of 420 samples
+
+WHAT 0x21da168 IS
+-----------------
+Inside ppc_jqWorkerSleep__4CoreFPQ2_4Core8jqWorker. The call immediately
+before it:
+
+    21da158: mr   r6, r26                  low word of the timeout
+    21da15c: mr   r5, r25                  high word
+    21da160: addi r3, r28, -0x7c68         the OSEvent*
+    21da164: bl   0x2589f20                OSWaitEventWithTimeout
+
+r5 and r6 are loaded in the two instructions before the branch. r4 is
+never written.
+
+THE BUG, WHICH IS THE ONE FIXED ON 2026-08-30 IN A FILE THAT SWEEP MISSED
+-------------------------------------------------------------------------
+    cafeos_coreinit_sync.h:261
+    int64_t timeout_ticks = ((int64_t)ctx->r[4] << 32) | (int64_t)ctx->r[5];
+
+PPC EABI puts a 64-bit argument in a pair starting on an ODD register, so
+with the OSEvent* in r3 the OSTime is in r5:r6. This read r4:r5 -- one
+register short, exactly like the four Atomic64 shims fixed at 17:03 that
+same day.
+
+The 17:03 write-up stated "the only other 64-bit argument assembled from
+registers anywhere in the shims is GX2WaitTimeStamp". That was wrong. The
+sweep looked in cafeos_coreinit_atomic.h; this one lives in
+cafeos_coreinit_sync.h and was written in an earlier commit
+(2ad5e67, the pthread-backed OSMutex/OSEvent work). A grep for `<< 32`
+across every shim header finds it in seconds, and finds it is the last
+one -- atomic.h is r5:r6 and r7:r8 correctly, OSSleepTicks and
+OSTicksToCalendarTime take their 64-bit value as the FIRST argument so
+r3:r4 is right for them, and GX2WaitTimeStamp likewise.
+
+AND A SECOND BUG UNDERNEATH IT
+-------------------------------
+    int64_t ns = (timeout_ticks * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+
+ticks * 1e9 overflows int64 above ~9.2e9 ticks, which at 62,156,250 Hz is
+only about 148 seconds -- inside the range real timeouts actually use.
+With the registers as they were:
+
+    read r4:r5   311,539,661,883,310,111 ticks
+                 x1e9 wraps to -1,633,196,948,712,425,984
+                 -> deadline in the PAST
+                 -> pthread_cond_timedwait returns immediately
+                 -> break, woke_signaled = 0, return FALSE
+                 -> caller loops and calls again, forever
+
+That is the spin, and the arithmetic is exact rather than inferred.
+
+Worth stating plainly: the correct registers do not save it. r5:r6 is
+133,145,076,804 ticks (2,142 s), and 133,145,076,804 x 1e9 overflows too,
+wrapping positive to ~4.0e18. Right registers, still a garbage deadline.
+Both bugs had to be fixed for either to matter.
+
+OSTicksToCalendarTime, twenty lines further down the same file, already
+divides first and takes the remainder. The safe pattern was in the file
+the whole time.
+
+FIXED (all three)
+-----------------
+    OSWaitEventWithTimeout  timeout now read from r5:r6
+    OSWaitEventWithTimeout  seconds split from remainder before scaling,
+                            deadline clamped to one year
+    OSSleepTicks            same overflow, same fix (its r3:r4 was right)
+
+Header compiles clean. NOT yet built into an .nro and NOT yet run.
+
+A SEPARATE OBSERVATION, NOT THIS BUG
+------------------------------------
+The recompiler emits lwarx/stwcx. as a plain load and a plain store with
+cr0_eq forced to 1 -- the reservation always "succeeds":
+
+    /* 21da150: stwcx. r0, 0, r31 */
+    ppc_store_u32(ctx, 0u + ctx->r[31], ctx->r[0]);
+    ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = 1;
+
+That is why these retry loops exit rather than spin, so it is not what
+was observed here. But it is an unsynchronised read-modify-write on
+memory that real host threads now share -- the same class of defect as
+the atomics header, one level lower, in generated code rather than in a
+shim. jqWorkerSleep uses it to increment and decrement a waiter count
+that two threads touch. Worth its own measurement before it is assumed
+harmless.
+
+STILL OPEN
+----------
+Two workers is a number, not yet a correct number. Nothing here says the
+queue should have two rather than three, and the retail count has not
+been checked.
+
+NEXT
+----
+Rebuild with the shim fixes and run. If the wait actually waits, the
+worker sleep stops burning the frame and whatever the queue is waiting on
+gets a chance to arrive. If it still spins at the same site, the timeout
+was never the reason it never sleeps.
+
+METHOD NOTE
+-----------
+An audit that says "checked the rest" is worth exactly the search it ran.
+The 17:03 sweep was confident, specific, and scoped to one file, and the
+bug it was looking for was sitting in the next header along. A grep for
+the pattern across all of them takes seconds and would have found it the
+same afternoon.
+
+Second note, on the log itself: MTP over the gvfs FUSE mount still fails
+exactly as the 2026-08-28 note recorded -- stat reports 3,410,567 bytes,
+cp/dd/head all return "Input/output error" and produce a 0-byte file.
+`gio copy` reads the same file completely and repeatably: three copies,
+one sha256. The problem was never MTP, it was the FUSE layer over it. The
+card reader and FTP workarounds are not needed.

@@ -20,3 +20,8 @@ game/include/generated_decls.h
 # Vendored conquertron, fetched by tools/fetch-conquertron.sh when there is no
 # sibling checkout. Pinned by conquertron.lock, which IS tracked.
 deps/
+
+# Raw hardware logs. The convention here is a short .txt write-up per
+# run; the multi-megabyte logs they are written from live outside the
+# repo (../_hardware-logs/).
+test-results/*.log
