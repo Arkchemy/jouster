@@ -132,6 +132,18 @@ unsigned int g_arkchemy_sl_n = 0, g_arkchemy_sl_calls = 0, g_arkchemy_sl_head = 
 unsigned int g_arkchemy_sti_runs = 0, g_arkchemy_stidrv_runs = 0, g_arkchemy_sti_head[4];
 unsigned int g_arkchemy_stig_total = 0, g_arkchemy_stig_distinct = 0, g_arkchemy_stig_blocked = 0;
 extern volatile uint32_t g_ppc_threads_created, g_ppc_threads_started;
+/* Sync-table occupancy and event signalling, from conquertron's
+ * cafeos_coreinit_sync.h. The boot currently sits in the file-loading pump
+ * with two worker threads asleep; these separate "nothing is producing
+ * work" from "work is produced but the wrong event is signalled", which
+ * read identically from any counter that existed before. */
+extern unsigned g_arkchemy_sync_used[3];
+extern unsigned g_arkchemy_sync_exhausted[3];
+extern unsigned g_arkchemy_event_signals;
+extern unsigned g_arkchemy_event_wakes;
+extern unsigned g_arkchemy_event_timeouts;
+extern uint32_t g_arkchemy_event_last_signal;
+extern uint32_t g_arkchemy_event_last_wait;
 unsigned int g_arkchemy_sl_node[16], g_arkchemy_sl_fn[16];
 unsigned int g_arkchemy_df_call[8], g_arkchemy_df_nest[8], g_arkchemy_df_done[8], g_arkchemy_df_cnt[8];
 unsigned int g_arkchemy_ohm_n = 0, g_arkchemy_mhc_n = 0;
@@ -3686,6 +3698,8 @@ int main(int argc, char *argv[]) {
                        " stiguard: total=%u distinct=%u blocked=%u"
                        " -- imports: n=%u lastlr=0x%x"
                        " threads: created=%u started=%u"
+                       " -- sync: used=[%u,%u,%u] exhausted=[%u,%u,%u]"
+                       " evt: sig=%u wake=%u tmo=%u lastsig=0x%x lastwait=0x%x"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3809,6 +3823,10 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_stig_total, g_arkchemy_stig_distinct, g_arkchemy_stig_blocked,
                        g_ppc_import_count, g_ppc_last_import_lr,
                        g_ppc_threads_created, g_ppc_threads_started,
+                       g_arkchemy_sync_used[0], g_arkchemy_sync_used[1], g_arkchemy_sync_used[2],
+                       g_arkchemy_sync_exhausted[0], g_arkchemy_sync_exhausted[1], g_arkchemy_sync_exhausted[2],
+                       g_arkchemy_event_signals, g_arkchemy_event_wakes, g_arkchemy_event_timeouts,
+                       g_arkchemy_event_last_signal, g_arkchemy_event_last_wait,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
