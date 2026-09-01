@@ -137,6 +137,9 @@ extern volatile uint32_t g_ppc_threads_created, g_ppc_threads_started;
  * with two worker threads asleep; these separate "nothing is producing
  * work" from "work is produced but the wrong event is signalled", which
  * read identically from any counter that existed before. */
+extern volatile uint32_t g_arkchemy_fs_read_calls, g_arkchemy_fs_read_bytes;
+extern volatile uint32_t g_arkchemy_fs_async_read_calls, g_arkchemy_fs_async_read_bytes;
+extern volatile uint32_t g_arkchemy_fs_open_calls, g_arkchemy_fs_last_read_handle, g_arkchemy_fs_last_read_pos;
 extern unsigned g_arkchemy_sync_used[3];
 extern unsigned g_arkchemy_sync_exhausted[3];
 extern unsigned g_arkchemy_event_signals;
@@ -3700,6 +3703,7 @@ int main(int argc, char *argv[]) {
                        " threads: created=%u started=%u"
                        " -- sync: used=[%u,%u,%u] exhausted=[%u,%u,%u]"
                        " evt: sig=%u wake=%u tmo=%u lastsig=0x%x lastwait=0x%x"
+                       " -- fs: open=%u rd=%u/%u ard=%u/%u lasth=%u lastpos=%u"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3827,6 +3831,10 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_sync_exhausted[0], g_arkchemy_sync_exhausted[1], g_arkchemy_sync_exhausted[2],
                        g_arkchemy_event_signals, g_arkchemy_event_wakes, g_arkchemy_event_timeouts,
                        g_arkchemy_event_last_signal, g_arkchemy_event_last_wait,
+                       (unsigned)g_arkchemy_fs_open_calls,
+                       (unsigned)g_arkchemy_fs_read_calls, (unsigned)g_arkchemy_fs_read_bytes,
+                       (unsigned)g_arkchemy_fs_async_read_calls, (unsigned)g_arkchemy_fs_async_read_bytes,
+                       (unsigned)g_arkchemy_fs_last_read_handle, (unsigned)g_arkchemy_fs_last_read_pos,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
