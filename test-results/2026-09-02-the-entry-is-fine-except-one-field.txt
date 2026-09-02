@@ -1,0 +1,105 @@
+2026-09-02 — the entry is fully built, except the one field that gates it
+==========================================================================
+
+Run of the 21:03 build, dumping the archive task entry itself.
+
+THE OBJECT
+----------
+    archq: owner=0xf8009f0 list=0xf7d0660 n=1 arr=0xf7d064c
+           e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+
+    e0d (entry at 0xf7d05ec):
+      +0x00  0x0011e7e8        vtable-shaped
+      +0x04  0x03800002        flags/type word
+      +0x08  0x04503700        pointer  (the non-null one the 2nd guard tests)
+      +0x0c  0x0829a610        pointer
+      +0x10  0x08299cc0        pointer
+      +0x14  0x00000001        CURSOR   <- compared
+      +0x18  0x00000000        LIMIT    <- compared, and zero
+      +0x1c  0x00000001
+      +0x20  0x00000001
+      +0x24  0x00000000
+      +0x28  0x00000017   (23)
+      +0x2c  0x0f7d05a8        pointer
+      +0x30..+0x38  0
+      +0x3c  0x00000023   (35)
+
+    f8d (object at 0x4503700):
+      0x11cc40, 0x1c00002, 0x450f788, 0x82992e8, 0x0, 0x0, 0x800, 0x0
+
+THE HYPOTHESIS IS DEAD
+----------------------
+The previous entry proposed that [e+0x18] should hold the 106 files the
+archive header reports, and that a zero there meant the header was read but
+never parsed into this object.
+
+    occurrences of 0x6a anywhere in the entry or in what +8 points to: 0
+
+106 is not in this object. It is not at +0x18, and it is not hiding at some
+other offset either. Whatever +0x18 is, it is not the header's file count,
+and the neat explanation goes in the bin.
+
+Worth saying plainly because the reasoning felt strong: a valid header with
+106 files had just been proven to land correctly in guest memory, a limit of
+zero was sitting one guard away, and the two numbers wanted to be the same
+number. They are not related at all.
+
+WHAT THE DUMP DOES SHOW
+-----------------------
+The entry is NOT a barely-initialised husk. It has a vtable, a flags word,
+three live pointers, a back-pointer at +0x2c, and plausible counts at +0x28
+(23) and +0x3c (35). Something built this properly.
+
+And in the whole populated region up to +0x28, exactly one field is zero
+besides +0x24: the one the guard compares against. Everything the
+constructor touched, it filled. The field that gates the work is the field
+that did not get set.
+
+It arrives that way. At frame 0 the object does not exist; by frame 9,060 it
+is complete with f14=1 f18=0, and not one of those sixteen words changes for
+the remaining 16,000 frames. Nothing degrades it -- it is born like this.
+
+One observation, offered as an observation only: the object at +8 has 0x800
+at its own +0x18. Its vtable word differs from the entry's (0x11cc40 against
+0x11e7e8), so they are probably different types and the offsets probably do
+not mean the same thing. Recorded because it is cheap to record and because
+guessing that they DO match is exactly the kind of inference that just cost
+a round.
+
+WHAT IS ACTUALLY LEFT
+---------------------
+Two questions, and only one of them can be answered from our side:
+
+    what SHOULD [e+0x18] be on a working boot?      -> not answerable here
+    who writes it?                                   -> not answerable here,
+                                                        because on our side
+                                                        nothing writes it
+
+Both are exactly what the Cemu oracle exists for, which is now running
+against the full 6.1 GB content with a breakpoint on igArchive::startNewTasks.
+Reading those two fields on a boot that works settles the first, and a
+watchpoint on +0x18 settles the second.
+
+EIGHT THINGS NOW EXCLUDED
+-------------------------
+    completion never delivered        done=1
+    wrong completion shape            ok=1, lastmsgq=0
+    read failed or returned wrong     res=1, valid IGA header
+    data never reached memory         header verified in guest memory
+    delivery order clobbers state     fixed, confirmed live
+    archive never asked to continue   57,839 calls
+    work never queued                 n=1, linked, pointer non-null
+    entry never properly constructed  fully populated except +0x18
+
+BUILD
+-----
+No new build. The next measurement is the Cemu oracle, not another hardware
+round -- there is nothing further our own binary can tell us about a field
+our own binary never writes.
+
+METHOD NOTE
+-----------
+The dump was added specifically because "+0x18 is the file count" was a guess
+about a field offset, and this project has repeatedly paid for treating those
+as known. It cost one build and killed the guess outright. Cheaper than
+building a fix on top of it.
