@@ -2664,8 +2664,8 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x2169be8u; /* igArchive::loadArchiveTableOfContents */
-    g_ppc_watch[1].pc = 0x2169af8u; /* igArchive::assembleHeader */
+    g_ppc_watch[0].pc = 0x216aa9cu; /* igArchive::addWork -- r3=this r4=workItem */
+    g_ppc_watch[1].pc = 0x2167c14u; /* igArchive::updateTasks */
     g_ppc_watch[2].pc = 0x2169830u; /* igArchive::open -- r3=this */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
@@ -3719,9 +3719,9 @@ int main(int argc, char *argv[]) {
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
                        " w6(startNewTasks) hits=%u"
                        " w7(appendToArkCore) hits=%u"
-                       " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
-                       " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
-                       " -- w2(reportVaList) hits=%u@%llu type=0x%x fmt=0x%x"
+                       " -- w0(igArchive::addWork) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
+                       " -- w1(igArchive::updateTasks) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w2(igArchive::open) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(reallocCommon) hits=%u@%llu pool=0x%x ptr=0x%x size=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"

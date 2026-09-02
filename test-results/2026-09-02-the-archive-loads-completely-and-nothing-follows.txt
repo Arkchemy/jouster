@@ -1,0 +1,90 @@
+2026-09-02 — the archive loads completely, and nothing follows
+===============================================================
+
+Run of the 22:46 build, watching the archive parse path.
+
+THE ARCHIVE PIPELINE IS FINE, END TO END
+-----------------------------------------
+    igArchive::open                 hits=1  this=0x829a610  @call 1,603,812
+    igArchive::assembleHeader       hits=1  this=0x829a610  @call 1,605,444
+    igArchive::loadArchiveTableOfContents
+                                    hits=1  this=0x829a610  @call 1,605,489
+
+Same archive object, all three, once each, in order. And within the same
+60-frame window:
+
+    frame 8,940   open=1                      bootstrap.arc miss
+    frame 9,000   open=2 ard=1 asyncq q=1 done=1 TOCparse=1
+
+Opened, read, completion delivered, header assembled, table of contents
+parsed. The whole chain executes correctly and in the right order.
+
+That archive is the one the stuck entry points at: the entry at 0xf7d05ec
+holds 0x829a610 at +0x0c.
+
+So the hypothesis that the header was never parsed into structure is dead
+too. It was parsed, into the object the entry references.
+
+AND STILL NOTHING HAPPENS
+-------------------------
+    startNewTasks  58,424 calls, declining every one
+    storageRead    1
+    entry          f14=1  f18=0, unchanged for 16,000 frames
+
+WHAT THIS REFRAMES
+------------------
+Three readings of [e+0x14] > [e+0x18] have now been tried and two are dead:
+
+    +0x18 is the header's file count      NO -- 0x6a appears nowhere
+    +0x18 is set by the TOC parse         NO -- the TOC parse ran, once,
+                                          successfully, on this archive
+
+The third fits everything seen so far and is deliberately not being treated
+as established: that +0x14 and +0x18 are "work issued" against "work
+wanted", and a limit of zero means nothing is asking for more. On that
+reading the archive did not fail -- it finished, and whatever should have
+requested the next file never did. The guard is not a symptom of a broken
+archive, it is the archive correctly reporting that its queue is empty.
+
+If that is right, the fault is upstream of everything measured so far, in
+whoever consumes an archive once its table of contents is ready.
+
+THIS BUILD
+----------
+    w0  igArchive::addWork      0x216aa9c   r3=this r4=workItem
+    w1  igArchive::updateTasks  0x2167c14
+    w2  igArchive::open         0x2169830   (kept, it is the control now)
+
+addWork is the function that queues work onto the list startNewTasks walks.
+If it reads 1, exactly one piece of work was ever queued -- the read that
+already completed -- and nothing has asked for anything since. That is the
+measurement that separates "the archive is broken" from "nobody wants
+anything".
+
+AN INSTRUMENTATION DEFECT, FIXED
+--------------------------------
+The 22:46 run reported these three watches under their OLD labels --
+igStringBufAppend, userInstantiate, reportVaList -- because the previous
+build changed the watch addresses without changing the printf strings. The
+numbers were right and the names were wrong, which is worse than having no
+names at all: anyone reading that log without this note would conclude
+igStringBufAppend was called once with this=0x829a610.
+
+Labels now match addresses. Worth stating because this project has already
+lost a round to a confident comment that had drifted from the code beside it.
+
+NINE THINGS EXCLUDED
+--------------------
+    completion never delivered        done=1
+    wrong completion shape            ok=1, lastmsgq=0
+    read failed or returned wrong     res=1, valid IGA header
+    data never reached memory         header verified in guest memory
+    delivery order clobbers state     fixed, confirmed live
+    archive never asked to continue   58,424 calls
+    work never queued                 n=1, linked, pointer non-null
+    entry never properly constructed  populated except +0x18
+    archive never parsed              open/header/TOC all ran, in order
+
+BUILD
+-----
+176,428,409 bytes, sha256 in the commit. Not yet run.
