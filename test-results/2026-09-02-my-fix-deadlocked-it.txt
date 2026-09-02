@@ -1,0 +1,95 @@
+2026-09-02 — the deferred completion was right; my delivery point deadlocked it
+================================================================================
+
+Run of the 23:31 build (deferred FS completions). It regressed the boot from
+"polls forever" to "stopped dead". The diagnosis was sound; the fix's
+delivery point was not.
+
+WHAT HAPPENED
+-------------
+    asyncq: q=1 done=0 drop=0 pend=1
+    cb:     ok=0 skip=0
+    calls   frozen at 1,605,419 from frame 9,540 to the 25,140 cutoff
+    imports +2 per 60 frames        (was 1,884)
+    evt     sig=0 wake=0 tmo=454
+
+The completion was queued and never delivered. Everything stopped.
+
+Previously the file scheduler polled at ~8,580 guest calls per 60 frames.
+Now the guest executes nothing at all for 15,600 frames. The only shim still
+being called is 0x21da168 -- OSWaitEventWithTimeout inside jqWorkerSleep --
+at two calls per 60 frames. That is the two worker threads parked, waking on
+their timeout and going back to sleep.
+
+THE DEADLOCK, WHICH IS MINE
+---------------------------
+The pump was called from OSLockMutex, on the reasoning that while the
+scheduler idles those are the hot path at ~31 calls per frame.
+
+That reasoning only holds while something is awake. The actual sequence:
+
+    igCafeStorageDevice::read issues the read
+      the completion is QUEUED instead of run inline   <- correct
+    read() returns, the caller finishes its own state  <- the ordering fix
+                                                          working as intended
+    the game thread blocks, waiting for the completion
+    the two workers park in jqWorkerSleep
+    nothing takes a mutex ever again
+    the pump never runs
+    the completion is never delivered
+    nothing wakes
+
+A pump on a path that only executes while the system is live cannot deliver
+the thing the system is waiting on in order to become live. Written down it
+is obvious. It was not obvious when the write-up confidently said "a
+completion is delivered within a frame of being queued".
+
+THE ORDERING DIAGNOSIS IS UNAFFECTED
+------------------------------------
+Worth separating, because it would be easy to over-correct. The evidence for
+the ordering inversion came from the 23:08 run and from static reading of
+igCafeStorageDevice::read at 0x2155cd0/0x2155cd4, none of which this run
+touches. Deferring the completion is still right. Only the question of WHERE
+to deliver it was answered wrongly.
+
+THE FIX
+-------
+Pump from the waiting primitives, not the locking one:
+
+    OSWaitEventWithTimeout   <- the path proven still live in this very run
+    OSWaitSemaphore
+    OSTryWaitSemaphore
+    OSLockMutex              <- kept, it delivers sooner when things are awake
+
+The first of those is the important one. This log proves it still executes
+with every other thread stopped, because that is exactly what jqWorkerSleep
+was doing while the game sat dead.
+
+Pumping before a thread parks is also closer to the console than the mutex
+pump was. Cafe OS delivers FS completions on its own I/O thread; delivering
+from a worker about to sleep is nearer that than delivering from whichever
+thread happens to lock something next.
+
+WHAT TO EXPECT
+--------------
+    asyncq q=1 done=1 pend=0     the completion is delivered
+    calls resumes                the game thread unblocks
+    ard climbs past 1            the loader asks for the remaining 67,623
+                                 bytes of bootstrap.bld (198,695 total)
+    open climbs past 2           bootstrap_lang.bld, the documented next file
+
+If done=1 but calls stays frozen, the completion is arriving and something
+else holds the thread, and the deadlock is not the delivery point.
+
+BUILD
+-----
+176,428,409 bytes -- note this one differs in SIZE from the previous build
+as well as hash, unlike the last several.
+sha256 cd4fbd09a826bf5558c7f69bff44663cf387cc1d9ab9d624f690395e5c7e4b35
+
+METHOD NOTE
+-----------
+The previous entry predicted "asyncq q=1 done=1 drop=0". It got q=1 done=0
+pend=1. Writing the prediction down is what made the failure legible in one
+line instead of an afternoon -- and the counter that showed it was the one
+added for overflow, which was never expected to matter.
