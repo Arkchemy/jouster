@@ -1,0 +1,86 @@
+2026-09-03 — the gate is zero because nothing ever sets it
+===========================================================
+
+Run of the 00:19 build, with a store watch on the field that gates the boot.
+
+THE WATCH FIRED
+---------------
+    loopwatch(storewatch_value)     hits=3 @call 1,610,588  last=0x0
+    loopwatch(storewatch_writer_pc) hits=3                  last=0x215f5cc
+    loopwatch(storewatch_lr)        hits=3                  last=0x216b008
+    loopwatch(storewatch_r3)        hits=3                  last=0x4503700
+
+Armed on 0xf7d0604, which is entry+0x18 -- the limit that startNewTasks
+compares against and that has read 0 in every run.
+
+Three writes. The last wrote ZERO. r3 at the time was 0x4503700, which is
+the work item, and the same value the entry carries at +8.
+
+WHO WRITES IT
+-------------
+The link register is 0x216b008, which is inside
+igArchive::addWork, immediately after:
+
+    216b004: bl 0x21c5f60
+    216b008: mr r31, r3
+
+and 0x21c5f60 is:
+
+    igArchiveWorkItem::instantiateFromPool(igMemoryPool*)
+
+So the field is written while the work item is being constructed out of its
+pool, and what it is written with is zero.
+
+WHAT THAT SETTLES
+-----------------
+The field is not corrupted after the fact. It is not cleared by a
+completion. It is not lost to an ordering problem. It is set to zero when
+the work item is built, and then never written again for the rest of the
+run -- three writes, all during addWork, none afterwards.
+
+Every previous theory assumed something DID set it and something else
+undid that. Nothing undoes it. Nothing ever sets it.
+
+    startNewTasks: [e+0x14]=1 > [e+0x18]=0  ->  skip
+    58,000 times, forever
+
+A CAVEAT, BECAUSE THE OBVIOUS READING OF ONE FIELD IS WRONG
+------------------------------------------------------------
+storewatch_writer_pc reports 0x215f5cc, which disassembles to a `blr`
+inside userInstantiate. A branch-to-link-register cannot be a storing
+instruction, so that field is not naming the writer.
+
+The reason is already documented in this log: g_ppc_current_pc is written
+at function ENTRY, so anything derived from it names the last function
+entered rather than the instruction executing. The link register does not
+have that problem, and lr is what points at addWork.
+
+Recorded rather than quietly ignored, because a future reader looking at
+writer_pc=0x215f5cc would conclude userInstantiate writes this field, and
+it does not.
+
+WHAT IS ACTUALLY LEFT
+---------------------
+One question, and it is the same one Cemu exists to answer:
+
+    on a boot that works, what does igArchiveWorkItem::instantiateFromPool
+    leave at +0x18, and if it is also zero, what sets it afterwards?
+
+That cannot be answered from our side, because on our side the answer is
+"nothing, ever". Break on addWork in the retail game under Cemu and read
++0x18 on the constructed item.
+
+ELEVEN THINGS EXCLUDED
+----------------------
+    completion never delivered        done=1
+    wrong completion shape            ok=1, lastmsgq=0
+    read failed or returned wrong     res=1, valid IGA header
+    data never reached memory         header verified in guest memory
+    delivery order clobbers state     fixed, confirmed live
+    archive never asked to continue   58,000 calls
+    work never queued                 n=1, linked, pointer non-null
+    entry never properly constructed  populated except +0x18
+    archive never parsed              open/header/TOC all ran, in order
+    nothing ever produced work        addWork ran three times
+    the field is set then cleared     three writes, all at construction,
+                                      last one zero, none afterwards
