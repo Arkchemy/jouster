@@ -2652,7 +2652,21 @@ static void game_thread_func(void *arg) {
     g_ppc_watch[6].pc = 0x2168900u; /* igArchive::startNewTasks */
     g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
-    g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
+    /* Slots 0-2 repurposed 2026-09-02 (were igStringBuf::append,
+     * userInstantiate, reportVaList -- all from investigations that closed
+     * days ago). The live question is whether the archive's table of contents
+     * is ever parsed. igArchive::loadArchiveTableOfContents is what reads the
+     * TOC with byte-reversing loads and populates the per-entry fields; if it
+     * never runs, the archive was opened and never read into structure.
+     *
+     * Deliberately NOT assuming this is what sets the field startNewTasks
+     * gates on. loadArchiveTableOfContents writes +0x18 on a 0x20-stride TOC
+     * array, while the gated object starts with a vtable word and is an
+     * igArchive instance -- same offset, different object. Whether these are
+     * related is the thing being measured, not the thing being assumed. */
+    g_ppc_watch[0].pc = 0x2169be8u; /* igArchive::loadArchiveTableOfContents */
+    g_ppc_watch[1].pc = 0x2169af8u; /* igArchive::assembleHeader */
+    g_ppc_watch[2].pc = 0x2169830u; /* igArchive::open -- r3=this */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -2716,7 +2730,7 @@ static void game_thread_func(void *arg) {
     // above and the original userInstantiate one. Re-pointing this slot
     // directly at userInstantiate's own real entry to reconfirm with
     // fresh, live, post-regen/post-fix data whether it still never runs.
-    g_ppc_watch[1].pc = 0x217b820u; /* igMemoryContext::userInstantiate entry -- r3=this r4=bool arg */
+    /* slot 1 retired 2026-09-02: reassigned above to igArchive::assembleHeader */
     // Slots 2/3 repurposed 2026-08-20: getDefault/remove had gone stable
     // and uninformative (same 3/0 hit counts every single run since the
     // widened watch went in), while a real, newly-found billion-call
@@ -2764,7 +2778,7 @@ static void game_thread_func(void *arg) {
      *
      * r3 is the ReportType and r4 the format string, so watching the
      * entry captures the message the engine was trying to emit. */
-    g_ppc_watch[2].pc = 0x218a548u; /* igReportHandler::reportVaList -- r3=type r4=fmt */
+    /* slot 2 retired 2026-09-02: reassigned above to igArchive::open */
     /* Repurposed 2026-08-22: mallocString never fired in any hardware run
      * across the whole igMemoryPoolFrame investigation (hits=0 always) --
      * dead slot. Post-LWZU-fix, the game now runs a sustained real loop
