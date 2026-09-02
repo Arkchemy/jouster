@@ -3600,6 +3600,23 @@ int main(int argc, char *argv[]) {
             uint32_t arch_f14 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x14u) : 0u;
             uint32_t arch_f18 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x18u) : 0u;
             uint32_t arch_owner = ppc_load_u32(&g_ctx, 421308u);
+            /* The 20:29 run named the guard: n=1, f8 non-null, but
+               [e+0x14]=1 > [e+0x18]=0, so the single queued entry is skipped
+               forever. Cursor past limit, with the limit at zero.
+
+               The archive header that landed in guest memory says 106 files
+               (0x6a). If +0x18 is meant to hold a file or chunk count, it
+               should be 106 and is 0. Dumping the object rather than guessing
+               which field is which: 0x6a appearing at a known offset names
+               the field that WAS populated, and its absence says the header
+               was never parsed into this object at all. */
+            uint32_t arch_e0d[16], arch_f8d[8];
+            for (int q = 0; q < 16; q++) arch_e0d[q] = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + (uint32_t)(q * 4)) : 0u;
+            for (int q = 0; q < 8; q++)  arch_f8d[q] = arch_f8 ? ppc_load_u32(&g_ctx, arch_f8 + (uint32_t)(q * 4)) : 0u;
+            char arch_e0s[16 * 11 + 1]; arch_e0s[0] = 0;
+            for (int q = 0; q < 16; q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)arch_e0d[q]); strncat(arch_e0s, t, sizeof(arch_e0s) - strlen(arch_e0s) - 1); }
+            char arch_f8s[8 * 11 + 1]; arch_f8s[0] = 0;
+            for (int q = 0; q < 8; q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)arch_f8d[q]); strncat(arch_f8s, t, sizeof(arch_f8s) - strlen(arch_f8s) - 1); }
             uint32_t pool_dump[8];
             for (int pd = 0; pd < 8; pd++) pool_dump[pd] = ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_BASE + 0x184u + (uint32_t)(pd * 4));
             // 2026-08-23: userInstantiate's own real body (generated_0158.c,
@@ -3741,6 +3758,7 @@ int main(int argc, char *argv[]) {
                        " rdq: sz=%u cnt=%u res=%d buf=0x%x fsz=%u head=[0x%08x,0x%08x,0x%08x,0x%08x] cbwork=%llu"
                        " asyncq: q=%u done=%u drop=%u pend=%u"
                        " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
+                       " e0d=[%s] f8d=[%s]"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3886,6 +3904,7 @@ int main(int argc, char *argv[]) {
                        (unsigned)g_arkchemy_fs_dropped, (unsigned)g_arkchemy_fs_pending_n,
                        arch_owner, arch_list, arch_n, arch_arr, arch_e0,
                        arch_f8, arch_f14, arch_f18,
+                       arch_e0s, arch_f8s,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

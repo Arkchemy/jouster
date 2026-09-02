@@ -1,0 +1,92 @@
+2026-09-02 — the queue is not empty: one entry, cursor 1, limit 0
+==================================================================
+
+Run of the 20:29 build, dumping igArchive's task list directly.
+
+THE GUARD THAT FIRES
+--------------------
+    archq: owner=0xf8009f0 list=0xf7d0660 n=1 arr=0xf7d064c
+           e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+
+    w6(startNewTasks) hits=57,839      w5(storageRead) hits=1
+    asyncq q=1 done=1                  ard=1/131072   open=2
+
+Of the three tests that can end startNewTasks' walk without starting
+anything, the answer is unambiguous:
+
+    list is empty                 NO -- n=1
+    entry pointer is null         NO -- f8=0x4503700
+    cursor past its end           YES -- [e+0x14]=1 > [e+0x18]=0
+
+    2168954: cmplw r30, r4     1 vs 0
+    2168958: bgt 0x2168dcc     taken, every time, 57,839 times
+
+So the work IS queued and correctly linked. The single entry is skipped
+because its cursor sits at 1 against a limit of 0.
+
+WHEN IT GOT THAT WAY
+--------------------
+    frame 0      owner=0        list=0          n=0
+    frame 3,420  owner=0xf8009f0 list=0xf7d0660 n=0    the list exists, empty
+    frame 8,940  owner=0xf8009f0 list=0xf7d0660 n=1    the entry appears,
+                                                       already f14=1 f18=0
+
+The entry is never observed in a good state. By the first sample in which it
+exists, the cursor is already past the limit. Nothing degrades it over the
+run -- those numbers do not move again for the remaining 16,200 frames.
+
+THE HYPOTHESIS, AND WHY IT IS ONLY THAT
+---------------------------------------
+The archive header that landed correctly in guest memory reads:
+
+    49 47 41 1a   "IGA\x1a"
+    08 00 00 00   version 8
+    6a 00 00 00   106 files
+
+If [e+0x18] is meant to hold a file or chunk count, 106 is what it should
+hold, and it holds 0. That would make this a header that was read but never
+parsed into the object that needs it.
+
+That is a hypothesis built on a field offset nobody has confirmed. +0x14 and
++0x18 are only known to be a cursor and a limit because of how startNewTasks
+compares them. Calling them "files processed" and "file count" is a guess,
+and this project has a long history of guesses about field meanings costing
+a hardware round.
+
+THIS BUILD
+----------
+Dumps the entry object instead of guessing:
+
+    archq: ... e0d=[16 words of the entry] f8d=[8 words of what +8 points to]
+
+    0x6a appears somewhere in e0d      names the field that DID get the file
+                                       count, and says the header was parsed
+    0x6a appears nowhere               the header was never parsed into this
+                                       object, and the fault is upstream of
+                                       the comparison entirely
+    e0d is mostly zero                 the entry was allocated and barely
+                                       populated -- look at whoever built it
+
+igArchive::addWork is the function that appends to this list, and reads
++0x18 in several places without an obvious store to it. That is suggestive
+and not conclusive, which is what the dump is for.
+
+176,428,409 bytes,
+sha256 aa9747b4e89177d418753b05581d3aeea6331b67a27104c2242235c575fe2e17
+
+STILL EXCLUDED, NOW SEVEN
+-------------------------
+    completion never delivered      done=1
+    wrong completion shape          ok=1, lastmsgq=0
+    read failed or returned wrong   res=1, valid IGA header
+    data never reached memory       header verified in guest memory
+    delivery order clobbers state   fixed, confirmed live
+    archive never asked to continue 57,839 calls
+    work never queued               n=1, entry linked, pointer non-null
+
+METHOD NOTE
+-----------
+Every one of those seven was a plausible cause at some point in the last two
+days, and each was retired by a number rather than an argument. The
+remaining question is now a single unconfirmed field offset, which is a much
+better place to be than "the boot stalls in file loading".
