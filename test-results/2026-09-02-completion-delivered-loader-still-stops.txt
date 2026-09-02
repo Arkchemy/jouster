@@ -1,0 +1,90 @@
+2026-09-02 — the completion is delivered; the loader still does not continue
+=============================================================================
+
+Run of the 18:34 build (completions pumped from the waiting primitives).
+
+THE DEADLOCK IS FIXED, AND IT IS PROVABLE
+------------------------------------------
+    asyncq: q=1 done=1 drop=0 pend=0     delivered at frame 9,060
+    cb:     ok=1 skip=0
+    evt:    sig=2 wake=1 tmo=286
+    calls:  3,921,240, advancing ~8,597 per 60 frames to the cutoff
+
+The previous run had calls frozen at 1,605,419 for 15,600 frames with
+q=1 done=0 pend=1. Moving the pump from OSLockMutex to the wait primitives
+did exactly what it was supposed to: the parked worker delivers the
+completion, the game thread unblocks, execution resumes.
+
+So the ordering fix stands and is now actually deliverable. That is worth
+stating on its own, because the two changes are separable and only one of
+them was ever wrong.
+
+AND IT DID NOT ADVANCE THE LOADER
+---------------------------------
+    fs: open=2 rd=0/0 ard=1/131072 lasth=1 lastpos=0
+    rdq: sz=131072 cnt=1 res=1 fsz=198695
+
+No second read. bootstrap.bld is 198,695 bytes; 131,072 were read at
+offset 0; 67,623 are still owed and never requested. open stays at 2, so
+bootstrap_lang.bld -- the documented next file in the boot order -- is never
+opened.
+
+Execution is back in the same poll it was in before any of this:
+igFileScheduler::update, igVirtualStorageDevice::update,
+igPhysicalStorageDevice::update, igFileContext::update, with igCafeMutex
+traffic at 0x21565ec / 0x215676c / 0x2156774.
+
+This is the branch the previous write-up named in advance: "if ard stays at 1
+with done=1, the completion is being delivered and the loader still is not
+advancing, and the fault is inside the work-item state machine rather than in
+the ordering." That is where it landed.
+
+WHAT THAT RULES OUT
+-------------------
+    the completion is never delivered        NO -- done=1, at a known frame
+    the wrong completion shape is used       NO -- ok=1, lastmsgq=0
+    the read failed or returned wrong        NO -- res=1, valid IGA header
+    the data never reached guest memory      NO -- header verified in memory
+    delivery order clobbers the work item    NO -- fixed, and confirmed live
+
+Five things the boot is NOT blocked on. The remaining candidate is what the
+scheduler does with a work item once it has been completed.
+
+THE NEXT MEASUREMENT
+--------------------
+Three of the eight watch slots have reported a constant 1 for several runs --
+initBootstrap, systemActivate, igArkCore::init -- and are proven by endark
+and by w7 in any case. They are now repurposed onto the file path:
+
+    w4  igFileWorkItem::setStatus     0x216e534   r3=item  r4=status
+    w5  igCafeStorageDevice::read     0x2155bf0   r3=this  r4=workItem
+    w6  igArchive::startNewTasks      0x2168900
+    w7  appendToArkCore               unchanged, control
+
+Those four numbers separate the remaining possibilities:
+
+    read hits=1, startNewTasks climbing    the archive keeps being asked and
+                                           never issues another read -- the
+                                           fault is in startNewTasks' own
+                                           decision, not in the work item
+    read hits>1                            a second read IS issued and fails
+                                           somewhere the FS counters miss
+    setStatus hits=1                       the item is completed once and
+                                           never touched again
+    setStatus hits>1 with changing status  the item IS being cycled, and the
+                                           status it lands on names the state
+                                           the scheduler will not act on
+
+BUILD
+-----
+176,428,409 bytes,
+sha256 19eb3f80a5b9cf422a0427b5... (full hash in the commit)
+Built, not yet run.
+
+METHOD NOTE
+-----------
+Two changes went out together last time: defer the completion, and pump it
+from the mutex path. One was right and one deadlocked the boot, and because
+the expected outcome had been written down beforehand it took a single frame
+line to tell which was which. Predicting the number before the run keeps
+being the cheapest instrument in this project.

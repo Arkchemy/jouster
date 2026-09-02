@@ -2641,9 +2641,15 @@ static void game_thread_func(void *arg) {
      *       two adjacent instructions.
      *   initBootstrap=1 with init=0 -> it is entered and never returns,
      *       and everything downstream follows from that one call. */
-    g_ppc_watch[4].pc = 0x214726cu; /* Core::igArkCore::initBootstrap */
-    g_ppc_watch[5].pc = 0x217bc24u; /* Core::igMemoryContext::systemActivate */
-    g_ppc_watch[6].pc = 0x2147e98u; /* Core::igArkCore::init (expect 0) */
+    /* Slots 4-6 repurposed 2026-09-02. They previously watched initBootstrap,
+     * systemActivate and igArkCore::init, all of which have reported a
+     * constant 1 for several runs and are proven by endark and w7 anyway. The
+     * live question is why the loader never asks for the remaining 67,623
+     * bytes of bootstrap.bld once its first read completes, so the slots now
+     * sit on the file path. Slot 7 stays as the control. */
+    g_ppc_watch[4].pc = 0x216e534u; /* igFileWorkItem::setStatus -- r3=item r4=status */
+    g_ppc_watch[5].pc = 0x2155bf0u; /* igCafeStorageDevice::read -- r3=this r4=workItem */
+    g_ppc_watch[6].pc = 0x2168900u; /* igArchive::startNewTasks */
     g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
     g_ppc_watch[0].pc = 0x21a6b5cu; /* igStringBuf::append(const char*) -- r3=this r4=str */
@@ -3657,9 +3663,9 @@ int main(int argc, char *argv[]) {
             guest_str(g_ppc_watch[0].r4, append_str_str, sizeof(append_str_str));
             checkpoint("main frame %d/%d -- globals_init=%d static_init=%d game_started=%d game_done=%d -- sti_idx=%u last_pc=0x%x caller_lr=0x%x calls=%llu -- r3=0x%x r4=0x%x r5=0x%x r6=0x%x"
                        " -- mem: fail=%llu free=%llu reuse=%llu"
-                       " -- w4(igArkCore::initBootstrap) hits=%u"
-                       " w5(igMemoryContext::systemActivate) hits=%u"
-                       " w6(igArkCore::init) hits=%u"
+                       " -- w4(setStatus) hits=%u item=0x%x status=0x%x"
+                       " w5(storageRead) hits=%u this=0x%x wi=0x%x"
+                       " w6(startNewTasks) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igStringBufAppend) hits=%u@%llu this=0x%x str=0x%x r5=0x%x r6=0x%x"
                        " -- w1(userInstantiate) hits=%u@%llu this=0x%x boolArg=0x%x"
@@ -3729,7 +3735,9 @@ int main(int argc, char *argv[]) {
                        g_ctx.r[3], g_ctx.r[4], g_ctx.r[5], g_ctx.r[6],
                        (unsigned long long)g_arkchemy_mem_alloc_fail_total, (unsigned long long)g_arkchemy_mem_free_total,
                        (unsigned long long)g_arkchemy_mem_reuse_total,
-                       g_ppc_watch[4].hit_count, g_ppc_watch[5].hit_count, g_ppc_watch[6].hit_count, g_ppc_watch[7].hit_count,
+                       g_ppc_watch[4].hit_count, g_ppc_watch[4].r3, g_ppc_watch[4].r4,
+                       g_ppc_watch[5].hit_count, g_ppc_watch[5].r3, g_ppc_watch[5].r4,
+                       g_ppc_watch[6].hit_count, g_ppc_watch[7].hit_count,
                        g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4, g_ppc_watch[0].r5, g_ppc_watch[0].r6,
                        g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3, g_ppc_watch[1].r4,
                        g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count, g_ppc_watch[2].r3, g_ppc_watch[2].r4,
