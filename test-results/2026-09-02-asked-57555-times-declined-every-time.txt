@@ -1,0 +1,84 @@
+2026-09-02 — asked 57,555 times, declined every time
+=====================================================
+
+Run of the 18:59 build, with three watch slots moved onto the file path.
+
+THE FOUR NUMBERS
+----------------
+    w4(setStatus)       hits=8       item=0x4503760  status=0x0
+    w5(storageRead)     hits=1       this=0x452cf28  wi=0x452cfc8
+    w6(startNewTasks)   hits=57,555  still climbing at the cutoff
+    w7(appendToArkCore) hits=965     control, unchanged
+
+igArchive::startNewTasks is called 57,555 times and produced exactly one
+read. The archive is not idle and it is not stuck -- it is being asked
+constantly, and refusing every time.
+
+That is the branch this build was written to distinguish, and it is the
+first of the two:
+
+    read hits=1, startNewTasks climbing    the archive keeps being asked and
+                                           never issues another read -- the
+                                           fault is in startNewTasks' own
+                                           decision
+
+setStatus froze at 8 hits early and never moved again, so the work item is
+not being cycled. The last status written was 0x0 on item 0x4503760, which
+is a different object from the work item handed to read (0x452cfc8) -- the
+watch keeps only the last hit, so that is the last item touched rather than
+ours.
+
+WHERE THE DECISION IS MADE
+--------------------------
+startNewTasks loads a task list from a fixed global and walks it. Three
+tests can end the walk without starting anything:
+
+    2168930: cmpw  r25, r0        i vs [list+8]        list is EMPTY
+    2168954: cmplw r30, r4        [e+0x14] > [e+0x18]  entry skipped
+    2168964: cmpwi r3, 0          [e+8] == 0           entry skipped
+
+From the translated prologue, the addresses are concrete:
+
+    .bss+306380 = guest 421308    an owner pointer, passed to 0x216e230
+    .bss+306384 = guest 421312    the task list
+       [list+8]                   entry count
+       [list+0x14]                entry array
+
+Those three outcomes want opposite fixes. An empty list means nothing is
+ever queued and the fault is upstream, in whoever should be appending work.
+A non-empty list whose entries are all skipped means the work IS queued and
+its cursor or pointer is wrong -- and the two guards then name which.
+
+THIS BUILD
+----------
+Dumps the chain directly rather than inferring it:
+
+    archq: owner= list= n= arr= e0= f8= f14= f18=
+
+    n = 0                    nothing is ever queued; look upstream
+    n > 0, f8 = 0            entry present with a null pointer at +8
+    n > 0, f14 > f18         entry present, cursor past its end -- the read
+                             that completed did not advance what it should
+                             have, or advanced something else
+
+176,428,409 bytes,
+sha256 9b8d6e13a7a5b4df754cfebc3abbb14cc3059570b2b1bb4992c9269017ab9781
+
+WHAT IS NOW EXCLUDED
+--------------------
+Six things, each by measurement rather than argument:
+
+    the completion is never delivered        done=1
+    the wrong completion shape is used       ok=1, lastmsgq=0
+    the read failed or returned wrong        res=1, valid IGA header
+    the data never reached guest memory      header verified in memory
+    delivery order clobbers the work item    fixed, confirmed live
+    the archive is never asked to continue   57,555 calls
+
+METHOD NOTE
+-----------
+The watch slots that produced this had been reporting a constant 1 for
+several runs. Retiring an instrument that has finished answering its
+question is worth as much as adding a new one -- there were eight slots and
+three of them were spending every run confirming something already proven by
+two other counters.

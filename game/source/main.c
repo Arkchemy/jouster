@@ -3579,6 +3579,27 @@ int main(int argc, char *argv[]) {
             // igMemoryPool struct layout to name these by field yet) to
             // see whether this looks like a real, populated pool object
             // or genuinely all-zero/degenerate.
+            /* igArchive::startNewTasks walks a task list held at a fixed
+               global. It was called 57,555 times in the 18:59 run and issued
+               exactly one read, so it is being asked constantly and declining
+               every time. Two guards can make it decline, and they need
+               opposite fixes:
+
+                 2168930  cmpw  i, [list+8]        -> list is EMPTY
+                 2168954  cmplw [e+0x14], [e+0x18] -> entry skipped, cursor
+                                                      past its end
+                 2168964  cmpwi [e+8], 0           -> entry skipped, null
+
+               Addresses from the translated prologue: .bss+306384 holds the
+               list pointer, count at +8, entry array at +0x14. */
+            uint32_t arch_list = ppc_load_u32(&g_ctx, 421312u);
+            uint32_t arch_n = arch_list ? ppc_load_u32(&g_ctx, arch_list + 8u) : 0u;
+            uint32_t arch_arr = arch_list ? ppc_load_u32(&g_ctx, arch_list + 0x14u) : 0u;
+            uint32_t arch_e0 = (arch_arr && arch_n) ? ppc_load_u32(&g_ctx, arch_arr) : 0u;
+            uint32_t arch_f8 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 8u) : 0u;
+            uint32_t arch_f14 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x14u) : 0u;
+            uint32_t arch_f18 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x18u) : 0u;
+            uint32_t arch_owner = ppc_load_u32(&g_ctx, 421308u);
             uint32_t pool_dump[8];
             for (int pd = 0; pd < 8; pd++) pool_dump[pd] = ppc_load_u32(&g_ctx, ARKCHEMY_BOOTSTRAP_HEAP_BASE + 0x184u + (uint32_t)(pd * 4));
             // 2026-08-23: userInstantiate's own real body (generated_0158.c,
@@ -3719,6 +3740,7 @@ int main(int argc, char *argv[]) {
                        " cb: ok=%u skip=%u lastcb=0x%x lastmsgq=0x%x"
                        " rdq: sz=%u cnt=%u res=%d buf=0x%x fsz=%u head=[0x%08x,0x%08x,0x%08x,0x%08x] cbwork=%llu"
                        " asyncq: q=%u done=%u drop=%u pend=%u"
+                       " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3862,6 +3884,8 @@ int main(int argc, char *argv[]) {
                        (unsigned long long)g_arkchemy_fs_cb_work,
                        (unsigned)g_arkchemy_fs_queued, (unsigned)g_arkchemy_fs_delivered,
                        (unsigned)g_arkchemy_fs_dropped, (unsigned)g_arkchemy_fs_pending_n,
+                       arch_owner, arch_list, arch_n, arch_arr, arch_e0,
+                       arch_f8, arch_f14, arch_f18,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
