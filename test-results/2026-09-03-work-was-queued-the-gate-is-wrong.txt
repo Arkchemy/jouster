@@ -1,0 +1,92 @@
+2026-09-03 — work WAS queued; the gate is the fault
+====================================================
+
+Run of the 23:13 build, watching igArchive::addWork.
+
+THE FORK, RESOLVED
+------------------
+    w0 igArchive::addWork      hits=3      @call 1,610,523
+                               this=0x829a610  wi=0x4503700
+    w1 igArchive::updateTasks  hits=57,785  and climbing
+    w2 igArchive::open         hits=1
+    w5 igCafeStorageDevice::read hits=1
+    w6 igArchive::startNewTasks hits=57,785 and climbing
+
+addWork was called THREE times, all before frame 8,940, and never again.
+updateTasks and startNewTasks run 57,785 times each and keep running.
+
+That resolves the fork the previous build was written to settle, and it
+resolves it the opposite way to the reading offered last time:
+
+    "nobody wants anything, look upstream"     WRONG
+    "work is queued and the gate rejects it"   RIGHT
+
+Work was produced. Three items were queued onto the list. The pump that
+consumes them runs constantly. One read was ever issued. The producer side
+is fine and the fault is in the entry state, not upstream of the archive.
+
+Worth stating plainly because the previous write-up leaned the other way and
+would have sent the next few days looking in the wrong place.
+
+THE ENTRY AND THE WORK ITEM ARE THE SAME OBJECT PAIR
+-----------------------------------------------------
+    addWork's work item     wi = 0x4503700
+    the stuck entry's +8    f8 = 0x4503700
+
+They match. So the entry startNewTasks refuses to act on is holding exactly
+the work item addWork queued. Nothing is lost, misrouted or dangling -- the
+queue is correctly linked and simply never acted upon.
+
+    f14 = 1   f18 = 0   unchanged for 16,000 frames
+
+DETERMINISM, WHICH MAKES THE NEXT MEASUREMENT POSSIBLE
+-------------------------------------------------------
+    run 21:03   e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+    run 22:46   e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+    run 23:13   e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+
+Byte-identical addresses across three separate runs. Allocation in this boot
+is deterministic, so a fixed-address memory watch is safe rather than a
+gamble.
+
+A DEAD END, RECORDED SO IT IS NOT REPEATED
+-------------------------------------------
+Grepping the generated C for writes to +0x14 looked productive and returned
+a dozen archive functions including asyncCallback, the completion handler.
+It was wrong. Those matches are `stw rN, 0x14(r1)` -- register spills to the
+STACK in function prologues, r1 being the stack pointer, not writes to any
+object field.
+
+Static search on an offset cannot distinguish a field write from a stack
+slot at the same displacement. That is what the store watch is for.
+
+THIS BUILD
+----------
+    g_ppc_watch_store_addr  = 0xf7d0604    entry +0x18, the limit stuck at 0
+    g_ppc_watch_store_addr2 = 0xf7d0600    entry +0x14, the cursor stuck at 1
+
+Whoever writes those addresses gets recorded with the writing PC, the link
+register and the call count. Three outcomes, all informative:
+
+    +0x18 never written          nothing ever sets the limit; find who should
+    +0x18 written once with 0    something explicitly zeroes it -- the writer
+                                 names the bug
+    +0x14 written once to 1,
+      never decremented          it is an in-flight count that the completion
+                                 should have cleared and did not
+
+176,428,409 bytes,
+sha256 9599152fb29d93090ee21d729a5b2adab23ad733a7bd6df96eaad34351a7cfcb
+
+TEN THINGS EXCLUDED
+-------------------
+    completion never delivered        done=1
+    wrong completion shape            ok=1, lastmsgq=0
+    read failed or returned wrong     res=1, valid IGA header
+    data never reached memory         header verified in guest memory
+    delivery order clobbers state     fixed, confirmed live
+    archive never asked to continue   57,785 calls
+    work never queued                 n=1, linked, pointer non-null
+    entry never properly constructed  populated except +0x18
+    archive never parsed              open/header/TOC all ran, in order
+    nothing ever produced work        addWork ran three times

@@ -2391,7 +2391,25 @@ static void game_thread_func(void *arg) {
      * lookup. It read 0x4400170 for days and now reads 0x80001, the same
      * bogus value that kept surfacing as a dispatch target. Something
      * overwrites it, and this catches the writer. */
-    g_ppc_watch_store_addr = 13528u;
+    /* 2026-09-03: point the store watch at the field that gates the boot.
+     *
+     * startNewTasks skips its one queued entry because [e+0x14]=1 is greater
+     * than [e+0x18]=0, and it does that 57,785 times. addWork ran three times
+     * and stopped, so work WAS queued -- the producer side is fine and the
+     * fault is in this pair of fields.
+     *
+     * The entry is at a deterministic address: e0=0xf7d05ec and its work item
+     * 0x4503700 were byte-identical across the 21:03, 22:46 and 23:13 runs, so
+     * a fixed-address watch is safe here.
+     *
+     *   0xf7d05ec + 0x18 = 0xf7d0604   the limit, stuck at 0
+     *   0xf7d05ec + 0x14 = 0xf7d0600   the cursor, stuck at 1
+     *
+     * Static greps for writers were a dead end -- they matched `stw rN, 0x14(r1)`
+     * stack spills in function prologues, not field writes. A store watch
+     * catches whoever actually writes the memory, which is the only honest way
+     * to answer it. */
+    g_ppc_watch_store_addr = 0xf7d0604u;   /* entry +0x18 -- the limit */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2409,7 +2427,7 @@ static void game_thread_func(void *arg) {
      * 0x00000400 = 1024 buckets -- yet the read returns 0, which is why the
      * pool ends up with no buckets and igStringPool::remove hangs walking
      * buckets[0x811C9DC5]. Catch whoever clears it. */
-    g_ppc_watch_store_addr2 = 13260u;
+    g_ppc_watch_store_addr2 = 0xf7d0600u;  /* entry +0x14 -- the cursor */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
