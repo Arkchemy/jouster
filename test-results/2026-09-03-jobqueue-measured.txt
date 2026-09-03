@@ -1,0 +1,78 @@
+2026-09-03 (run 5) -- the batch is submitted and never executed
+===============================================================
+
+Build Sep  3 2026 13:33:19.
+
+    w2(igJobQueue::start)    hits=1 @204133      this=0x6cc18
+    w1(igJobQueue::addBatch) hits=1 @1610868     r3=0x66da0 r4=0x3fffe714
+    w0(igJobQueue::flush)    hits=0
+    threads: created=2 started=2
+
+MY HYPOTHESIS WAS WRONG
+-----------------------
+I predicted igJobQueue::start would show hits=0 and that the absence of
+worker threads would explain everything. start ran, once, early, at call
+204,133. The prediction is falsified.
+
+What the run does show is sharper than the guess:
+
+  * the decompression batch IS submitted -- addBatch fires exactly once, at
+    call 1,610,868, the same moment as everything else in this stall
+  * flush is NEVER called
+  * so the batch is queued and nothing ever executes it
+
+WHY "NO WORKERS" IS NOT THE ANSWER EITHER
+-----------------------------------------
+igJobQueue::start reads the registry key Core/@jobqueueProcessorMask,
+recovered by reconstructing .rodata from the recompiler's ppc_store_u8
+stream (synthetic 1184412). Neighbouring strings confirm the area:
+'JQ Worker 0x%x (Processor %d)', 'Primary', 'jqFlush',
+'Core/@jobqueueBatchDataHeapSize'.
+
+The key is READ once in the whole binary and never SET. And the game's own
+config, content/alchemy.xml, contains:
+
+    <Core jobqueueBatchDataHeapSize = "256" />
+
+with no jobqueueProcessorMask attribute at all. So retail boots with the
+mask absent too. jqStart then does `ori r7, r7, 1`, which always enables
+bit 0 -- "Primary" -- and the bit-1 test for a second processor fails.
+
+So a stock Wii U runs this queue with Primary only, meaning jobs execute
+inline through jqFlush -> jqTempWorkerLoopOnce. Retail therefore depends on
+flush being called. Ours never calls it.
+
+WHERE FLUSH COMES FROM
+----------------------
+Complete caller list in the binary:
+    Gfx::igIntraMeshSorter::waitForSortJobs   (graphics, not reached yet)
+    Core::igArchive::updateTasks              (2167c90 and 2167f24)
+
+Both archive-side sites sit on paths that require the job to be finished
+already, and the measured state never reaches them. That is the deadlock as
+it stands in our build.
+
+TWO LIVE POSSIBILITIES, AND THEY NEED DIFFERENT FIXES
+-----------------------------------------------------
+1. A Primary JQ worker thread SHOULD exist and be running the queue.
+   threads: created=2 started=2 -- if one of those two is 'JQ Worker 0x%x
+   (Processor 0)' then the worker exists but is parked, most likely waiting
+   on a signal that addBatch raises and our sync shim does not deliver.
+   evt: sig=2 wake=1 tmo=286 is consistent with a thread that only ever
+   wakes on timeout.
+
+2. No worker was created, and retail reaches a flush call site we do not.
+
+NEXT MEASUREMENT
+----------------
+Name the two threads. OSCreateThread receives a name pointer; capturing it
+distinguishes the cases immediately, because a thread called
+"JQ Worker 0x... (Processor 0)" settles possibility 1 on sight. Also worth
+watching Core::jqTempWorkerLoopOnce for hits.
+
+METHOD NOTE
+-----------
+Two predictions in a row have now been falsified by the runs that tested
+them, and both were productive: the empty-list theory and this one. Writing
+the expected result down before the run is what converts a wrong idea into
+a measurement instead of a belief.
