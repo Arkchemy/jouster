@@ -2715,7 +2715,7 @@ static void game_thread_func(void *arg) {
      * sit on the file path. Slot 7 stays as the control. */
     g_ppc_watch[4].pc = 0x216e534u; /* igFileWorkItem::setStatus -- r3=item r4=status */
     g_ppc_watch[5].pc = 0x2155bf0u; /* igCafeStorageDevice::read -- r3=this r4=workItem */
-    g_ppc_watch[6].pc = 0x2168900u; /* igArchive::startNewTasks */
+    g_ppc_watch[6].pc = 0x21db584u; /* Core::jqWorkerThread -- hits=0 means no worker ever ran */
     g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
     /* Slots 0-2 repurposed 2026-09-02 (were igStringBuf::append,
@@ -2901,7 +2901,7 @@ static void game_thread_func(void *arg) {
      *
      * so it should fire exactly once. If hit_count is 0 the list was never
      * built, and updateTasks' empty-list early exit is fully explained. */
-    g_ppc_watch[3].pc = 0x2167c14u; /* igArchive::updateTasks -- r3=this */
+    g_ppc_watch[3].pc = 0x21db624u; /* Core::_jqStart -- does it reach OSCreateThread? */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -3946,12 +3946,12 @@ int main(int argc, char *argv[]) {
                        " -- mem: fail=%llu free=%llu reuse=%llu"
                        " -- w4(setStatus) hits=%u item=0x%x status=0x%x"
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
-                       " w6(startNewTasks) hits=%u"
+                       " w6(jqWorkerThread) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igJobQueue::flush) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
                        " -- w2(igJobQueue::start) hits=%u@%llu this=0x%x r4=0x%x"
-                       " -- w3(igArchive::updateTasks) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
+                       " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- pool0x810128[0..3]=0x%x,0x%x,0x%x,0x%x"
