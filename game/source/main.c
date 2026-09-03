@@ -2730,7 +2730,7 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x21dc36cu; /* igJobQueue::flush -- r3 = flag ptr waited on */
+    g_ppc_watch[0].pc = 0x21da40cu; /* Core::jqPopNextBatch -- r3=worker r4=out batch */
     /* updateTasks answered (57,785 calls, it runs constantly). The open
      * question is what sets the limit the archive gates on. It is NOT
      * metadata: blaster's field-schema extractor shows igArchiveWorkItem
@@ -2754,7 +2754,7 @@ static void game_thread_func(void *arg) {
                                        and [_file+0x24] is the device that
                                        asyncCallback resolves via vtable slot
                                        0x1cc = getPhysicalDevice. */
-    g_ppc_watch[2].pc = 0x21db910u; /* igJobQueue::start -- do workers ever start? */
+    g_ppc_watch[2].pc = 0x21da10cu; /* Core::jqWorkerSleep -- r3=worker */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -3948,9 +3948,9 @@ int main(int argc, char *argv[]) {
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
                        " w6(jqWorkerThread) hits=%u"
                        " w7(appendToArkCore) hits=%u"
-                       " -- w0(igJobQueue::flush) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
+                       " -- w0(jqPopNextBatch) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w2(igJobQueue::start) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w2(jqWorkerSleep) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"

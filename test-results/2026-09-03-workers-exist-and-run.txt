@@ -1,0 +1,89 @@
+2026-09-03 (run 6) -- the workers exist, ran, and never take the batch
+======================================================================
+
+Build Sep  3 2026 13:54:02.
+
+    w3(Core::_jqStart)        hits=1@204169  r3=0x1 caller_lr=0x6cc70
+    w6(Core::jqWorkerThread)  hits=2
+    w1(igJobQueue::addBatch)  hits=1@1610868
+    w0(igJobQueue::flush)     hits=0
+    threads: created=2 started=2
+    evt: sig=2 wake=1 tmo=286     sync: used=[41,3,7] exhausted=[0,0,0]
+
+WHAT IS NOW SETTLED
+-------------------
+_jqStart ran once and jqWorkerThread was entered TWICE. Both threads the
+run creates are job-queue workers -- the game thread is the harness's own
+and is not made through OSCreateThread. So:
+
+  * the job queue starts                        (measured, run 5)
+  * its worker threads are created and started  (measured, this run)
+  * the workers enter their thread function     (measured, this run)
+  * the decompression batch is submitted        (measured, run 5)
+  * nothing ever executes it                    (measured, three runs)
+
+Two earlier guesses are now both dead: "the queue never started" and "no
+worker threads exist". Neither survived contact with a counter.
+
+THE SHAPE OF THE LOOP
+---------------------
+    jqWorkerThread -> OSSetThreadSpecific, sprintf the name,
+                      OSSetThreadName, jqProfGetThread
+                   -> Core::jqWorkerLoop(jqWorker*, bool)   at 0x21da4c0
+
+and jqWorkerLoop's entire call inventory is short:
+
+    Core::jqPopNextBatch(jqWorker*, jqBatch*)   x2
+    Core::jqWorkerSleep(jqWorker*)              x1
+    OSGetTick, OSGetCurrentThread, OSSetThreadSpecific, memcpy
+
+So the loop is: try to pop a batch; if there is none, sleep; repeat.
+
+WHAT THE TIMING SAYS
+--------------------
+evt reports tmo=286 across a 420-second run -- a wake roughly every 1.5
+seconds -- against sig=2 and wake=1. That is the signature of threads
+parked in a timed sleep that keep expiring and finding nothing, rather than
+threads blocked forever. They are alive and looking.
+
+The batch was submitted at call 1,610,868. The workers have been looping
+since call ~204,169. So they were awake and polling for the whole window in
+which the work existed, and still never ran it.
+
+That makes the leading explanation a VISIBILITY problem rather than a
+scheduling one: jqPopNextBatch does not find the batch that addBatch added.
+Either it is looking at a different queue than the one addBatch filled, or
+the write is not visible to the worker threads.
+
+NEXT
+----
+    w0 -> Core::jqPopNextBatch (0x21da40c)  r3=worker r4=out batch
+    w2 -> Core::jqWorkerSleep  (0x21da10c)  r3=worker
+
+Both slots held settled questions (flush hits=0, start hits=1). Reading:
+
+  pop hits high, sleep hits high  -> the workers poll and find nothing; the
+                                     batch is not visible to them, which is
+                                     a queue-identity or memory-visibility
+                                     bug on our side
+  pop hits ~0                     -> the workers are not actually looping;
+                                     they entered and stalled inside
+                                     jqWorkerLoop before the first pop
+  pop hits high, then stops       -> they exited the loop early
+
+sha256 72005a5c508eaa218ebfdb92668e60ed812482bc93994a7deb2a072bfb1dfef6
+make exit 0, zero format warnings.
+
+NOTE ON THE COURIER
+-------------------
+This round's push failed three times. The Switch had re-enumerated on USB
+(device 046 -> 054) while gvfs kept the old instance, so the mount
+directory still existed but every operation hung. The courier's
+"is it mounted" test was `[ -d "$GV" ]`, which a stale mount passes.
+
+Fixed: every gio call now has a timeout, presence is probed with an actual
+list rather than assumed from the directory, and after three failures the
+courier clears the gvfs mtp backend and remounts itself. The self-heal uses
+pkill -x, never -f -- `pkill -f gvfsd-mtp` matched its own command line and
+killed the shell during this debugging, which is the fourth time that
+specific mistake has been made in this project.
