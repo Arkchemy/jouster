@@ -2843,7 +2843,21 @@ static void game_thread_func(void *arg) {
      * signature Core::igMemoryPool::reallocCommon(void* ptr, uint size,
      * bool, bool): r3=pool "this", r4=ptr being reallocated, r5=new
      * size. */
-    g_ppc_watch[3].pc = 0x216f89cu;
+    /* Retargeted 2026-09-03. reallocCommon was a question from a theory
+     * that measurement has since closed; this is the live one.
+     *
+     * igArchive::activate (0x2167934) is what builds the active-archive
+     * list at .bss+306388 (synthetic 421316) -- the list igArchive::
+     * updateTasks walks. activate is self-guarded:
+     *
+     *   2167954  lwzu r3, 0xccc(r30)   r3 = [421308]
+     *   2167958  cmpwi r3, 0
+     *   216795c  beq 0x2167974          only set up when it is still null
+     *   2167970  blr                    otherwise return 1, do nothing
+     *
+     * so it should fire exactly once. If hit_count is 0 the list was never
+     * built, and updateTasks' empty-list early exit is fully explained. */
+    g_ppc_watch[3].pc = 0x2167934u; /* igArchive::activate -- r3=this */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -3673,6 +3687,23 @@ int main(int argc, char *argv[]) {
                has nothing to initialise from and the field the archive gates
                on stays at whatever the pool left -- which is zero, and is
                exactly what the store watch recorded at construction. */
+            /* igArchive::updateTasks walks a SECOND list, at .bss+306388
+               (synthetic 421316) -- not the task list at 421312 that
+               startNewTasks uses. Its first act is:
+
+                 2167c28  lwzu r10, 0xcd4(r31)   list = [421316]
+                 2167c2c  lwz  r10, 8(r10)       count = [list+8]
+                 2167c30  addic. r15, r10, -1
+                 2167c38  blt  0x2168538         count == 0 -> return
+
+               So an empty list makes updateTasks a no-op that still counts a
+               function entry -- which is exactly what 57,785 hits with zero
+               reaping looks like. If this count is 0, that is why the cursor
+               is never released. */
+            uint32_t upd_list = ppc_load_u32(&g_ctx, 421316u);
+            uint32_t upd_n    = upd_list ? ppc_load_u32(&g_ctx, upd_list + 8u) : 0u;
+            uint32_t upd_arr  = upd_list ? ppc_load_u32(&g_ctx, upd_list + 0x14u) : 0u;
+            uint32_t upd_e0   = (upd_arr && upd_n) ? ppc_load_u32(&g_ctx, upd_arr) : 0u;
             uint32_t awi_meta = ppc_load_u32(&g_ctx, 437804u);
             uint32_t awi_m[12];
             for (int q = 0; q < 12; q++) awi_m[q] = awi_meta ? ppc_load_u32(&g_ctx, awi_meta + (uint32_t)(q * 4)) : 0u;
@@ -3786,7 +3817,7 @@ int main(int argc, char *argv[]) {
                        " -- w0(igArchive::addWork) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igArchive::startBlockRead) hits=%u@%llu r3=0x%x r4=0x%x"
                        " -- w2(igArchive::open) hits=%u@%llu this=0x%x r4=0x%x"
-                       " -- w3(reallocCommon) hits=%u@%llu pool=0x%x ptr=0x%x size=0x%x caller_lr=0x%x"
+                       " -- w3(igArchive::activate) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- pool0x810128[0..3]=0x%x,0x%x,0x%x,0x%x"
@@ -3838,6 +3869,7 @@ int main(int argc, char *argv[]) {
                        " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
                        " e0d=[%s] f8d=[%s]"
                        " awimeta=0x%x m=[%s]"
+                       " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -3985,6 +4017,7 @@ int main(int argc, char *argv[]) {
                        arch_f8, arch_f14, arch_f18,
                        arch_e0s, arch_f8s,
                        awi_meta, awi_ms,
+                       upd_list, upd_n, upd_arr, upd_e0,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

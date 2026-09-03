@@ -1,0 +1,165 @@
+2026-09-03 -- Why igArchive::updateTasks never reaps
+====================================================
+
+THE QUESTION
+------------
+startNewTasks runs 57,098 times and starts exactly one task. Calls 2..57,098
+all fail the same guard:
+
+    2168940  lwz    r12, 0x14(r5)     array
+    2168948  lwzx   r29, r10, r12     entry
+    216894c  lwz    r30, 0x14(r29)    cursor  = 1
+    2168950  lwz    r4,  0x18(r29)    limit   = 0
+    2168954  cmplw  r30, r4
+    2168958  bgt    skip              1 > 0 -> skip, forever
+
+Four earlier rounds were spent on "the limit is zero and nothing sets it".
+The limit is correct: 0 means at most one task in flight, a serialised
+reader. The real defect is that nothing ever puts the cursor back to 0.
+updateTasks was the obvious candidate -- it runs 57,785 times and is the
+natural place to reap. This round reads it.
+
+WHAT ZEROES THE CURSOR
+----------------------
+It is in updateTasks, and it is found. Inside the per-entry removal path:
+
+    2167c34  li   r19, 0              r19 = 0 for the whole function
+                                      (r19 is callee-saved, so the bl at
+                                      2167c90 cannot clobber it)
+    ...
+    2167ca0  lwz  r4, 0x18(r11)
+    2167ca4  cmpwi r4, 0
+    2167ca8  lwz  r5, 0x1c(r11)
+    2167cac  beq  2167cb4
+    2167cb0  stw  r19, 0x14(r4)       [obj + 0x14] = 0
+    2167cb4  cmpwi r5, 0
+    2167cb8  beq  2167cc0
+    2167cbc  stw  r19, 0x14(r5)       [obj + 0x14] = 0
+
++0x14 is the exact field startNewTasks reads as the cursor and compares
+against the limit at +0x18. Those two stores ARE the release. They are
+followed by a textbook unordered removeAt: swap element i with element
+n-1, store n-1 back to [list+8], decrementRefCount the removed object,
+null the vacated slot.
+
+    2167cc0  lwz  r7, 8(r12)          count
+    2167cc4  addi r5, r7, -1
+    2167cd8..2167ce8                  swap i <-> n-1
+    2167cfc  stw  r5, 8(r21)          count = n-1
+    2167d04  bl   0x215c464           igObject::decrementRefCount
+    2167d18  stw  r19, 0(r8)          slot = NULL
+
+WHY IT NEVER RUNS
+-----------------
+updateTasks does not walk the list startNewTasks walks. There are three
+adjacent statics, not two:
+
+    421308  (.bss+306380, 0x1013ccc)  startNewTasks' entry; activate's guard
+    421312  (.bss+306384, 0x1013cd0)  the task list ("archq" in the frame dump)
+    421316  (.bss+306388, 0x1013cd4)  the ACTIVE-ARCHIVE list -- updateTasks'
+
+updateTasks' first act is to load that third list and bail if it is empty:
+
+    2167c28  lwzu   r10, 0xcd4(r31)   list = [421316]
+    2167c2c  lwz    r10, 8(r10)       count = [list+8]
+    2167c30  addic. r15, r10, -1
+    2167c38  blt    0x2168538         count == 0 -> return
+
+An empty list makes updateTasks a no-op that still registers a function
+entry. 57,785 entries with zero reaping is exactly what that looks like.
+The loop then runs backwards from r15 = n-1 (r22 = r15*4), and only the
+removal path -- the one holding the two cursor-zeroing stores -- releases
+anything.
+
+Per entry, the keep/remove decision is:
+
+    2167c6c  lwz   r17, 8(r16)        r17 = [entry+8]
+    2167c70  lwz   r18, 8(r17)        r18 = [r17+8]
+    2167c74  cmpwi r18, 0
+    2167c7c  beq   2167c8c            null -> REMOVE
+    2167c80  lbz   r0, 0x23(r18)
+    2167c84  cmpwi r0, 1
+    2167c88  beq   2167d20            state == 1 -> keep/process
+                                      otherwise fall through -> REMOVE
+
+and the keep path is the producer side of the pipeline: it calls
+igFileWorkItem::setStatus (0x216e534, watch slot 4) and then appends to
+the list at 421312 that startNewTasks consumes.
+
+    2167d48  mr   r3, r18
+    2167d4c  bl   0x216e534           igFileWorkItem::setStatus
+    2167d50  lwz  r30, 0xcd0(r30)     the 421312 list
+    2167d54  lwz  r9, 8(r30)          count
+    2167d58  lwz  r7, 0x14(r30)       array
+    2167d60  add  r0, r7, r11         &array[count]  -- append
+
+So the whole loading pipeline is: updateTasks feeds 421312, startNewTasks
+drains it, and updateTasks' removal path hands the cursor back. With the
+421316 list empty, only the middle stage ever ran -- once.
+
+WHO BUILDS THE 421316 LIST
+--------------------------
+__sti__igCoreMetaSource_cpp installs the list object itself at static-init
+(216bc78: stw r31, 0xcd4(r11)). igArchive::activate populates it, and is
+self-guarded so it does its setup exactly once:
+
+    2167954  lwzu  r3, 0xccc(r30)     r3 = [421308]
+    2167958  cmpwi r3, 0
+    216795c  beq   0x2167974          still null -> do the setup
+    216796c  li    r3, 1
+    2167970  blr                      otherwise return 1 and do nothing
+
+Its setup path calls igArchiveWorkItemList::instantiateFromPool (0x21c6020)
+and does the refcount handoff into 421316. igArchive::deactivate tears it
+back down (2167b14).
+
+MEASUREMENT ARMED FOR THE NEXT RUN
+----------------------------------
+Frame dump gains, every frame:
+
+    updq: list=0x%x n=%u arr=0x%x e0=0x%x
+        [421316], its count at +8, its array at +0x14, and element 0.
+
+Watch slot 3 retargeted from igMemoryPool::reallocCommon (a question closed
+by earlier measurement) to igArchive::activate (0x2167934), reporting
+hit_count and r3/r4/r5.
+
+The two outcomes, and what each means:
+
+  n == 0 and w3 hits == 0
+      activate never ran. The list was never built, updateTasks has been a
+      no-op from the first frame, and the next question is who was supposed
+      to call activate and why it did not. Note activate's own guard reads
+      [421308] -- the same global startNewTasks uses -- so if something
+      populated 421308 before activate was reached, activate would take the
+      early return and silently skip the setup. That is a real candidate.
+
+  n == 0 and w3 hits >= 1
+      activate ran but the list is empty or was emptied. Either the
+      instantiate failed, or deactivate ran, or entries were removed and
+      never re-added.
+
+  n > 0
+      the list is not empty, the early exit is not the explanation, and the
+      entries are failing the per-entry keep/remove test at 2167c74/2167c84
+      in some way that never reaches the removal path. In that case dump
+      [entry+8], [[entry+8]+8] and the state byte at +0x23 next.
+
+The frame dump distinguishes all three without another build.
+
+BUILD
+-----
+Jouster.nro
+sha256 8da548627b7baf81481edcefc71ae8c2ff71aefb32c788d0d3ccbba4ff8e9806
+176,428,409 bytes, built 2026-09-03, make exit 0.
+Zero "expects argument of type" warnings -- the printf format/argument
+check that a hardware crash taught me to run on every build.
+Watch slot 3's printf field names were changed from pool=/ptr=/size= to
+r3=/r4=/r5= in the same commit as the .pc change; mismatched labels have
+produced misleading logs twice in this project and both halves are now
+always changed together.
+
+STATUS
+------
+The cursor-release code is located and read. Whether it is unreachable
+because of the empty-list early exit is one hardware run from settled.
