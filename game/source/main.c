@@ -2730,7 +2730,7 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x2172194u; /* igFileContext::addReadOnlyMemoryEntry -- is ram:/alchemy.xml registered? */
+    g_ppc_watch[0].pc = 0x2147e98u; /* igArkCore::init -- did engine init EVER run? */
     /* updateTasks answered (57,785 calls, it runs constantly). The open
      * question is what sets the limit the archive gates on. It is NOT
      * metadata: blaster's field-schema extractor shows igArchiveWorkItem
@@ -3967,7 +3967,7 @@ int main(int argc, char *argv[]) {
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
                        " w6(jqWorkerThread) hits=%u"
                        " w7(appendToArkCore) hits=%u"
-                       " -- w0(addReadOnlyMemoryEntry) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
+                       " -- w0(igArkCore::init) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
                        " -- w2(igRegistry::getValue) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"

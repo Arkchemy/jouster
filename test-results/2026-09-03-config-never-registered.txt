@@ -1,0 +1,82 @@
+2026-09-03 (run 10) -- ram:/alchemy.xml is never registered
+===========================================================
+
+Build Sep  3 2026 19:05:00.
+
+    w0(igFileContext::addReadOnlyMemoryEntry) hits=1@1599789
+        r3=0x4503530  r4=0xb7490  r5=0xb751c  r6=0x12f85c
+    w2(igRegistry::getValue)                  hits=9@692061
+
+WHAT THE ONE REGISTRATION ACTUALLY WAS
+--------------------------------------
+r4 is the path argument. Reconstructing .rodata at 0xb7490 (750,736) gives:
+
+    'ram:/tfbGameIGX.igx'
+
+and r5 = 0xb751c = 750,876 is exactly the address of the embedded document
+that begins `<igx name="tfbGame">`. The argument mapping is confirmed by two
+independent addresses, so this identification is not a guess.
+
+So the single call registers the game's IGX, **not the engine config**.
+ram:/alchemy.xml is never registered.
+
+WHY THAT IS STRUCTURALLY IMPOSSIBLE IF igArkCore::init RAN
+-----------------------------------------------------------
+The config registration sits in straight-line code with no guard at all:
+
+    2147f94  lis  r5, 0x100d
+    2147f9c  lwz  r5, -0x2dc4(r5)     pointer to the embedded config text
+    2147fa0  addi r4, r5, -1
+    2147fa4  lbzu r0, 1(r4)           strlen
+    2147fa8  extsb. r0, r0
+    2147fac  bne  2147fa4
+    2147fb0  lis  r26, 0x1005
+    2147fb4  subf r8, r5, r4          length
+    2147fb8  addi r26, r26, 0x1308    "ram:/alchemy.xml"
+    2147fc0  mr   r4, r26
+    2147fc4  bl   addReadOnlyMemoryEntry
+
+No branch enters or leaves that run. If igArkCore::init had reached it, the
+counter would read 2. It reads 1.
+
+THE INFERENCE THAT WAS WRONG
+----------------------------
+igJobQueue::start sits LATER in that same function, at 2148604, and it fired
+at call 204,133 -- while the only addReadOnlyMemoryEntry came at 1,599,789.
+Those cannot both belong to one linear pass through igArkCore::init.
+
+So igJobQueue::start was not called from igArkCore::init. It was reached
+indirectly. generated_0136.c holds the guest-address-to-function table that
+every bctrl resolves through, and igJobQueue::start, init, setMemoryPool,
+jqAttachQueueToWorkers, jqFlush, jqWorkerLoop and the rest are all in it.
+
+I had treated "igJobQueue::start fired" as evidence that igArkCore::init ran.
+It never was. It only ever proved that something called start.
+
+WHAT THIS PUTS BACK ON THE TABLE
+--------------------------------
+The 2026-08-29 write-up recorded plainly: "igArkCore::init has never run, so
+nothing has yet opened a game file of any kind." I assumed that had been
+superseded by later progress. The addReadOnlyMemoryEntry count says it may
+not have been.
+
+If igArkCore::init has still never run, then today's entire chain -- the
+decompression job, the job queue, the worker sleep loop, the archive task
+cursor -- are all downstream symptoms of an engine that was never
+initialised, not separate defects. The archive can still open a file and
+issue reads because those go through paths that do not require ArkCore init;
+what they cannot do is complete work that needs a configured engine.
+
+NEXT
+----
+    w0 -> igArkCore::init (0x2147e98)
+
+  hits=0    -> the engine has never been initialised. Everything chased
+               today is a symptom, and the real question is why init is
+               never reached. This is the outcome the evidence points to.
+  hits>=1   -> it does run, and the config registration is being skipped for
+               a reason not visible in the straight-line listing, which
+               would mean the recompiled control flow diverges from the
+               original -- a much more serious kind of bug.
+
+sha256 d910293b1c4948290b6a435241466826538efec10621b544b3742033fcd71b40
