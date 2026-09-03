@@ -1,0 +1,78 @@
+2026-09-03 — I crashed it with a printf argument mismatch, and gcc had said so
+===============================================================================
+
+The 01:15 build faulted on hardware at main-thread frame 3420, after 57
+samples. The previous build ran all 420 cleanly. The regression is mine.
+
+THE FAULT
+---------
+    error_desc: 0x101
+    esr: 0x92000006   -> Data Abort, READ, translation fault level 2
+    far: 0x4428478
+    X0:  0x4428478    same value, i.e. passed in as a pointer argument
+    pc:  0xa63c07210  host
+
+0x4428478 is a GUEST address -- the same range as every other guest object
+this session (0x4503700 the work item, 0x4530c40 the read buffer,
+0x4400170 the memory context). It was dereferenced as a HOST pointer.
+
+Several registers held ASCII from the half-built log line:
+
+    X7  "0x0,0x0,"     X11 "[4]n=0x6"    X13 ",0x0,0x0"
+    X15 "=0x21cf3"     X17 "0x6b658 "
+
+so the fault was inside string formatting, reading a string from a guest
+address.
+
+THE CAUSE
+---------
+The metaobject dump added the format fragment
+
+    " awimeta=0x%x m=[%s]"
+
+immediately after the archq line, but appended its arguments AFTER the
+e0d/f8d arguments. Format order and argument order therefore disagreed by
+two positions: %x received a char*, and %s received awi_meta -- a guest
+pointer -- which the formatter then walked as a host string.
+
+GCC SAID SO, IN THE BUILD THAT SHIPPED
+---------------------------------------
+    main.c:3754: warning: format '%x' expects argument of type 'unsigned int',
+                 but argument 273 has type 'char *' [-Wformat=]
+    main.c:3754: warning: format '%s' expects argument of type 'char *',
+                 but argument 275 has type 'uint32_t' [-Wformat=]
+
+Both were in the build log. The build step only grepped for "error:", so a
+compiler that had diagnosed the exact defect was ignored, and the result was
+a wasted hardware round.
+
+Worth stating plainly: this is the same class of mistake this log keeps
+recording about instruments -- a check that reports success without actually
+checking. `make exit=0` is not "the build is fine".
+
+THE FIX
+-------
+The format fragment now sits after the e0d/f8d line, where its arguments
+already were. Rebuilt and verified:
+
+    format-mismatch warnings: 0
+    all warnings: 1  [-Wunused-function]   (pre-existing)
+
+176,428,409 bytes,
+sha256 58365354b1bcf8400e71f009a5bbff42fa2d5796ac3c358d563cf54ef7c4e411
+
+WHAT THE CRASHED RUN STILL TELLS US
+------------------------------------
+The fault was at frame 3420, which is exactly where threads are created in
+every previous run -- the frame dump at that point is the first one large
+enough to reach the broken conversion. Nothing about the boot changed; the
+crash is in the diagnostic, not in the engine.
+
+The 57 samples it did produce are consistent with every earlier run up to
+that frame, so no earlier conclusion is affected.
+
+METHOD NOTE
+-----------
+Check warnings, not just the exit code. A build that exits 0 having warned
+about a pointer/integer mismatch in a printf is a build that will fault, and
+this one did, on the first frame that reached the bad conversion.
