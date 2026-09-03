@@ -1,0 +1,80 @@
+2026-09-03 (static) -- the pump, the ordering, and what only ground truth can settle
+====================================================================================
+
+THE PUMP IS IDENTIFIED, AND IT IS NOT AN EXECUTOR
+--------------------------------------------------
+Storage-device vtable slot 0x13c is `update(igBlockingType)`. Confirmed two
+ways, not guessed:
+
+  * blockUntilComplete calls it as `device->slot13c(1)`, and the enum
+    recovered from .rodata is kNonBlocking = 0, kBlocking = 1 -- the
+    argument type fits exactly.
+  * igArchive::update tail-chains to igVirtualStorageDevice::update at
+    0x216de10, and 0x216de10 is precisely the `last_pc` recorded in the
+    17:35:56 run, with caller_lr inside blockUntilComplete.
+
+And the pump's whole body is:
+
+    igArchive::update(igBlockingType)
+      -> igArchive::updateArchiveSystem()      calls exactly:
+             startNewTasks
+             updateTasks
+      -> igVirtualStorageDevice::update(igBlockingType)
+
+It drives the archive state machine. It does NOT execute jobs -- no jqFlush,
+no jqTempWorkerLoopOnce. So the workers are not an optimisation here; they
+are the only thing that can ever run the decompression.
+
+THE BLOCKING TYPE DOES NOT REACH THE DECISION
+----------------------------------------------
+blockUntilComplete correctly passes kBlocking(1). But updateArchiveSystem
+takes no arguments at all, so the blocking context is dropped before it
+reaches the task machinery, and updateTasks submits with `li r7, 0` --
+non-blocking, hardcoded in the binary.
+
+That is not a translation artefact; it is what the original code does. So
+retail submits non-blocking work here too, and retail's workers must
+therefore actually run.
+
+THE ORDERING PROBLEM
+--------------------
+    Core::igRefAlchemy(+1)
+      -> igArkCore::igArkCore()
+      -> igArkCore::initBootstrap()    loads bootstrap.bld
+      -> igArkCore::init()             2147fc4 registers ram:/alchemy.xml
+                                       2148004 igRegistry::read
+                                       2148600 igJobQueue::init
+                                       2148604 igJobQueue::start
+
+The bootstrap archive load runs BEFORE the config is registered and before
+igJobQueue::init/start are reached. Yet measurement puts igJobQueue::start
+at call 204,133 while addReadOnlyMemoryEntry never fired for the config at
+all -- so the queue was started from somewhere other than igArkCore::init,
+with an empty registry.
+
+That matters because igJobQueue::init calls
+`jqAttachQueueToWorkers(jqQueue*, uint mask, int)`, and the mask ultimately
+derives from Core/@jobqueueProcessorMask. With an empty registry the mask is
+whatever the default is, and a queue attached to no workers would explain
+precisely what is measured: workers alive, batch submitted, flag A never
+set, nothing ever popped.
+
+WHERE THIS STOPS BEING ANSWERABLE FROM THIS SIDE
+-------------------------------------------------
+Every remaining question is of the form "what does the real game have here
+that we do not":
+
+  * what jqWorkersMask holds on a working boot
+  * whether flag A (guest 0x10136b20) is non-zero there
+  * whether igJobQueue::start runs before or after the config on retail
+
+Our binary is stripped and our only measurements are of the broken state. A
+second run of the same broken build cannot answer any of them.
+
+This is what the Cemu oracle exists for, and it has been sitting unused
+since 2026-08-29 while eleven hardware rounds were spent inferring. Cemu
+runs the real binary to the press-A screen; breaking there and reading three
+globals would settle in one session what static reading cannot settle at
+all.
+
+Recorded as the honest boundary of what today could establish.
