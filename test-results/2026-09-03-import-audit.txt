@@ -1,0 +1,76 @@
+2026-09-03 -- audit of every Cafe OS import the game calls
+==========================================================
+
+METHOD
+------
+Extracted every distinct `ppc_import_*` the generated tree calls (287), and
+every one the shim defines (293), and diffed them.
+
+    called but not defined:  0
+
+So nothing the game asks for is missing outright. The interesting question
+is which are implemented and which merely exist.
+
+CLASSIFICATION (line counts, comments stripped)
+-----------------------------------------------
+    substantive (>2 lines)   84
+    trivial (<=2 lines)     189
+    explicitly marked stub   14
+
+The line-count heuristic UNDER-reports coreinit badly and must not be taken
+at face value. The sync primitives look trivial and are not:
+
+    OSLockMutex    -> arkchemy_fs_pump_completions + pthread_mutex_lock
+    OSUnlockMutex  -> pthread_mutex_unlock
+    OSTryLockMutex -> pthread_mutex_trylock, result into r3
+    OSInitMutex    -> allocates the real mutex
+
+Real pthread mutexes keyed on the guest OSMutex address. Correct.
+
+Most of the "trivial" mass is GX2 (graphics, ~98 imports) and snd_core
+(audio, ~30). Those genuinely are one-line placeholders, which is expected
+and correct for now: nothing renders or plays until the boot completes, and
+implementing them blind would produce code that cannot be tested.
+
+THE ONE REAL FINDING
+--------------------
+    static inline void ppc_import_coreinit_OSYieldThread(PpcContext *ctx)
+    { (void)ctx; }
+
+A no-op. And it is called from exactly the code that is currently stuck:
+
+    jqAddBatchToQueue             4 call sites
+    __jqPopNextBatchFromQueue     2
+    igJobQueue::AtomicHeap::alloc 2
+    jqWorkerSleep                 1
+    quick_global_lock             1
+    igThread::yield               1
+
+Those are spin-wait retry loops in the lock-free queue and its allocator. A
+yield that does nothing turns each into a busy spin that never lets the
+thread it is waiting on run.
+
+It also interacts with today's atomics fix, in the wrong direction. Before
+that fix stwcx. always reported success, so every retry branch was dead code
+and each loop ran exactly once. Now the compare-exchange can genuinely fail
+and the loop genuinely retries -- against a yield that does nothing. That is
+a plausible mechanism for jqAddBatchToQueue never completing its enqueue,
+which is precisely the measured symptom: addBatch entered once, queue count
+still zero.
+
+Fixed: OSYieldThread now calls sched_yield().
+
+WHAT IS DELIBERATELY NOT IMPLEMENTED
+------------------------------------
+    OSSetThreadAffinity -> returns success, does nothing
+
+Wii U titles pin work to specific cores with this. Mapping it to host
+affinity is possible but was left alone deliberately: it is not on the
+critical path, the host scheduler distributes threads anyway, and a wrong
+affinity mapping would be an invisible performance bug rather than a visible
+one. Worth revisiting once the boot completes.
+
+GX2 and snd_core stay as placeholders until there is a running game to test
+them against.
+
+sha256 1061ce04846ddfa7df146841d1a295475eb51fca2b39be0961831f85624ce726
