@@ -1,0 +1,106 @@
+2026-09-03 (run 2) -- updateTasks runs, keeps the entry, and parks at 21681cc
+=============================================================================
+
+Build Sep  3 2026 10:49:26, 25,140 of 25,200 frames, 420 dumps, no crash words.
+
+THE MEASUREMENT
+---------------
+    updent: e8=0xf7d05ec e88=0x4503700 st1=0x1 ec=0x1 e10=0x4503760 st2=0x2
+        (269 frames; the other 151 are all-zero, before setup)
+
+    rel: e18=0xf800984[+14]=1  e1c=0xf7f88d4[+14]=1
+
+    w3(igArchive::updateTasks) hits=56659@3933809
+    w6(igArchive::startNewTasks) hits=56659
+
+updateTasks and startNewTasks have IDENTICAL call counts -- 56,659 each --
+so they are pumped together from the same caller, once per iteration.
+
+WALKING THE PER-ENTRY TEST WITH REAL VALUES
+-------------------------------------------
+    2167c6c  lwz   r17, 8(r16)     r17 = [e+8]   = 0xf7d05ec
+    2167c70  lwz   r18, 8(r17)     r18 = [r17+8] = 0x4503700   non-null
+    2167c74  cmpwi r18, 0
+    2167c7c  beq   2167c8c         NOT taken
+    2167c80  lbz   r0, 0x23(r18)   st1 = 1
+    2167c84  cmpwi r0, 1
+    2167c88  beq   0x2167d20       TAKEN -> KEEP
+
+    2167d20  cmpwi r11, 0          r11 = [e+0xc] = 1   non-zero
+    2167d24  bne   0x21681cc       TAKEN
+
+so 2167d28 onward -- the branch that reads [e+0x10] and its state byte -- is
+never reached. st2 = 0x2 is real but off the taken path.
+
+    21681cc  cmpwi r11, 1          r11 == 1
+    21681d0  bne   0x2168048       NOT taken
+    21681d4  lwz   r12, 0x14(r16)  reads [e+0x14]        <- DECIDES
+    21681d8..21681fc               lwarx/stwcx. round trip through [r1+0x10]
+    2168200  cmpwi r7, 0
+    2168204  bne   0x2168218       non-zero -> singleton/metaobject work
+    2168208  lwz   r9, 0x1c(r17)   zero -> tests the archq entry's +0x1c
+    2168210  bne   0x216852c       and that is 1, so -> loop end
+
+[e+0x14] of the updq entry is the branch that decides, and it is the one
+field not dumped. That is what the next build gets.
+
+FIRST LINKAGE THAT IS ACTUALLY PROVEN
+-------------------------------------
+    [updq entry 0xf7d05a8 + 8] == 0xf7d05ec == the archq entry
+
+The two lists' entries are directly linked. That is measured, not inferred,
+and it is the first hard connection between the list updateTasks walks and
+the entry whose cursor gates startNewTasks.
+
+TWO CORRECTIONS
+---------------
+1. **0x21dc36c is Core::igJobQueue::flush.** The call at the top of the
+   REMOVE path is a job-queue flush, so that path is archive FINALISATION --
+   "this archive is finished, drain its jobs, take it off the active list" --
+   not the per-task reap I read it as.
+
+2. **The remove path does not release this cursor.** Its two stores target
+   [e+0x18] = 0xf800984 and [e+0x1c] = 0xf7f88d4. Neither is the archq entry
+   0xf7d05ec whose +0x14 startNewTasks compares. The claim that the removal
+   path hands this cursor back is WITHDRAWN.
+
+   Both of those objects independently read +0x14 = 1, as does the archq
+   entry and possibly the updq entry. So +0x14 looks like a shared field on
+   a common base -- a per-object in-flight count -- rather than one unique
+   cursor. Treating "+0x14" as a single thing was the error.
+
+WHAT THIS DOES AND DOES NOT SETTLE
+----------------------------------
+Settled: updateTasks is not idle. It runs as often as startNewTasks, walks
+a non-empty list, and deliberately KEEPS its entry every time. Nothing is
+stuck for want of being called.
+
+Not settled: why the entry is kept rather than progressed. It is parked at
+21681cc on a field that was not measured.
+
+Dead theories, all excluded by measurement: "nothing sets the limit",
+"updateTasks no-ops on an empty list", and now "the removal path releases
+the cursor".
+
+NEXT BUILD
+----------
+Rather than spend one 7-minute run per field, this dumps the whole local
+object graph at once:
+
+    upde=[16 words at the updq entry 0xf7d05a8]   -- includes +0x14
+    q18= [8 words at 0xf800984]                   -- identify it
+    q1c= [8 words at 0xf7f88d4]                   -- identify it
+    e10d=[8 words at 0x4503760]                   -- the second work item
+
+sha256 13e4ea3c3a2962066171f55616bdd4363220517998faf54cfecba5a71b93710e
+176,432,505 bytes, make exit 0, zero format warnings.
+
+OPERATIONS
+----------
+The courier now runs both directions automatically: it pulls a new
+game-results.log whenever its hash changes and pushes a queued build onto
+the card as soon as MTP returns, verifying by reading the file back and
+comparing hashes. MTP only exists while the Switch sits in hbmenu, so
+"reachable" means "not running the game" and a mid-run write is impossible
+by construction. Mount transitions double as free run-start/run-finish
+signals, and both fired correctly on this run.

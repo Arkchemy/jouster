@@ -3737,6 +3737,37 @@ int main(int argc, char *argv[]) {
             uint32_t ue1c = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 0x1cu) : 0u;
             uint32_t ue18c = ue18 ? ppc_load_u32(&g_ctx, ue18 + 0x14u) : 0xffffffffu;
             uint32_t ue1cc = ue1c ? ppc_load_u32(&g_ctx, ue1c + 0x14u) : 0xffffffffu;
+            /* 2026-09-03 run 2. updateTasks IS running (56,659 hits, exactly
+               matching startNewTasks) and takes the KEEP path: e88 non-null
+               and st1==1. It then reaches 0x21681cc with [e+0xc]==1:
+
+                 21681cc  cmpwi r11, 1
+                 21681d0  bne   0x2168048        not taken, r11 == 1
+                 21681d4  lwz   r12, 0x14(r16)   reads [e+0x14]
+                 2168204  bne   0x2168218        non-zero -> do work
+                 2168208  lwz   r9, 0x1c(r17)    zero -> test archq entry +0x1c
+                 2168210  bne   0x216852c        -> loop end
+
+               [e+0x14] decides it and was never dumped. Rather than spend a
+               run per field, dump the whole object graph: the updq entry in
+               full, plus the two igJobQueue::flush targets and the second
+               work item, enough words to identify what they are.
+
+               Also corrected: 0x21dc36c is Core::igJobQueue::flush, so the
+               REMOVE path is archive finalisation, not a per-task reap, and
+               its two +0x14 stores hit 0xf800984/0xf7f88d4 -- NOT the archq
+               entry 0xf7d05ec that gates startNewTasks. The earlier claim
+               that the remove path releases this cursor is withdrawn. */
+            uint32_t upde[16], ue18d[8], ue1cd[8], ue10d[8];
+            for (int q = 0; q < 16; q++) upde[q]  = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + (uint32_t)(q * 4)) : 0u;
+            for (int q = 0; q < 8;  q++) ue18d[q] = ue18   ? ppc_load_u32(&g_ctx, ue18   + (uint32_t)(q * 4)) : 0u;
+            for (int q = 0; q < 8;  q++) ue1cd[q] = ue1c   ? ppc_load_u32(&g_ctx, ue1c   + (uint32_t)(q * 4)) : 0u;
+            for (int q = 0; q < 8;  q++) ue10d[q] = ue10   ? ppc_load_u32(&g_ctx, ue10   + (uint32_t)(q * 4)) : 0u;
+            char updes[220] = "", ue18s[120] = "", ue1cs[120] = "", ue10s[120] = "";
+            for (int q = 0; q < 16; q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)upde[q]);  strncat(updes, t, sizeof(updes) - strlen(updes) - 1); }
+            for (int q = 0; q < 8;  q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)ue18d[q]); strncat(ue18s, t, sizeof(ue18s) - strlen(ue18s) - 1); }
+            for (int q = 0; q < 8;  q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)ue1cd[q]); strncat(ue1cs, t, sizeof(ue1cs) - strlen(ue1cs) - 1); }
+            for (int q = 0; q < 8;  q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)ue10d[q]); strncat(ue10s, t, sizeof(ue10s) - strlen(ue10s) - 1); }
             uint32_t awi_meta = ppc_load_u32(&g_ctx, 437804u);
             uint32_t awi_m[12];
             for (int q = 0; q < 12; q++) awi_m[q] = awi_meta ? ppc_load_u32(&g_ctx, awi_meta + (uint32_t)(q * 4)) : 0u;
@@ -3905,6 +3936,7 @@ int main(int argc, char *argv[]) {
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
                        " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
                        " rel: e18=0x%x[+14]=%d e1c=0x%x[+14]=%d"
+                       " upde=[%s] q18=[%s] q1c=[%s] e10d=[%s]"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -4055,6 +4087,7 @@ int main(int argc, char *argv[]) {
                        upd_list, upd_n, upd_arr, upd_e0,
                        ue8, ue88, ust1, uec, ue10, ust2,
                        ue18, (int)ue18c, ue1c, (int)ue1cc,
+                       updes, ue18s, ue1cs, ue10s,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
