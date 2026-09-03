@@ -1,0 +1,52 @@
+2026-09-03 (run 15) -- the destination queue, named
+===================================================
+
+Build Sep  3 2026 22:20:43.
+
+    w1(igJobQueue::addBatch)  hits=1@1610867
+    w2(Core::jqAddBatchToQueue) hits=1@1610868  this=0x6cc18  r4=0x3fffe678
+
+jqAddBatchToQueue takes (jqQueue* r3, jqBatch* r4), so r3 is the destination
+queue. It is entered, so nothing is stuck before the enqueue.
+
+THE MISMATCH
+------------
+    batch enqueued to            0x6cc18 = 445464
+    workers' queue base          0x6caf0 = 445168
+    workers poll head/tail/count at base +0x118 / +0x11c / +0x120
+                                 = 445448 / 445452 / 445456
+
+445464 is base + 0x128. The watched count is base + 0x120. The two queue
+descriptors are 0x10 apart:
+
+    queue[0] head/tail/count at +0x118 / +0x11c / +0x120   <- watched
+    queue[1] head/tail/count at +0x128 / +0x12c / +0x130   <- written
+
+which also explains the live churn seen at +0x130 in run 13: two pointers
+alternating between frames. That was not a double buffer, as guessed at the
+time -- it is **queue[1]'s count and neighbouring fields moving while the
+batch sits in it**. The earlier reading is corrected.
+
+So the archive's decompression batch is enqueued into queue[1], and
+jqWorkerSleep only ever tests queue[0]'s count. The workers sleep because
+the queue they watch is genuinely empty, forever, while the work sits in the
+one next to it.
+
+WHAT IS STILL OPEN
+------------------
+Whether this is our bug or correct engine behaviour we are half-implementing.
+Two possibilities, needing different fixes:
+
+  1. A worker is supposed to be ATTACHED to queue[1] and is not.
+     jqAttachQueueToWorkers(jqQueue*, uint mask, int) is called from
+     igJobQueue::init and takes a per-queue worker mask. If it attached
+     queue[0] but not queue[1], the workers would never look at queue[1].
+  2. jqWorkerSleep's flag A is meant to be a global "work exists anywhere"
+     counter rather than queue[0]'s count, and the enqueue should have
+     bumped it. Then the defect is in the enqueue, not the attach.
+
+The next measurement is jqAttachQueueToWorkers' arguments: which queue, and
+with what mask.
+
+sha256 of the build now on the card (yield fix + this watch):
+1061ce04846ddfa7df146841d1a295475eb51fca2b39be0961831f85624ce726
