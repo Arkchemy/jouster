@@ -3792,6 +3792,32 @@ int main(int argc, char *argv[]) {
                entry 0xf7d05ec that gates startNewTasks. The earlier claim
                that the remove path releases this cursor is withdrawn. */
             uint32_t upde[16], ue18d[8], ue1cd[8], ue10d[8];
+            /* startBlockRead's work-item initialiser (2168680..21686a0) shows
+               the small enums are ADJACENT BYTES, not one u32:
+
+                 2168694  stb r8,  0x20(r30)   = 4   _type   kTypeRead
+                 2168690  stb r0,  0x22(r30)   = 1   _priority kPriorityNormal
+                          byte 0x23                  _status
+                 2168698  stw r26, 0x14(r30)         _offset
+                 2168680  stw r24, 0x18(r30)         _size
+                 2168354  stw r8,  0x1c(r18)         _bytesProcessed := size
+
+               So +0x23 is the status byte in its own right. The earlier
+               "low byte of a u32 at +0x20" reading reached the right answer
+               for the wrong reason; +0x20 is _type. Decode both work items
+               explicitly rather than re-deriving them from hex each run. */
+            uint32_t wi1 = arch_f8, wi2 = ue10;
+            uint32_t w1ty = wi1 ? (uint32_t)ppc_load_u8(&g_ctx, wi1 + 0x20u) : 0xffu;
+            uint32_t w1pr = wi1 ? (uint32_t)ppc_load_u8(&g_ctx, wi1 + 0x22u) : 0xffu;
+            uint32_t w1st = wi1 ? (uint32_t)ppc_load_u8(&g_ctx, wi1 + 0x23u) : 0xffu;
+            uint32_t w1of = wi1 ? ppc_load_u32(&g_ctx, wi1 + 0x14u) : 0u;
+            uint32_t w1sz = wi1 ? ppc_load_u32(&g_ctx, wi1 + 0x18u) : 0u;
+            uint32_t w1dn = wi1 ? ppc_load_u32(&g_ctx, wi1 + 0x1cu) : 0u;
+            uint32_t w2ty = wi2 ? (uint32_t)ppc_load_u8(&g_ctx, wi2 + 0x20u) : 0xffu;
+            uint32_t w2st = wi2 ? (uint32_t)ppc_load_u8(&g_ctx, wi2 + 0x23u) : 0xffu;
+            uint32_t w2of = wi2 ? ppc_load_u32(&g_ctx, wi2 + 0x14u) : 0u;
+            uint32_t w2sz = wi2 ? ppc_load_u32(&g_ctx, wi2 + 0x18u) : 0u;
+            uint32_t w2dn = wi2 ? ppc_load_u32(&g_ctx, wi2 + 0x1cu) : 0u;
             for (int q = 0; q < 16; q++) upde[q]  = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + (uint32_t)(q * 4)) : 0u;
             for (int q = 0; q < 8;  q++) ue18d[q] = ue18   ? ppc_load_u32(&g_ctx, ue18   + (uint32_t)(q * 4)) : 0u;
             for (int q = 0; q < 8;  q++) ue1cd[q] = ue1c   ? ppc_load_u32(&g_ctx, ue1c   + (uint32_t)(q * 4)) : 0u;
@@ -3970,6 +3996,7 @@ int main(int argc, char *argv[]) {
                        " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
                        " rel: e18=0x%x[+14]=%d e1c=0x%x[+14]=%d"
                        " upde=[%s] q18=[%s] q1c=[%s] e10d=[%s]"
+                       " wi1: ty=%u pri=%u st=%u off=0x%x sz=0x%x done=0x%x | wi2: ty=%u st=%u off=0x%x sz=0x%x done=0x%x"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -4121,6 +4148,7 @@ int main(int argc, char *argv[]) {
                        ue8, ue88, ust1, uec, ue10, ust2,
                        ue18, (int)ue18c, ue1c, (int)ue1cc,
                        updes, ue18s, ue1cs, ue10s,
+                       w1ty, w1pr, w1st, w1of, w1sz, w1dn, w2ty, w2st, w2of, w2sz, w2dn,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

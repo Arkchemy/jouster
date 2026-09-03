@@ -1,0 +1,86 @@
+2026-09-03 (static) -- the work-item layout, from its own initialiser
+=====================================================================
+
+WHERE THIS COMES FROM
+---------------------
+igArchive::startBlockRead (0x2168550) builds a work item and fills it in
+directly. The initialiser is the authoritative statement of the layout --
+better than inferring offsets from a C# reimplementation of a different
+Alchemy version, because it is this binary describing itself.
+
+    2168670  lwz r30, 0(r28)      r30 = the work item
+    2168680  stw r24, 0x18(r30)   _size          (arg 5)
+    2168688  stw r25, 0x0c(r30)                  (arg 3)
+    2168690  stb r0,  0x22(r30)   _priority = 1  kPriorityNormal
+    2168694  stb r8,  0x20(r30)   _type     = 4  kTypeRead
+    2168698  stw r26, 0x14(r30)   _offset        (arg 4)
+    216869c  stw r27, 0x10(r30)
+    21686a0  bl  igStringRef::igStringRef(const char*)   the path
+
+and from the completion path found earlier:
+
+    2168354  stw r8, 0x1c(r18)    _bytesProcessed := _size
+
+LAYOUT
+------
+    +0x0c   (set from arg 3)
+    +0x10   (set from r27)
+    +0x14   _offset
+    +0x18   _size
+    +0x1c   _bytesProcessed
+    +0x20   _type       byte
+    +0x22   _priority   byte
+    +0x23   _status     byte
+
+A CORRECTION
+------------
+Earlier I wrote that +0x23 is "the low byte of a u32 _status at +0x20,
+because PPC is big-endian". That reached the right answer for the wrong
+reason. The small enums are ADJACENT BYTE FIELDS, not one word: +0x20 is
+_type in its own right, and +0x23 is _status in its own right. The
+endianness argument was not needed and was wrong about what +0x20 holds.
+
+The enum decode itself is unaffected -- values 0/1/2/4 still map to
+kStatusInactive / kStatusActive / kStatusComplete / kStatusInvalidPath,
+and that is now confirmed by this binary rather than by analogy:
+`li r8, 4; stb r8, 0x20` writing kTypeRead=4 and `li r0, 1; stb r0, 0x22`
+writing kPriorityNormal=1 are exactly igRewrite8's WorkType and Priority
+ordinals, in this binary's own code.
+
+WHAT THE TWO WORK ITEMS ACTUALLY ARE
+------------------------------------
+Re-reading the measured dumps with the correct layout:
+
+    #1 0x4503700   offset 0x0     size 0x800    processed 0x0     status 1 Active
+    #2 0x4503760   offset 0x1000  size 0x1800   processed 0x1800  status 2 Complete
+
+So they are two block reads of the same archive. #2 read 0x1800 bytes at
+offset 0x1000 and completed cleanly, with processed == size, which is the
+fingerprint of the completion path at 0x2168348.
+
+**#1 is a 2,048-byte read at offset 0 that has never completed.** Offset 0
+of an igArchive is its header -- and the FS layer separately shows the
+header was read correctly (IGA magic at the head of the 128 KB buffer). So
+the data exists; the work item describing the request was never marked
+done.
+
+A DISTINCTION WORTH KEEPING
+---------------------------
+[work item + 0x14] is the file OFFSET. [updq entry + 0x14] -- the word that
+gates the completion route, and the one now under the history watch -- is a
+DIFFERENT field on a DIFFERENT type: the updq entry has vtable 0x11e868,
+work items have vtable 0x11cc40. Same offset, unrelated meaning. Conflating
+"+0x14" across object types is the mistake that already cost one wrong
+conclusion this session (the removal-path claim), so it is written down
+here explicitly.
+
+BUILD
+-----
+Adds a decoded per-frame line so these stop being re-derived from hex:
+
+    wi1: ty= pri= st= off= sz= done=  |  wi2: ty= st= off= sz= done=
+
+alongside the history watch on [updq entry + 0x14] = 0xf7d05bc.
+
+sha256 88ad36cb224ddad5f212f6f5f1daec974d8a6b89055011604587a111c651cf7a
+make exit 0, zero format warnings, queued for automatic push.
