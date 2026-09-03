@@ -1,0 +1,81 @@
+2026-09-03 (run 7) -- the atomics fix did not change the outcome
+================================================================
+
+Build Sep  3 2026 17:35:56, the first with real lwarx/stwcx.
+
+    w6(jqWorkerThread) hits=2      w1(addBatch)       hits=1@1610869
+    w0(jqPopNextBatch) hits=4      w2(jqWorkerSleep)  hits=3@1610901
+    wi1: ty=4 st=1 off=0x0 sz=0x800 done=0x0     (still kStatusActive)
+    upde[+0x14] _decompressJobFlag = 0           (still clear)
+    evt: sig=2 wake=1 tmo=285      calls=3,979,347
+
+Identical to the run before it. Stated plainly: **the atomics fix did not
+fix this bug.**
+
+THE BUILD WAS VALID
+-------------------
+Worth checking before drawing any conclusion, because PpcContext gained
+fields and only 44 of 218 generated files were edited -- mixing objects
+compiled against two different struct layouts would corrupt memory and make
+the run meaningless. The Makefile does track header dependencies
+(DEPENDS := $(OFILES:.o=.d)), and all 221 objects carry timestamps inside
+the same 90-second window as the build. Everything rebuilt. The result
+stands.
+
+The fix stays in regardless: the old translation is unsound for any
+multithreaded title, and "it did not fix today's bug" is not "it was wrong".
+
+WHY IT DID NOT HELP -- THE SLEEP LOOP DOES NOT POLL THE QUEUE
+-------------------------------------------------------------
+    L_21da144:  sleeping_count++
+                OSWaitEventWithTimeout(evt, 0, 100000000)
+                sleeping_count--
+    L_21da17c:  lwz r10, 0x6b20(r27)   A = [445456]
+                bne exit
+                lbz r11, -0x29fe(r30)  B = byte[3524]
+                bne exit
+                lwz r0, -0x2a1c(r29)   C = [14244]
+                beq L_21da144          all zero -> sleep again
+
+The worker never looks at the batch queue while it sleeps. It polls three
+globals, and leaves the loop only when one of them is non-zero. So making
+the queue's own atomics correct could not have helped: the queue is not what
+is being read.
+
+That also explains the odd counts. jqPopNextBatch sits OUTSIDE this loop, so
+4 pops and 285 timed wakeups are consistent: the worker entered
+jqWorkerSleep a third time and has been cycling inside it ever since,
+without ever returning far enough to pop again.
+
+The timeout constant is 100,000,000 ticks = 1.61 s against the Espresso
+timebase, and 420 s / 285 wakes = 1.47 s. Those agree, which confirms the
+workers really are waking on schedule and finding all three flags zero.
+
+A MEASUREMENT MISTAKE WORTH RECORDING
+-------------------------------------
+An earlier scan for barrier sites reported "0 sync/lwsync/isync/eieio
+comments to retrofit". That was wrong. The generated line is
+`/* 21da1a4: lwsync  */` -- with a trailing space before the terminator --
+and the regex required none. There is an lwsync inside this very function.
+The barriers ARE anchorable in the existing tree; the codegen fix will emit
+them on regeneration, and the existing files can be retrofitted too.
+
+NEXT
+----
+Dump the three flags every frame and watch two of them for writes:
+
+    jqflags: A=0x%x B=0x%x C=0x%x
+    store watch  -> 14244   (cond C, checked last, beq loops back on zero)
+    store watch2 -> 445456  (cond A, checked first)
+
+Reading:
+  all three zero all run     -> nothing ever sets the worker's wake
+                                condition; find the producer that should
+  one non-zero               -> the worker should have exited, so the fault
+                                is after the sleep loop rather than in it
+
+No site in the tree was found storing through these bases, but conquertron
+folds lis per-site, so the same guest address can appear under a different
+base. That is a reason to measure, not a reason to conclude.
+
+sha256 bc60d14baaad0fb490cb4e16f0195e717ebe9f94202f36ec1cd48ce46e019214
