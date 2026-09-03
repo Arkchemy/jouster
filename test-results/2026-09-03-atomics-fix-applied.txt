@@ -1,0 +1,85 @@
+2026-09-03 -- real atomics applied; the workers park after one poll
+===================================================================
+
+THE RUN THAT PROMPTED IT (build 17:11:59)
+-----------------------------------------
+    w0(jqPopNextBatch) hits=4@1610899  this=0x6dc80 wi=0x4663938
+    w2(jqWorkerSleep)  hits=3@1610900  this=0x6dc80 r4=0x6cc18
+    w1(addBatch)       hits=1@1610868
+    w6(jqWorkerThread) hits=2
+    evt: sig=2 wake=1 tmo=286
+
+The workers are not spinning. They pop four times and sleep three times, all
+inside ~30 calls of the batch being submitted, and then go silent for the
+remaining ~2.3 million calls of the run.
+
+One of those pops happened AFTER addBatch and still found nothing. Then they
+slept and never woke: sig=2, wake=1 for the whole run.
+
+That is a producer/consumer handoff where the consumer neither sees the data
+nor receives the wake -- which is what the missing memory model predicts.
+
+WHAT WAS FIXED
+--------------
+Runtime (conquertron/include/ppc_runtime.h):
+  * per-context reservation state (reserve_addr / reserve_raw /
+    reserve_valid), zero-init safe so a fresh context holds no reservation
+  * guest memory array aligned so a word-aligned guest address is
+    word-aligned on the host, which the compare-exchange requires
+  * ppc_lwarx  -- acquire load that takes the reservation
+  * ppc_stwcx  -- strong compare-exchange with release, returns success
+  * ppc_mem_fence -- __atomic_thread_fence(SEQ_CST)
+
+Codegen (conquertron/src/codegen.cpp):
+  * LWARX  -> ppc_lwarx
+  * STWCX  -> ppc_stwcx with CR0[EQ] taken from the result
+  * SYNC / LWSYNC / ISYNC / EIEIO -> ppc_mem_fence
+  * DCBST stays a no-op; it is only a cache hint
+
+Already-generated code was rewritten mechanically rather than regenerated:
+3,015 lwarx sites and 3,015 stwcx. sites across 44 of 218 files. The counts
+being exactly equal is a useful integrity check -- every reserving load has
+its paired conditional store.
+
+The retry loop now works as written:
+
+    /* 21690d8: lwarx r9, 0, r6 */
+    ctx->r[9] = ppc_lwarx(ctx, 0u + ctx->r[6]);
+    /* 21690e0: addi r11, r9, -1 */
+    ctx->r[11] = ctx->r[9] + (uint32_t)(int32_t)-1;
+    /* 21690e4: stwcx. r11, 0, r6 */
+    { int __sc_ok = ppc_stwcx(ctx, 0u + ctx->r[6], ctx->r[11]);
+      ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = (uint8_t)__sc_ok; }
+    /* 21690e8: bne 0x21690d8 */
+
+A failed compare-exchange now sets EQ=0 and the bne genuinely retries. Before
+this, EQ was hardcoded to 1 and that branch was unreachable in every atomic
+loop in the binary.
+
+WHAT THIS DOES NOT FIX
+----------------------
+Standalone sync/lwsync/isync/eieio produce NO output in the existing
+generated files -- the old codegen emitted nothing at all, not even a
+comment, so there is no anchor to retrofit against. Those barriers will only
+appear after a regeneration. The acquire/release now carried by
+ppc_lwarx/ppc_stwcx covers the guest's own synchronisation points, which is
+where the cross-thread handoffs actually happen, but it is not the complete
+memory model.
+
+Nor does this address the missing wake. sig=2/wake=1 says the workers were
+never signalled; if they are asleep on an event that addBatch is supposed to
+raise, ordering alone will not start them. That is the next thing to look at
+if this build does not move the boot.
+
+BUILD
+-----
+sha256 76196b6d49954d3af0896ed525792a5bbcabb3d7130f8f23c36351e68a3c0081
+make exit 0, zero errors, zero format warnings, 89 seconds.
+
+HONEST STATUS
+-------------
+This is a real correctness fix that was needed regardless -- the old
+translation is unsound for any multithreaded title. Whether it is THIS bug
+is not yet known. The measurement to watch is w0(jqPopNextBatch): if the
+workers start polling repeatedly instead of stopping after four, the
+visibility half was real.
