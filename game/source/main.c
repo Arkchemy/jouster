@@ -2409,7 +2409,22 @@ static void game_thread_func(void *arg) {
      * stack spills in function prologues, not field writes. A store watch
      * catches whoever actually writes the memory, which is the only honest way
      * to answer it. */
-    g_ppc_watch_store_addr = 0xf7d0604u;   /* entry +0x18 -- the limit */
+    /* 2026-09-03: swapped. Watch #1 is the one that also feeds the POLLED
+     * history buffer (ppc_poll_watch_mem records call, value, pc and lr for
+     * up to 8 changes); watch #2 keeps only the latest write.
+     *
+     * The limit was on #1 for two runs and gave a complete answer: three
+     * writes, all at construction, last one zero. The cursor was on #2 the
+     * whole time and only ever reported its LAST write -- and that summary
+     * said hits=4 changed=3, so two of its values were being discarded every
+     * run.
+     *
+     * That matters because the guard fails on [e+0x14] > [e+0x18], and a
+     * cursor of 1 against a limit of 0 fails just as readily as a limit that
+     * should have been non-zero. 0 > 0 is false; work would start. So the
+     * cursor is at least as likely to be the wrong number, and its sequence
+     * has never been recorded. */
+    g_ppc_watch_store_addr  = 0xf7d0600u;  /* entry +0x14 -- the CURSOR, with history */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2427,7 +2442,7 @@ static void game_thread_func(void *arg) {
      * 0x00000400 = 1024 buckets -- yet the read returns 0, which is why the
      * pool ends up with no buckets and igStringPool::remove hangs walking
      * buckets[0x811C9DC5]. Catch whoever clears it. */
-    g_ppc_watch_store_addr2 = 0xf7d0600u;  /* entry +0x14 -- the cursor */
+    g_ppc_watch_store_addr2 = 0xf7d0604u;  /* entry +0x18 -- the limit, latest write only */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'

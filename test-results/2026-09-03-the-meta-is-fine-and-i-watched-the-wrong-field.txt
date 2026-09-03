@@ -1,0 +1,86 @@
+2026-09-03 — the metaobject is fine, and I had been watching the wrong field
+=============================================================================
+
+Clean 420-sample run of the 01:29 build. No exception dump.
+
+THE METAOBJECT IS POPULATED
+---------------------------
+    awimeta=0x4428478
+    m=[0x109910,0x2,0x4a07154,0x7,0x1c,0x44284c4,0x1,0x11e7e8,
+       0x44023f4,0x0,0x4428a98,0xa10024]
+
+Not null, not hollow. Pointers to a name, a table, and more. And m[7] is
+0x11e7e8 -- exactly the vtable of the stuck entry -- which confirms that
+entry really is an igArchiveWorkItem stamped from this meta.
+
+So of the three outcomes this build was written to separate:
+
+    no metaobject at all      NO
+    registered but hollow     NO
+    meta fine, fault is in
+      how the instance ends up  <- this one
+
+The "reflection has nothing to initialise from" hypothesis is dead.
+
+AND THE NUMBER THAT ACTUALLY MATTERS WAS NEVER BEING READ
+----------------------------------------------------------
+Two store watches have been armed since the 00:19 build. Only one was ever
+looked at.
+
+    watch #1  +0x18 (limit)   hits=3  changed=1  last=0x0  @call 1,610,588
+    watch #2  +0x14 (cursor)  hits=4  changed=3  last=0x1  @call 1,610,796
+
+The cursor was written FOUR times, changed THREE times, and settled at 1 --
+and it did so AFTER the limit was written, 208 calls later.
+
+Three rounds have gone into "the limit is zero and nothing sets it". The
+guard is:
+
+    2168954: cmplw r30, r4        [e+0x14] vs [e+0x18]
+    2168958: bgt   skip           skip when cursor > limit
+
+A cursor of 1 against a limit of 0 fails. A cursor of 0 against a limit of 0
+PASSES -- 0 > 0 is false -- and work starts. So a limit that is correctly
+zero with a cursor that should not have reached 1 explains everything
+observed, exactly as well as the reading pursued so far.
+
+Something drove that cursor through three distinct values immediately after
+construction. The limit was written once and left. On the evidence, the
+cursor is the more active and the less understood of the two, and it has
+never had its history recorded.
+
+WHY THE HISTORY WAS MISSING
+---------------------------
+Watch #1 is the one wired to the polled history buffer -- ppc_poll_watch_mem
+records call, value, pc and lr for up to 8 changes. Watch #2 keeps only the
+latest write. The limit sat on #1 and produced a complete story in one run;
+the cursor sat on #2 and discarded two of its three changes every run.
+
+That was an arbitrary choice made when the addresses were first armed, and
+it happened to point the good instrument at the less interesting field.
+
+THIS BUILD
+----------
+Swapped:
+
+    watch #1 (with history) -> 0xf7d0600   the cursor
+    watch #2 (latest only)  -> 0xf7d0604   the limit, already fully answered
+
+    memwatch: n=%u [i]@call=value pc= lr=   for up to 8 changes
+
+The sequence of cursor values, and who wrote each, is the measurement.
+0 -> 1 written once by construction is one story; 0 -> something -> 1 driven
+by a later caller is a different one, and the lr on each entry names it.
+
+176,428,409 bytes,
+sha256 04e981ba9ce64323a7369cd874cb02824e3dce1139b69c025967865cf02896c8
+
+Format-mismatch warnings: 0. All warnings: 1, the pre-existing unused static.
+Checked this time rather than assumed.
+
+METHOD NOTE
+-----------
+Two watches were armed and only one was read, for three consecutive rounds.
+The unread one was reporting changed=3 the whole time -- visible in every
+log, in a field printed right next to the one being quoted. Arming an
+instrument is not the same as reading it.
