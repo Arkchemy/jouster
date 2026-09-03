@@ -2424,7 +2424,21 @@ static void game_thread_func(void *arg) {
      * should have been non-zero. 0 > 0 is false; work would start. So the
      * cursor is at least as likely to be the wrong number, and its sequence
      * has never been recorded. */
-    g_ppc_watch_store_addr  = 0xf7d0600u;  /* entry +0x14 -- the CURSOR, with history */
+    /* Retargeted 2026-09-03 run 4. The cursor is settled: written 4 times,
+     * last value 1, last writer lr 0x21690f4 (inside startNewTasks) --
+     * exactly "start the task, cursor := 1". Nothing else touches it.
+     *
+     * The live unknown is [updq entry + 0x14] = 0xf7d05a8 + 0x14. It gates
+     * the only route to the block-completion decrement:
+     *
+     *   21681d4  lwz r12, 0x14(r16)
+     *   2168204  bne 0x2168218   non-zero -> ageBlocks, [archq+0x1c]--
+     *                            zero    -> skip forever
+     *
+     * It measured 0. This watch, with lr/r3/r29/r31 history, says whether
+     * it is ever written and by whom -- the same instrument that named
+     * instantiateFromPool as the writer of +0x18. */
+    g_ppc_watch_store_addr  = 0xf7d05bcu;  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control

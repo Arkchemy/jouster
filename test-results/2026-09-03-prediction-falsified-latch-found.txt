@@ -1,0 +1,110 @@
+2026-09-03 (run 4) -- prediction falsified, and the latch that explains it
+==========================================================================
+
+Build Sep  3 2026 12:12:28, 25,140 frames, no crash words.
+
+THE PREDICTION, AND ITS RESULT
+------------------------------
+Last round I wrote down, before the run: the watch on [archq entry + 0x1c]
+"will show NO writes after setup, because both of its decrements are
+unreachable", and added that if it did show writes, the reachability
+argument was wrong somewhere.
+
+    control_value      hits=11@1610587  changed=2  last=0x1
+    control_writer_pc  hits=11@1610587  changed=7  last=0x215f5cc
+
+**Eleven writes. The prediction is falsified.**
+
+Instrument mapping verified before reading anything into it:
+ppc_runtime.h:805 shows g_ppc_watch_store_addr2 reports to pseudo-address
+0xf0000005, which prints as "control_value". The name is stale -- that
+slot was once a positive control -- but the mapping is confirmed in the
+runtime source, so control_* IS the [archq+0x1c] watch.
+
+WHY THE ARGUMENT WAS WRONG
+--------------------------
+I enumerated every label and branch in the 0x21682xx region and concluded
+the decrement at 21682e0 was reachable only via 0x2168218. That part holds.
+But there is a SECOND decrement, at 2168164, in the 0x21681xx region --
+which I never enumerated. It is reached from:
+
+    2168068  beq 0x216815c
+
+and 0x2168060 is the target of the st2 test:
+
+    2167d40  cmpwi r4, 2           st2 == kStatusComplete
+    2167d44  beq 0x2168060
+
+So the second decrement was live early in the run, exactly as the 11 writes
+show. Checking half a region and generalising was the error.
+
+THE LATCH
+---------
+    2168144  lwz   r9, 0x1c(r17)
+    2168148  li    r6, 1
+    216814c  cmpwi r9, 0
+    2168150  stw   r6, 0xc(r16)     [updq entry + 0xc] = 1   UNCONDITIONAL
+    2168154  bne   0x216852c        +0x1c non-zero -> skip
+    2168158  b     0x2168348        +0x1c zero    -> COMPLETE
+
+That store is unconditional. Once it runs, [updq entry+0xc] is 1 forever,
+and back at the top of the loop:
+
+    2167d20  cmpwi r11, 0          r11 = [e+0xc]
+    2167d24  bne   0x21681cc       -> now always taken
+
+so the whole 2167d28..2167d44 branch -- including the route to the second
+decrement -- is permanently unreachable. The engine reached 2168144 while
++0x1c was still non-zero, latched [e+0xc] to 1, and skipped. From then on
+the only route forward is 21681cc, which needs [updq entry+0x14] != 0.
+
+That matches the timing exactly: the 11 writes stop at call 1,610,587 and
+never resume, while the run continues to ~3.9M calls.
+
+WHAT THE CURSOR WATCH SAID
+--------------------------
+    storewatch_value hits=4@1610795 changed=3 last=0x1
+    storewatch_lr    hits=4 changed=3 last=0x21690f4
+    storewatch_r3    last=0xf7d05a8   the updq entry
+    storewatch_r29   last=0xf7d05ec   the archq entry
+    storewatch_r31   last=0xf7d05a8
+
+The cursor is settled: four writes, last value 1, last writer lr 0x21690f4,
+which is inside igArchive::startNewTasks -- precisely "start the task,
+cursor := 1". Nothing else touches it. That question is closed.
+
+WHAT SURVIVES
+-------------
+The chain's conclusion is unchanged, and now better supported:
+
+    [updq entry + 0x14] == 0  ->  21681cc path cannot progress
+                              ->  ageBlocks / the 21682e0 decrement never run
+                              ->  [archq+0x1c] stuck at 1
+                              ->  completion at 0x2168348 never runs
+                              ->  work item stays kStatusActive
+                              ->  updateTasks correctly keeps the entry
+                              ->  cursor never released
+                              ->  startNewTasks skips ~57,000 times
+
+What changed is the mechanism by which the alternative routes closed: not
+"they were never reachable" but "they were reachable, ran, and a latch shut
+them". That is a better explanation because it accounts for the 11 writes
+instead of contradicting them.
+
+NEXT
+----
+History watch moved from the cursor (settled) to [updq entry + 0x14] =
+0xf7d05bc, with lr/r3/r29/r31 -- the instrument that named
+instantiateFromPool as the writer of +0x18. Store watch 2 stays on
+[archq+0x1c] to confirm it remains quiescent.
+
+sha256 b80f42e9e9c62e6ba584ca28c8de207cce18d59ee7db143ec9c83d7e7f0573fe
+make exit 0, zero format warnings, queued for automatic push.
+
+METHOD NOTE
+-----------
+Writing the prediction down is what made this round productive. A wrong
+prediction that is checked costs one run and buys a real mechanism; a wrong
+belief that is never stated survives for four rounds, which is exactly what
+happened with "nothing sets the limit". Enumerate the whole region, not the
+half that contains the answer you expect.
