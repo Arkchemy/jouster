@@ -1,0 +1,120 @@
+2026-09-03 (run 3) -- the completion path, and the one word that blocks it
+==========================================================================
+
+Build Sep  3 2026 11:52:44, 25,140 frames, no crash words.
+
+THE DECODE THAT MADE THIS READABLE
+----------------------------------
+NefariousTechSupport/igRewrite8 (Apache-2.0) is a C# reimplementation of the
+Alchemy runtime, not just its file formats. It names what were raw numbers:
+
+    Status:   kStatusInactive=0 kStatusActive=1 kStatusComplete=2
+              kStatusDeviceNotFound=3 kStatusInvalidPath=4 ...
+
+The byte at [workItem+0x23] is the LOW BYTE of a u32 _status at +0x20 --
+PPC is big-endian, so a 4-byte enum is read with lbz at +3. Every observed
+value lands on a real name.
+
+So st1 = 1 = kStatusActive. igArchive::updateTasks keeps the entry BECAUSE
+its work item is still active. It has been behaving correctly the whole
+time. The question was never "why does it not reap".
+
+THE OBJECT GRAPH
+----------------
+updq entry 0xf7d05a8 (vtable 0x11e868):
+
+    +0x00 0x11e868    vtable
+    +0x04 0x3800001
+    +0x08 0xf7d05ec   -> the archq entry
+    +0x0c 0x1
+    +0x10 0x4503760   -> work item #2
+    +0x14 0x0         <- THE FIELD THAT DECIDES
+    +0x18 0xf800984   -> flush target A
+    +0x1c 0xf7f88d4   -> flush target B
+    +0x20 0x82992e8
+    +0x24 0x800
+
+Both flush targets are byte-identical (vtable 0x11eaf8, +0x08 = 0x829a610
+which is addWork's `this`, the igArchive itself), so they are two views of
+the same per-archive job structure, not two different queues.
+
+Both work items share vtable 0x11cc40, confirming both are igFileWorkItem:
+
+    #1 0x4503700  +0x18=0x800   +0x1c=0x0     status=1 kStatusActive
+    #2 0x4503760  +0x18=0x1800  +0x1c=0x1800  status=2 kStatusComplete
+
+Work item #2 has bytesProcessed == size. That is not a coincidence, and it
+is the cross-check that confirms the whole reading below.
+
+THE COMPLETION PATH
+-------------------
+    2168348  lwz r8, 0x18(r18)   r8 = [workItem+0x18] = size
+    216834c  li  r4, 2           kStatusComplete
+    2168350  mr  r3, r18
+    2168354  stw r8, 0x1c(r18)   [workItem+0x1c] = size  (processed := size)
+    2168358  bl  0x216e534       igFileWorkItem::setStatus(item, Complete)
+
+That is exactly the state work item #2 is in: +0x1c == +0x18 == 0x1800 and
+status 2. Work item #2 went through this code. Work item #1 has not:
++0x1c = 0, +0x18 = 0x800, status 1.
+
+So the completion path exists, is correct, and demonstrably works -- it has
+already run once, on the other work item.
+
+THE ONE WORD THAT BLOCKS IT
+---------------------------
+    2168204  bne   0x2168218     [updq entry+0x14] != 0 -> other work
+    2168208  lwz   r9, 0x1c(r17) r17 = archq entry 0xf7d05ec, [+0x1c]
+    216820c  cmpwi r9, 0
+    2168210  bne   0x216852c     non-zero -> SKIP
+    2168214  b     0x2168348     zero    -> COMPLETE
+
+[updq entry+0x14] measured 0, so the first branch is not taken. Then
+[archq entry+0x1c] measured 1, so the second branch IS taken, and control
+goes to 0x216852c -- which is nothing but the loop decrement:
+
+    216852c  addic. r15, r15, -1
+    2168530  addi   r22, r22, -4
+    2168534  bge    0x2167c60      next entry
+    2168538  ...                   epilogue
+
+**If [archq entry + 0x1c] were 0, the work item would be completed.** It is
+1, every frame, and that single word is the entire blockage.
+
+The archq entry's three interesting words, for the record:
+
+    +0x14 = 1   the cursor startNewTasks compares
+    +0x18 = 0   the limit (correct: serialised reader, one task in flight)
+    +0x1c = 1   gates completion            <- the live one
+
+Reading them together, +0x1c looks like outstanding-reads: one read was
+issued and nothing ever counted it as finished. The FS side says the read
+DID finish -- ard=1/131072, res=1, cb ok=1, IGA magic in the buffer -- so
+the suspicion is that our async completion never decrements this counter.
+That would make it our bug, in the shim, not the game's.
+
+NEXT
+----
+Store watch 2 retargeted from entry +0x18 (settled) to entry +0x1c
+(0xf7d0608), with writer history. This is the same instrument that
+identified igArchiveWorkItem::instantiateFromPool as the writer of +0x18,
+and it answers directly whether +0x1c is ever written, with what, and from
+where.
+
+Two outcomes:
+  never written after setup  -> nothing decrements it; find who should, and
+                                the fix is almost certainly in our FS
+                                completion path
+  written back up to 1       -> something re-arms it each cycle; find that
+
+sha256 b143572fabd9fb65d56fb3f44d913742530784a37d69861b5fd5bf4c733a8311
+make exit 0, zero format warnings, queued for automatic push.
+
+STATUS
+------
+Excluded by measurement so far: delivery, completion shape, read success,
+data in guest memory, ordering, archive being asked, work being queued,
+entry construction, archive parsing, work production, set-then-cleared,
+"nothing sets the limit", "updateTasks no-ops on an empty list", "the
+removal path releases the cursor", and now "updateTasks is failing to
+reap" -- it is correctly waiting on a work item that never completes.

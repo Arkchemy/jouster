@@ -2442,7 +2442,26 @@ static void game_thread_func(void *arg) {
      * 0x00000400 = 1024 buckets -- yet the read returns 0, which is why the
      * pool ends up with no buckets and igStringPool::remove hangs walking
      * buckets[0x811C9DC5]. Catch whoever clears it. */
-    g_ppc_watch_store_addr2 = 0xf7d0604u;  /* entry +0x18 -- the limit, latest write only */
+    /* Retargeted 2026-09-03 run 3. The limit at +0x18 is settled (0 is
+     * correct: a serialised reader). The live question is +0x1c.
+     *
+     * igArchive::updateTasks reaches the completion path ONLY when this
+     * word is zero:
+     *
+     *   2168208  lwz   r9, 0x1c(r17)   r17 = the archq entry
+     *   216820c  cmpwi r9, 0
+     *   2168210  bne   0x216852c       non-zero -> skip, do nothing
+     *   2168214  b     0x2168348       zero    -> COMPLETE the work item:
+     *                                    li r4, 2 (kStatusComplete)
+     *                                    stw r8, 0x1c(r18)  processed := size
+     *                                    bl 0x216e534  setStatus
+     *
+     * It reads 1 in every frame, so the completion never runs and the work
+     * item stays kStatusActive forever -- which is exactly why updateTasks
+     * keeps it. This watch answers whether +0x1c is ever written at all,
+     * and from where, the same way the watch on +0x18 identified
+     * instantiateFromPool. */
+    g_ppc_watch_store_addr2 = 0xf7d0608u;  /* entry +0x1c -- gates completion */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
