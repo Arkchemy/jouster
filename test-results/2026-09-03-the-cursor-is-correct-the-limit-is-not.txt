@@ -1,0 +1,88 @@
+2026-09-03 — the cursor is correct; the limit is the wrong number
+==================================================================
+
+Clean 420-sample run of the 01:55 build, with the polled history buffer
+moved onto the cursor.
+
+THE CURSOR'S FULL HISTORY
+-------------------------
+    [0]@1        =0x0        pc=0x2006064  lr=0x0
+    [1]@1234044  =0xffffffff pc=0x214de4c  lr=0x215bc58
+    [2]@1234059  =0x12       pc=0x215d438  lr=0x217d488
+    [3]@1362383  =0x0        pc=0x215bb38  lr=0x215be34
+    [4]@1362399  =0xffffffff pc=0x214de4c  lr=0x215bc58
+    [5]@1362414  =0x12       pc=0x215d438  lr=0x217d488
+    [6]@1600028  =0x0        pc=0x215bb38  lr=0x215be34
+    [7]@1610796  =0x1        pc=0x215c464  lr=0x2169290
+
+Entries [1] through [5] are NOT our object. The 0xffffffff -> 0x12 pattern
+repeats twice, long before the work item exists: this is the same guest
+address being used by earlier objects and freed. Only [6] and [7] belong to
+the work item, and anyone reading the earlier rows as meaningful will be
+reading someone else's memory.
+
+    [6] the allocation zeroes it
+        the limit is written 0 at call 1,610,587
+    [7] the cursor becomes 1 at call 1,610,796, 209 calls later
+
+WHO SETS THE CURSOR
+-------------------
+lr=0x2169290 is inside igArchive::startNewTasks -- the same function that
+then refuses the entry. And the code immediately there is exactly what
+starting a task looks like:
+
+    216920c: lwarx  r8, 0, r9      atomic refcount increment
+    2169218: stwcx. r10, 0, r9
+    2169228: cmpw   r30, r12       counter < limit ?
+    2169230: addi   r4, r30, 1     counter + 1
+    2169234: stw    r4, 8(r23)
+
+So the cursor reaching 1 is startNewTasks recording that it started one
+task -- the read that actually happened. That is correct behaviour.
+
+THE RIVAL HYPOTHESIS IS DEAD, AND IT WAS MINE
+----------------------------------------------
+The previous entry argued that a cursor of 1 against a limit of 0 fails the
+guard just as readily as a limit that should be non-zero, and that the
+cursor was the less understood of the two and might be the wrong number.
+
+It is not. The cursor is written once, by the function that consumes it, at
+the moment it legitimately starts work. Raising it as a rival was right --
+it was equally consistent with everything known then, and it took one run to
+settle -- but the answer is that the original reading holds:
+
+    cursor = 1   one task started, correct
+    limit  = 0   a budget that should have been at least 1, and never was
+
+A LIMIT ON THIS EVIDENCE
+------------------------
+The history buffer is a POLLED watch: ppc_poll_watch_mem samples at function
+entries and records a change when it sees one. So lr names where execution
+was when the change was NOTICED, not necessarily the storing instruction.
+The pc field on [7] is 0x215c464, inside igObject::decrementRefCount, which
+startNewTasks calls at 0x216928c -- that is the poll site, not the writer.
+
+Strong evidence the write happens inside startNewTasks. Not proof of the
+exact store. Recorded so the next reader does not treat lr as a writer
+address.
+
+TWELVE THINGS EXCLUDED
+----------------------
+    completion never delivered        done=1
+    wrong completion shape            ok=1, lastmsgq=0
+    read failed or returned wrong     res=1, valid IGA header
+    data never reached memory         header verified in guest memory
+    delivery order clobbers state     fixed, confirmed live
+    archive never asked to continue   58,000 calls
+    work never queued                 n=1, linked, pointer non-null
+    entry never properly constructed  populated except +0x18
+    archive never parsed              open/header/TOC all ran, in order
+    nothing ever produced work        addWork ran three times
+    the field is set then cleared     three writes, all at construction
+    the cursor is the wrong number    set once by startNewTasks, correctly
+
+WHAT IS LEFT
+------------
+One question, unchanged but now unambiguous: what should set that limit to a
+non-zero value, and when? On this side nothing does -- the only write is the
+zero at construction. That is a question a working boot answers.
