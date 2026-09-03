@@ -1,0 +1,82 @@
+2026-09-03 -- it was never file I/O. It is decompression.
+==========================================================
+
+HOW THE FIELDS WERE NAMED
+-------------------------
+The engine's own reflection metadata is in .rodata, emitted by the
+recompiler as ppc_store_u8 calls. Reconstructing bytes 1136900..1137700
+yields igArchiveBlockTask's field-name table and its State enum:
+
+    kStateReading = 0,  kStateDecompressing = 1
+
+    _parent, _state, _readWorkItem, _decompressJobFlag, _compressedBlock,
+    _uncompressedBlock, _dstBuffer, _chunkLength, _offsetIntoBlock,
+    _batchInput, _batchInputSize, _batchOutput, _batchOutputSize
+
+Thirteen fields, and the object occupies +0x08..+0x38 -- exactly thirteen
+words after the 8-byte igObject base. The count confirms the mapping.
+
+THE DECODE
+----------
+    +0x08  _parent             0xf7d05ec   the archq entry
+    +0x0c  _state              0x1         kStateDecompressing
+    +0x10  _readWorkItem       0x4503760   work item #2, kStatusComplete
+    +0x14  _decompressJobFlag  0x0         <-- THE BLOCKED FIELD
+    +0x18  _compressedBlock    0xf800984
+    +0x1c  _uncompressedBlock  0xf7f88d4
+    +0x20  _dstBuffer          0x82992e8
+    +0x24  _chunkLength        0x800       = work item #1's size, exactly
+    +0x28  _offsetIntoBlock    0x0
+    +0x2c  _batchInput         0xf7f8900
+    +0x30  _batchInputSize     0x1800      = the completed read, exactly
+    +0x34  _batchOutput        0xf7f0880
+    +0x38  _batchOutputSize    0x8000      32 KB output buffer
+
+Three independent cross-checks land: _state says reading is finished,
+_readWorkItem is the work item measured as kStatusComplete, and
+_batchInputSize is byte-for-byte the size of the read that completed.
+
+WHAT THIS MEANS
+---------------
+The archive read its compressed block successfully and moved on. It is
+sitting in kStateDecompressing waiting for _decompressJobFlag to become
+non-zero, and that flag is set by a decompression job that never completes.
+
+Everything previously attributed to a stuck file read was downstream of
+this. Work item #1 -- 2,048 bytes at offset 0, still kStatusActive -- is
+the OUTER request the game made; _chunkLength 0x800 matches it exactly. It
+cannot complete until decompression produces the bytes.
+
+And updateTasks, once more, is correct: at 21681cc it tests _state == 1
+(Decompressing), then polls _decompressJobFlag, and does nothing while the
+flag is clear. It is a poll loop waiting on a job, behaving exactly as
+written.
+
+THE JOB QUEUE IS THE SUSPECT
+----------------------------
+    igJobQueue::addBatch(Module*, void*, int, int*, bool)
+    igJobQueue::flush(int*)
+    igJobQueue::init / start / stop / shutdown / setMemoryPool
+
+addBatch's int* is the completion flag and flush waits on it, which is
+precisely the _decompressJobFlag / _batch* group. Core::lzmaInflate exists
+in the tree, so the decompression itself is present.
+
+The run reports threads: created=2 started=2. A job queue with per-core
+workers on a three-core machine should create more than that. The leading
+hypothesis is that the job queue's workers were never started, so batches
+are submitted and never executed.
+
+NEXT
+----
+Instrument igJobQueue::addBatch, start and flush: hit counts, and for
+addBatch the flag pointer it is given. Three outcomes:
+  addBatch never called   -> the task never submits; look upstream
+  called, flush waiting   -> submitted but nothing executes it (workers)
+  called, flag elsewhere  -> the flag pointer is not &_decompressJobFlag
+
+CORRECTION TO THE RECORD
+------------------------
+"The archive is waiting on a 2,048-byte read of its own header that never
+gets marked finished" was the right symptom and the wrong cause. The read
+finished. The decompression of what was read did not.
