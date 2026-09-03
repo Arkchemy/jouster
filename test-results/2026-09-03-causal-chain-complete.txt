@@ -1,0 +1,114 @@
+2026-09-03 (static) -- the causal chain, end to end
+===================================================
+
+Found by static reading during a hardware run, then to be confirmed by
+measurement. Every link below is either measured on hardware or read from
+the translation; none is inferred from a function's name.
+
+THE CHAIN
+---------
+    [updq entry 0xf7d05a8 + 0x14] == 0        MEASURED
+      -> 2168204 "bne 0x2168218" not taken
+      -> 0x2168218 (the do-work path) is SKIPPED
+      -> igArchiveBlockManager::ageBlocks never runs
+      -> the decrement at 21682e0 never runs
+      -> [archq entry 0xf7d05ec + 0x1c] stays 1       MEASURED
+      -> 2168210 "bne 0x216852c" taken every time
+      -> the completion at 0x2168348 never runs
+      -> work item #1 stays kStatusActive (1)         MEASURED
+      -> igArchive::updateTasks correctly KEEPS the entry
+      -> the cursor [archq entry + 0x14] is never released
+      -> [e+0x14]=1 > [e+0x18]=0
+      -> igArchive::startNewTasks skips ~57,000 times MEASURED
+
+REACHABILITY, WHICH IS THE LOAD-BEARING PART
+--------------------------------------------
+The decrement of [archq entry + 0x1c] happens in exactly two places, both
+inside updateTasks and both on r17, which is the register holding the archq
+entry:
+
+    216815c  lwz  r7, 0x1c(r17)
+    2168160  addi r9, r7, -1
+    2168164  stw  r9, 0x1c(r17)
+
+    21682c8  bl   0x216e330      igArchiveBlockManager::ageBlocks
+    21682d4  lwz  r12, 0x1c(r17)
+    21682dc  addi r9, r12, -1
+    21682e0  stw  r9, 0x1c(r17)
+
+Every label in the 0x21682xx region and every branch targeting it:
+
+    labels : 2168208 2168218 216823c 2168250 2168270 2168278 216828c
+             21682a0 21682d4
+    branches into the region from outside:
+             2167d34 beq 0x2168208     (st2 == 0)   not our path
+             2167d3c beq 0x2168208     (st2 == 1)   not our path
+             2168204 bne 0x2168218     <- the only way in for us
+    branches within:
+             2168220, 2168248, 2168260, 2168268, 2168284, 216829c,
+             21682a8 beq 0x21682d4
+
+So L_21682d4 -- the block-completion decrement -- is reachable ONLY through
+0x2168218, which is gated on [updq entry + 0x14] != 0. That single word
+being zero is the root, and everything downstream follows mechanically.
+
+THE COMPLETION TEST APPEARS TWICE, IDENTICALLY
+----------------------------------------------
+    2168144  lwz   r9, 0x1c(r17)
+    2168148  li    r6, 1
+    216814c  cmpwi r9, 0
+    2168150  stw   r6, 0xc(r16)     [updq entry+0xc] = 1
+    2168154  bne   0x216852c        non-zero -> skip
+    2168158  b     0x2168348        zero    -> COMPLETE
+
+We measured [updq entry+0xc] == 1, so this path HAS executed. The engine
+reached the completion test, found +0x1c non-zero, and declined -- exactly
+as the code says it should.
+
+THE FS CALLBACK IS NOT OBVIOUSLY WRONG
+--------------------------------------
+0x2155b48 is igCafeStorageDevice::asyncCallback(FSClient*, FSCmdBlock*,
+int result, void* context):
+
+    2155b68  lwz r10, 8(r6)      r6 = context; r10 = [workItem+8]
+    2155b6c  lwz r3, 0x24(r10)
+    2155b74  lwz r0, 0x1cc(r9)   virtual slot 0x1cc
+    2155b84  bctrl               notify the requester
+    2155b88  cmpwi r30, 1        result == 1 ?
+    2155b8c  li  r4, 2           kStatusComplete
+    2155ba4  mr  r3, r31         r3 = the work item
+    2155ba8  bl  0x216e534       setStatus(workItem, status)
+
+So the 4th argument is the work item, and on result==1 it sets
+kStatusComplete. The log agrees: setStatus(0x452cfc8, 0x2) is recorded, and
+0x452cfc8 is precisely the work item igCafeStorageDevice::read was given
+(w5 wi=0x452cfc8). Our shim's callback delivery works.
+
+But that is a DIFFERENT work item from the archive's own #1 (0x4503700),
+which is the one stuck Active. The virtual call at 2155b84, before
+setStatus, is the notify-the-requester hook and is the most likely place
+where the archive learns a block arrived -- i.e. the most likely writer of
+[updq entry + 0x14]. dispatchmiss and missplit both read 0, so it is not
+dispatching into nothing.
+
+NEXT MEASUREMENT
+----------------
+Store watch on [updq entry + 0x14] = 0xf7d05bc, with writer history --
+the same instrument that identified instantiateFromPool. It answers
+whether that word is ever written, with what, and from where.
+
+Note the currently running build watches [archq entry + 0x1c] = 0xf7d0608.
+Static analysis above now predicts that watch will show NO writes after
+setup, because both of its decrements are unreachable. That is a real
+prediction made before the log arrives, and it is worth checking rather
+than skipping: if +0x1c IS written, the reachability argument is wrong
+somewhere and this whole chain needs re-examining.
+
+WHAT IS NOW EXCLUDED
+--------------------
+delivery, completion shape, read success, data in guest memory, ordering,
+archive being asked, work being queued, entry construction, archive
+parsing, work production, set-then-cleared, "nothing sets the limit",
+"updateTasks no-ops on an empty list", "the removal path releases the
+cursor", "updateTasks fails to reap" (it correctly waits), and the FS
+callback's argument shape.
