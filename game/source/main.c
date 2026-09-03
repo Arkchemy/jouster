@@ -2857,7 +2857,7 @@ static void game_thread_func(void *arg) {
      *
      * so it should fire exactly once. If hit_count is 0 the list was never
      * built, and updateTasks' empty-list early exit is fully explained. */
-    g_ppc_watch[3].pc = 0x2167934u; /* igArchive::activate -- r3=this */
+    g_ppc_watch[3].pc = 0x2167c14u; /* igArchive::updateTasks -- r3=this */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -3704,6 +3704,39 @@ int main(int argc, char *argv[]) {
             uint32_t upd_n    = upd_list ? ppc_load_u32(&g_ctx, upd_list + 8u) : 0u;
             uint32_t upd_arr  = upd_list ? ppc_load_u32(&g_ctx, upd_list + 0x14u) : 0u;
             uint32_t upd_e0   = (upd_arr && upd_n) ? ppc_load_u32(&g_ctx, upd_arr) : 0u;
+            /* 2026-09-03 run: n=1, so updateTasks does NOT take the empty-list
+               early exit -- it enters the loop and the per-entry test decides.
+               Dump exactly the words that test reads, for entry 0 (the loop
+               runs backwards from n-1, which is 0 when n==1):
+
+                 2167c6c  lwz   r17, 8(r16)     r17 = [e+8]
+                 2167c70  lwz   r18, 8(r17)     r18 = [r17+8]
+                 2167c74  cmpwi r18, 0
+                 2167c7c  beq   2167c8c         null   -> REMOVE (releases cursor)
+                 2167c80  lbz   r0, 0x23(r18)
+                 2167c84  cmpwi r0, 1
+                 2167c88  beq   2167d20         st==1  -> KEEP
+                                                else   -> REMOVE
+
+               and then, on the keep path:
+
+                 2167d20  cmpwi r11, 0          r11 = [e+0xc], busy check
+                 2167d28  lwz   r7, 0x10(r16)
+                 2167d2c  lbz   r4, 0x23(r7)    the second state byte
+
+               plus [e+0x18] and [e+0x1c], whose +0x14 the remove path zeroes
+               -- that is the cursor release, and one of them should be the
+               archq entry 0xf7d05ec whose +0x14 has read 1 all run. */
+            uint32_t ue8 = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 8u) : 0u;
+            uint32_t ue88 = ue8 ? ppc_load_u32(&g_ctx, ue8 + 8u) : 0u;
+            uint32_t ust1 = ue88 ? (uint32_t)ppc_load_u8(&g_ctx, ue88 + 0x23u) : 0xffu;
+            uint32_t uec = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 0xcu) : 0u;
+            uint32_t ue10 = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 0x10u) : 0u;
+            uint32_t ust2 = ue10 ? (uint32_t)ppc_load_u8(&g_ctx, ue10 + 0x23u) : 0xffu;
+            uint32_t ue18 = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 0x18u) : 0u;
+            uint32_t ue1c = upd_e0 ? ppc_load_u32(&g_ctx, upd_e0 + 0x1cu) : 0u;
+            uint32_t ue18c = ue18 ? ppc_load_u32(&g_ctx, ue18 + 0x14u) : 0xffffffffu;
+            uint32_t ue1cc = ue1c ? ppc_load_u32(&g_ctx, ue1c + 0x14u) : 0xffffffffu;
             uint32_t awi_meta = ppc_load_u32(&g_ctx, 437804u);
             uint32_t awi_m[12];
             for (int q = 0; q < 12; q++) awi_m[q] = awi_meta ? ppc_load_u32(&g_ctx, awi_meta + (uint32_t)(q * 4)) : 0u;
@@ -3817,7 +3850,7 @@ int main(int argc, char *argv[]) {
                        " -- w0(igArchive::addWork) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igArchive::startBlockRead) hits=%u@%llu r3=0x%x r4=0x%x"
                        " -- w2(igArchive::open) hits=%u@%llu this=0x%x r4=0x%x"
-                       " -- w3(igArchive::activate) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
+                       " -- w3(igArchive::updateTasks) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- pool0x810128[0..3]=0x%x,0x%x,0x%x,0x%x"
@@ -3870,6 +3903,8 @@ int main(int argc, char *argv[]) {
                        " e0d=[%s] f8d=[%s]"
                        " awimeta=0x%x m=[%s]"
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
+                       " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
+                       " rel: e18=0x%x[+14]=%d e1c=0x%x[+14]=%d"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
                        " -- frontier: mask=0x%02x"
@@ -4018,6 +4053,8 @@ int main(int argc, char *argv[]) {
                        arch_e0s, arch_f8s,
                        awi_meta, awi_ms,
                        upd_list, upd_n, upd_arr, upd_e0,
+                       ue8, ue88, ust1, uec, ue10, ust2,
+                       ue18, (int)ue18c, ue1c, (int)ue1cc,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,

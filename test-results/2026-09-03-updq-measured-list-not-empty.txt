@@ -1,0 +1,130 @@
+2026-09-03 (run) -- the 421316 list is NOT empty; the empty-list theory is dead
+==============================================================================
+
+Build Sep  3 2026 02:53:24, 25,140 of 25,200 frames, 420 frame dumps.
+
+THE MEASUREMENT
+---------------
+    updq: list=0x0        n=0  arr=0x0        e0=0x0          57 frames
+    updq: list=0xf7d062c  n=0  arr=0xf7d0618  e0=0x0          92 frames
+    updq: list=0xf7d062c  n=1  arr=0xf7d0618  e0=0xf7d05a8   271 frames
+
+    w3(igArchive::activate) hits=1@205216 r3=0x3 r4=0x4407ed0 r5=0x1
+
+n = 1 for the last 271 frames. igArchive::activate ran exactly once, as its
+self-guard predicts. So:
+
+  * the empty-list early exit at 2167c38 is NOT why the cursor is never
+    released. updateTasks enters its loop, with r15 = n-1 = 0 and r22 = 0.
+  * that was outcome three of the three I wrote down last round, and it is
+    the one that says the previous explanation is wrong. Recorded plainly:
+    the theory that updateTasks no-ops on an empty list is refuted by its
+    own measurement.
+
+It stays useful that the prediction was written down before the run. The
+three outcomes were distinguishable, and the log picked one without
+ambiguity.
+
+WHAT THE GUARD ACTUALLY SHOWS
+-----------------------------
+    archq: owner=0xf8009f0 list=0xf7d0660 n=1 arr=0xf7d064c
+           e0=0xf7d05ec f8=0x4503700 f14=1 f18=0
+
+f14 = 1, f18 = 0, unchanged for 271 frames. Cursor 1, limit 0, skip forever,
+57,797 calls to startNewTasks. The gate itself is exactly as described.
+
+The 16-word dump of that entry (0xf7d05ec):
+
+    +0x00  0x11e7e8     vtable
+    +0x04  0x3800002
+    +0x08  0x4503700    the work item
+    +0x0c  0x829a610
+    +0x10  0x8299cc0
+    +0x14  0x1          CURSOR
+    +0x18  0x0          LIMIT
+    +0x1c  0x1
+    +0x20  0x1
+    +0x24  0x0
+    +0x28  0x17
+    +0x2c  0xf7d05a8    <- the 421316 list's element 0
+
+The archq entry carries the updq entry at +0x2c. The two lists hold
+related objects, which is consistent with updateTasks' removal path
+zeroing [e+0x18]+0x14 and [e+0x1c]+0x14 on ITS entry and thereby
+releasing the cursor on THIS one.
+
+THE READ ITSELF IS FINE
+-----------------------
+    fs: open=2 rd=0/0 ard=1/131072 lasth=1 lastpos=0
+    cb: ok=1 skip=0 lastcb=0x2155b48 lastmsgq=0x0
+    rdq: sz=131072 cnt=1 res=1 buf=0x4530c40 fsz=198695
+         head=[0x4947411a,0x08000000,0x6a000000,0x02000000]
+    cbwork=15  asyncq: q=1 done=1 drop=0 pend=0
+
+head[0] = 0x4947411a is, little-endian, the bytes 1a 41 47 49 -- the IGA
+archive magic. One 128 KB async read completed, result 1, callback
+delivered, no drops. bootstrap.bld is 198,695 bytes, so 67,623 bytes
+remain and would need a second block read. That second read is exactly
+what the cursor gate is preventing.
+
+    [FSOpenFile] /vol/content/permanent/bootstrap.arc -> (NOT FOUND) handle=0
+    [FSOpenFile] /vol/content/permanent/bootstrap.bld -> (found)     handle=1
+
+The .arc miss is the expected fallback, not a fault.
+
+Other state at the last frame: calls=3,980,508 and still climbing, so the
+guest is executing, not hung. threads created=2 started=2. sync used=[41,3,7]
+with exhausted=[0,0,0], so no table pressure. evt tmo=285 -- the waiters are
+timing out and re-looping rather than being signalled. deferred n=396.
+memwatch n=8, still the slot capacity.
+
+WHAT IS ARMED NEXT
+------------------
+Since the loop runs, the per-entry test decides. Dumping exactly the words
+it reads, for entry 0:
+
+    2167c6c  lwz   r17, 8(r16)     r17 = [e+8]
+    2167c70  lwz   r18, 8(r17)     r18 = [r17+8]
+    2167c74  cmpwi r18, 0
+    2167c7c  beq   2167c8c         null   -> REMOVE  (releases the cursor)
+    2167c80  lbz   r0, 0x23(r18)
+    2167c84  cmpwi r0, 1
+    2167c88  beq   2167d20         st==1  -> KEEP
+                                   else   -> REMOVE
+
+    2167d20  cmpwi r11, 0          r11 = [e+0xc], the busy check
+    2167d28  lwz   r7, 0x10(r16)
+    2167d2c  lbz   r4, 0x23(r7)    the second state byte, tested 0/1/2
+
+New per-frame fields:
+
+    updent: e8=  e88=  st1=  ec=  e10=  st2=
+    rel:    e18=0x..[+14]=..  e1c=0x..[+14]=..
+
+The `rel` pair is the payoff: those are the two objects whose +0x14 the
+removal path zeroes. If one of them is 0xf7d05ec, the release path is
+confirmed wired to the cursor we have been watching, and the only remaining
+question is which test is holding the entry on the keep path.
+
+Reading it:
+  st1 != 1  or  e88 == 0   -> it SHOULD be taking the remove path; then the
+                              question is whether updateTasks is being called
+                              at all, which w3 now answers directly.
+  st1 == 1                 -> it is parked on the keep path, and st2 (the
+                              0/1/2 test at 2167d30..2167d44) says where.
+
+Watch slot 3 retargeted from igArchive::activate (answered: hits=1) to
+igArchive::updateTasks itself at 0x2167c14, so the hit count is measured in
+the same run rather than carried over from an older build. Its .pc and its
+printf label were changed together, as always now.
+
+BUILD
+-----
+Jouster.nro
+sha256 85eb190c7fc504c62f99b39b43d5af548f0f334dd6d8f47a0700b73ab5e431a3
+176,428,409 bytes, make exit 0, zero "expects argument of type" warnings.
+
+Note both builds today came to exactly 176,428,409 bytes -- the ROM blob
+dominates and size does not distinguish them. The copy was therefore
+verified by reading the file back off the card and hashing it, not by size.
+That check is worth keeping: a stale .nro would otherwise be invisible.
