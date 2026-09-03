@@ -1,0 +1,81 @@
+2026-09-03 — there is no constructor: the work item is built from metadata
+===========================================================================
+
+Read statically while the Cemu oracle runs, from the address the store watch
+named.
+
+WHAT addWork ACTUALLY CALLS
+---------------------------
+    216b004: bl 0x21c5f60  ->  igArchiveWorkItem::instantiateFromPool(igMemoryPool*)
+
+and that function is eleven instructions long:
+
+    21c5f78: mr   r31, r3                  save the pool
+    21c5f7c: addi r3, r30, 0x4d3c          &meta slot (.bss+322876)
+    21c5f88: bl   0x215b914                getClassMetaSafeInternal
+    21c5f8c: lwz  r3, 0x4d3c(r30)          r3 = the metaobject
+    21c5f90: mr   r4, r31                  r4 = the pool
+    21c5f94: bl   0x215befc                igMetaObject::createInstance(pool)
+
+THERE IS NO HAND-WRITTEN CONSTRUCTOR
+-------------------------------------
+igArchiveWorkItem is never constructed by code that knows what an
+igArchiveWorkItem is. It is allocated and initialised REFLECTIVELY:
+getClassMetaSafeInternal lazily builds the class's metaobject, and
+igMetaObject::createInstance allocates from the pool and populates the
+instance from that metaobject's field descriptors.
+
+Which means the field the archive gates on is not "a field a constructor
+forgot to set". It is a reflected field whose initial value comes from
+metadata. If the metadata is absent, empty, or short, createInstance has
+nothing to initialise from and the field keeps whatever the pool left it --
+zero.
+
+That is exactly consistent with what the store watch recorded: three writes
+during construction, the last one zero, and nothing ever again.
+
+WHY THIS FITS THE PROJECT'S OWN HISTORY
+----------------------------------------
+This engine is reflective throughout, and this project has already spent
+weeks on that machinery: appendToArkCore registering 965 classes,
+endArkRegister, getClassMetaSafeInternal appearing in the retail-vs-ours
+comparison on 2026-08-30 (retail 13,567 calls against our 105), and
+blaster's extract_field_schema.py recovering 616 field names statically
+because field OFFSETS need a live game.
+
+A class can be registered -- counted in the 965 -- and still carry a field
+table that is empty or wrong. Nothing measured so far distinguishes those.
+
+THIS BUILD
+----------
+The meta pointer lives at .bss+322876, jouster synthetic address 437804.
+The frame dump now carries:
+
+    awimeta=0x%x m=[12 words of the metaobject]
+
+    awimeta = 0                the class was never given a metaobject at all,
+                               and createInstance had nothing to work with
+    awimeta non-null, m mostly
+      zero                     the meta exists but is hollow -- registered
+                               without its field table
+    awimeta non-null, m
+      populated                the meta is fine and the fault is inside
+                               createInstance's use of it
+
+Those need different fixes and the words themselves will say which.
+
+176,428,409 bytes,
+sha256 f2544b686dfd4fa3c9166636f66d11ffd9b75a2d451604f243340466bfec2b8e
+
+WHAT IS DELIBERATELY NOT CLAIMED
+--------------------------------
+That +0x18 IS a reflected field with a non-zero default. That is the
+hypothesis this build tests, not a conclusion. It is possible the field is
+correctly zero at construction and something later is supposed to set it,
+in which case the metaobject will look fine and the question moves on to
+what that something is.
+
+The Cemu oracle would still settle it faster by reading the field on a
+working boot. It has been running under the interpreter for 13 minutes
+without the validation breakpoint firing, which is not yet distinguishable
+from "the interpreter has not reached engine code".

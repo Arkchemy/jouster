@@ -3632,6 +3632,26 @@ int main(int argc, char *argv[]) {
             uint32_t arch_f14 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x14u) : 0u;
             uint32_t arch_f18 = arch_e0 ? ppc_load_u32(&g_ctx, arch_e0 + 0x18u) : 0u;
             uint32_t arch_owner = ppc_load_u32(&g_ctx, 421308u);
+            /* igArchiveWorkItem has no hand-written constructor. addWork calls
+               igArchiveWorkItem::instantiateFromPool, which does only this:
+
+                 21c5f88  bl getClassMetaSafeInternal   (lazy-init the meta)
+                 21c5f8c  lwz r3, 0x4d3c(r30)           (r3 = the metaobject)
+                 21c5f94  bl igMetaObject::createInstance(pool)
+
+               So the object is built reflectively and every field's initial
+               value comes from the metaobject's field descriptors. The meta
+               pointer lives at .bss+322876 = 437804.
+
+               If the meta is null, or carries no fields, then createInstance
+               has nothing to initialise from and the field the archive gates
+               on stays at whatever the pool left -- which is zero, and is
+               exactly what the store watch recorded at construction. */
+            uint32_t awi_meta = ppc_load_u32(&g_ctx, 437804u);
+            uint32_t awi_m[12];
+            for (int q = 0; q < 12; q++) awi_m[q] = awi_meta ? ppc_load_u32(&g_ctx, awi_meta + (uint32_t)(q * 4)) : 0u;
+            char awi_ms[12 * 11 + 1]; awi_ms[0] = 0;
+            for (int q = 0; q < 12; q++) { char t[12]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)awi_m[q]); strncat(awi_ms, t, sizeof(awi_ms) - strlen(awi_ms) - 1); }
             /* The 20:29 run named the guard: n=1, f8 non-null, but
                [e+0x14]=1 > [e+0x18]=0, so the single queued entry is skipped
                forever. Cursor past limit, with the limit at zero.
@@ -3790,6 +3810,7 @@ int main(int argc, char *argv[]) {
                        " rdq: sz=%u cnt=%u res=%d buf=0x%x fsz=%u head=[0x%08x,0x%08x,0x%08x,0x%08x] cbwork=%llu"
                        " asyncq: q=%u done=%u drop=%u pend=%u"
                        " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
+                       " awimeta=0x%x m=[%s]"
                        " e0d=[%s] f8d=[%s]"
                        " -- singleton: ohm=%u%s"
                        " mhc=%u%s"
@@ -3937,6 +3958,7 @@ int main(int argc, char *argv[]) {
                        arch_owner, arch_list, arch_n, arch_arr, arch_e0,
                        arch_f8, arch_f14, arch_f18,
                        arch_e0s, arch_f8s,
+                       awi_meta, awi_ms,
                        g_arkchemy_ohm_n, arkchemy_singleton_list(g_arkchemy_ohm_call, g_arkchemy_ohm_lr, g_arkchemy_ohm_gp, g_arkchemy_ohm_meta, g_arkchemy_ohm_n),
                        g_arkchemy_mhc_n, arkchemy_singleton_list(g_arkchemy_mhc_call, g_arkchemy_mhc_lr, g_arkchemy_mhc_gp, g_arkchemy_mhc_meta, g_arkchemy_mhc_n),
                        g_arkchemy_frontier_mask,
