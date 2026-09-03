@@ -1,0 +1,75 @@
+2026-09-03 — the limit is not metadata; the candidate is startBlockRead
+========================================================================
+
+Two things settled without a hardware round, using tooling this project
+already had.
+
+THE FIELD IS NOT REFLECTED
+--------------------------
+blaster's extract_field_schema.py reads the compiler-generated
+arkRegisterInitialize functions straight out of the recompiled C and reports
+each class's registered fields. For the class in question:
+
+    "Core::igArchiveWorkItem": [ { "name": "_fileWorkItem" } ]
+
+One reflected field. Not two, not twelve. And that field is the entry's +8 --
+the 0x4503700 that addWork was handed and that the entry carries.
+
+So +0x18 is a PLAIN member, not a reflected one. igMetaObject::createInstance
+stamps the vtable and initialises reflected fields; a plain member is left as
+the allocation found it, which is zero.
+
+That kills the hypothesis from the previous build outright. The metaobject
+being fully populated was not the point: even a perfect metaobject would
+never set this field, because the field is not in the schema.
+
+Neighbouring classes are the same shape -- igArchiveBlockTask has _parent,
+igArchiveBlockManager has _blocks, igArchiveBlock has _owner. One reflected
+field each. This engine reflects the object graph, not the scalars.
+
+SO SOMETHING MUST SET IT IN CODE
+---------------------------------
+And that code is in our binary, because it is the same translation. The
+candidate:
+
+    igArchive::startBlockRead(igFileDescriptor*, void*, uint, uint)  0x2168550
+    2168680: stw r24, 0x18(r30)
+
+It is the only clean writer of +0x18 in the archive code that is not a stack
+spill, and "start block read" is exactly the shape of thing that establishes
+a byte budget for a transfer.
+
+THIS BUILD
+----------
+w1 moves off updateTasks, which had answered (57,785 calls, it runs
+constantly), and onto startBlockRead:
+
+    w1(igArchive::startBlockRead) hits=%u r3=0x%x r4=0x%x
+
+    hits=0   the assignment never happens, the limit stays at the
+             allocation's zero, and the question becomes why this function
+             is never reached
+    hits>0   it does run, and either it writes to a different object or it
+             writes zero -- and r3/r4 say which
+
+176,428,409 bytes,
+sha256 c5473e63a8c41fa344a8906da8acb9fda4d9471379c84498e2351c201013d544
+
+Format-mismatch warnings 0; one pre-existing unused static. Checked.
+
+A ROUTE THAT IS CLOSED
+----------------------
+Cemu's GUI debugger works under the JIT and would answer this in two
+minutes, but it cannot be driven from here: no xdotool, wmctrl, ydotool,
+dotool or wtype is installed, and the session is Wayland, which blocks
+synthetic input by design. That one needs hands on the keyboard.
+
+The gdbstub route has now failed three times for unrelated reasons and has
+never produced a single measurement.
+
+METHOD NOTE
+------------
+The answer came from a tool written for this project weeks ago, for a
+different purpose, sitting unused in blaster. Two hardware rounds went into
+questions about metadata that extract_field_schema.py could have answered in
+thirty seconds without a Switch, a build, or an emulator.

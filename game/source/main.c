@@ -2698,7 +2698,18 @@ static void game_thread_func(void *arg) {
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
     g_ppc_watch[0].pc = 0x216aa9cu; /* igArchive::addWork -- r3=this r4=workItem */
-    g_ppc_watch[1].pc = 0x2167c14u; /* igArchive::updateTasks */
+    /* updateTasks answered (57,785 calls, it runs constantly). The open
+     * question is what sets the limit the archive gates on. It is NOT
+     * metadata: blaster's field-schema extractor shows igArchiveWorkItem
+     * registers exactly one reflected field, _fileWorkItem, which is the
+     * entry's +8. So +0x18 is a plain member that some function must assign,
+     * and igArchive::startBlockRead is the only clean candidate --
+     * 0x2168680 is `stw r24, 0x18(r30)`, and a block read is exactly the
+     * thing that would establish a byte budget.
+     *
+     * If this reads 0, that assignment never happens and the limit stays as
+     * the allocation left it. */
+    g_ppc_watch[1].pc = 0x2168550u; /* igArchive::startBlockRead -- r3=fd r4=buf */
     g_ppc_watch[2].pc = 0x2169830u; /* igArchive::open -- r3=this */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
