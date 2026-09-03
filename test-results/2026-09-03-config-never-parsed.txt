@@ -1,0 +1,90 @@
+2026-09-03 (run 9) -- nothing executes a batch, and the config may explain why
+==============================================================================
+
+Build Sep  3 2026 18:50:48.
+
+    w1(igJobQueue::addBatch)      hits=1@1610869
+    w0(Core::jqFlush)             hits=0
+    w2(Core::jqTempWorkerLoopOnce) hits=0
+    w6(Core::jqWorkerThread)      hits=2
+    jqflags A=0 B=0 C=0 in all 420 frames
+    evt: sig=2 wake=1 tmo=286
+
+Both executors are flat zero. One batch is submitted and **nothing, anywhere,
+ever executes it**.
+
+THE ARCHIVE ASKS FOR NON-BLOCKING WORK
+--------------------------------------
+The submission is inside igArchive::updateTasks itself:
+
+    2168094  addi r3, r29, 0xcb0    Module*
+    21680a0  mr   r4, r25           batch data
+    21680a4  li   r5, 0x18          count = 24
+    21680b0  addi r6, r27, -0x2d20  completion flag pointer
+    21680a8  li   r7, 0             <- blocking = FALSE
+    21680b8  bl   igJobQueue::addBatch
+
+addBatch only runs a batch inline when that flag is set:
+
+    21dc074  lwz    r5, 0xc(r16)
+    21dc078  clrlwi. r4, r5, 0x1f
+    21dc084  bl     Core::jqFlush
+
+So the archive deliberately asks for background execution, and the workers
+that should provide it can never wake (see run 8: A and C are written once,
+at init, to zero, and never again).
+
+THE UPSTREAM FINDING
+--------------------
+The game has opened exactly TWO files in the whole run:
+
+    /vol/content/permanent/bootstrap.arc  (NOT FOUND)
+    /vol/content/permanent/bootstrap.bld  (found)
+
+alchemy.xml is never opened. The harness's own [fs] self-test confirms the
+file is present and reachable through three path forms (542 bytes), so this
+is not a missing file or a broken mapping.
+
+It is never opened because the engine does not read it from disc.
+igArkCore::init does this instead:
+
+    2147fa4  strlen the embedded config text
+    2147fc4  bl igFileContext::addReadOnlyMemoryEntry("ram:/alchemy.xml", ...)
+    2147fd4  bl igFile::instantiateFromPool
+    2147ff0  bctrl                          open it
+
+It registers an EMBEDDED copy as an in-memory read-only file on a `ram:`
+virtual device, then opens and parses that into the registry. Neighbouring
+rodata confirms the shape: `Core/VirtualDevices`, `ram:/alchemy.xml`,
+`Core/@stringPoolStatisticsLevel`, `Gfx/@vramASize`, `Gfx/@vramBSize`,
+`Core/@failOnDllVersionMismatch`, and the igXmlDocument parse errors
+`expected >` and `unexpected end of data`.
+
+WHY THIS MATTERS MORE THAN THE JOB QUEUE
+----------------------------------------
+Every subsystem this investigation has touched is configured from that
+registry. The disc's own alchemy.xml carries:
+
+    <Core jobqueueBatchDataHeapSize = "256" />
+
+If the parse never happens, the job queue gets no batch-data heap, the
+memory pools get no sizes, Gfx gets no VRAM budgets, and Tfb gets no
+startLevel. A batch submitted against a zero-sized batch-data heap being
+unrunnable is a much better explanation than anything chased today, and it
+sits upstream of the job queue, the archive and the decompression alike.
+
+Stated as a hypothesis, not a finding. It has not been measured yet.
+
+NEXT
+----
+    w0 -> igFileContext::addReadOnlyMemoryEntry (0x2172194)
+    w2 -> igRegistry::getValue                  (0x21c3e7c)
+
+  addReadOnlyMemoryEntry hits 0 -> the config is never even registered, and
+                                   igArkCore::init is failing earlier than
+                                   anyone has looked
+  hits >= 1, getValue hits 0    -> registered but never queried
+  both non-zero                 -> the config path runs, and the hypothesis
+                                   is wrong; go back to the job queue
+
+sha256 ca9d972961b295d625185ff11862e41ce2d439a5c0a20525691d621b86319d0e
