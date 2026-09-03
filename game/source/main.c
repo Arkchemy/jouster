@@ -2730,7 +2730,7 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x216aa9cu; /* igArchive::addWork -- r3=this r4=workItem */
+    g_ppc_watch[0].pc = 0x21dc36cu; /* igJobQueue::flush -- r3 = flag ptr waited on */
     /* updateTasks answered (57,785 calls, it runs constantly). The open
      * question is what sets the limit the archive gates on. It is NOT
      * metadata: blaster's field-schema extractor shows igArchiveWorkItem
@@ -2742,13 +2742,19 @@ static void game_thread_func(void *arg) {
      *
      * If this reads 0, that assignment never happens and the limit stays as
      * the allocation left it. */
-    g_ppc_watch[1].pc = 0x2168550u; /* igArchive::startBlockRead -- r3=&workItem slot (2168670 does
+    /* 2026-09-03: retargeted. startBlockRead is answered (hits=1).
+     * igArchiveBlockTask is stuck in kStateDecompressing with
+     * _decompressJobFlag == 0, so the decompression batch is the live
+     * question. addBatch(Module* r3, void* r4, int r5, int* r6, bool r7)
+     * -- r6 should be &_decompressJobFlag = 0xf7d05bc. */
+    g_ppc_watch[1].pc = 0x21dc09cu; /* igJobQueue::addBatch -- r6 = flag ptr */
+ /* igArchive::startBlockRead -- r3=&workItem slot (2168670 does
                                        lwz r30,0(r28)), r4=igFileDescriptor.
                                        NOT a buffer: work item +0x08 is _file,
                                        and [_file+0x24] is the device that
                                        asyncCallback resolves via vtable slot
                                        0x1cc = getPhysicalDevice. */
-    g_ppc_watch[2].pc = 0x2169830u; /* igArchive::open -- r3=this */
+    g_ppc_watch[2].pc = 0x21db910u; /* igJobQueue::start -- do workers ever start? */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -3942,9 +3948,9 @@ int main(int argc, char *argv[]) {
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
                        " w6(startNewTasks) hits=%u"
                        " w7(appendToArkCore) hits=%u"
-                       " -- w0(igArchive::addWork) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
-                       " -- w1(igArchive::startBlockRead) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w2(igArchive::open) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w0(igJobQueue::flush) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
+                       " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
+                       " -- w2(igJobQueue::start) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(igArchive::updateTasks) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"

@@ -80,3 +80,38 @@ CORRECTION TO THE RECORD
 "The archive is waiting on a 2,048-byte read of its own header that never
 gets marked finished" was the right symptom and the wrong cause. The read
 finished. The decompression of what was read did not.
+
+ADDENDUM (static, same day) -- who is supposed to run the job
+=============================================================
+    igJobQueue::flush  ->  Core::jqFlush  ->  Core::jqTempWorkerLoopOnce
+
+so flush runs jobs INLINE on the calling thread. There is no OSCreateThread
+anywhere in the job-queue region itself.
+
+Callers of igJobQueue::flush, the complete list:
+    Gfx::igIntraMeshSorter::waitForSortJobs   (graphics; not reached yet)
+    Core::igArchive::updateTasks              (2167c90 and 2167f24)
+
+Both archive-side calls sit on paths that require the job to have already
+finished, so nothing in the archive path pumps the queue. That cannot be how
+retail behaves, which means real worker threads must exist. They do:
+
+    igJobQueue::start -> Core::jqStart -> Core::_jqStart
+                      -> OSCreateThread + OSResumeThread
+
+Only four things in the whole binary create threads: igThread::activate,
+FMOD's thread helper, rrThreadCreate, and Core::_jqStart. Every run reports
+threads: created=2 started=2, which is too few to include job workers.
+
+So the hypothesis is sharp: igJobQueue::start never ran, no worker threads
+exist, submitted batches are never executed, _decompressJobFlag is never
+set, and updateTasks polls it forever. The queued build watches
+igJobQueue::start directly, so hits=0 confirms it.
+
+A CORRECTION TO THE "LATCH"
+---------------------------
+The store at 2168150 that I described as a latch closing off other routes is
+`_state = 1`. With the field names recovered, that is not a latch at all --
+it is the legitimate kStateReading -> kStateDecompressing transition. The
+mechanism I described was right; calling it a latch implied a defect where
+there is none. updateTasks was behaving correctly there too.
