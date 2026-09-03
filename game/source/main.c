@@ -3784,7 +3784,7 @@ int main(int argc, char *argv[]) {
                        " w6(startNewTasks) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igArchive::addWork) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
-                       " -- w1(igArchive::updateTasks) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w1(igArchive::startBlockRead) hits=%u@%llu r3=0x%x r4=0x%x"
                        " -- w2(igArchive::open) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(reallocCommon) hits=%u@%llu pool=0x%x ptr=0x%x size=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"

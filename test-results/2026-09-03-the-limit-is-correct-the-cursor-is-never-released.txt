@@ -1,0 +1,94 @@
+2026-09-03 — the limit is correct; nothing ever releases the cursor
+===================================================================
+
+Run of the 02:27 build. The candidate it tested is wrong, and settling that
+produced the reframe that makes everything else fit.
+
+startBlockRead RUNS, AND IS NOT THE WRITER
+-------------------------------------------
+    igArchive::startBlockRead  hits=1 @1,610,605  r3=0x3fffe708 r4=0x450f760
+
+It runs exactly once. But the timeline rules it out:
+
+    @1,610,588   our entry's +0x18 written, third and last time, value 0
+    @1,610,605   startBlockRead runs
+    @1,610,796   cursor written 1
+
+It runs AFTER the last write to our entry's limit, and no fourth write to
+that address was ever recorded. Its r3 is 0x3fffe708 -- a stack address, a
+scratch igFileDescriptor -- so its `stw r24, 0x18(r30)` lands on a block
+object, not on our work item.
+
+THE REFRAME
+-----------
+Only ONE site in the whole archive and file layer compares +0x14 against
++0x18: 0x216894c, the guard itself. Nothing else reads the pair. So its
+meaning can be read off the guard alone:
+
+    2168954: cmplw r30, r4        cursor vs limit
+    2168958: bgt   skip           skip when cursor > limit
+
+Walk the first call through with the values we have measured:
+
+    call 1     cursor 0, limit 0   ->  0 > 0 is FALSE  ->  PROCEED
+                                       start the task, cursor := 1
+    call 2+    cursor 1, limit 0   ->  1 > 0 is TRUE   ->  skip
+                                       57,097 times
+
+So limit = 0 is not a missing value. It means AT MOST ONE TASK IN FLIGHT --
+a serialised reader -- and the guard is doing exactly what it says. The one
+read that was issued is the one read it is allowed to issue.
+
+Which means the fault is not that something failed to set the limit. It is
+that NOTHING EVER RELEASES THE CURSOR when the task finishes.
+
+THE CURSOR IS NEVER DECREMENTED, AND THAT IS MEASURED
+------------------------------------------------------
+The polled history buffer holds 8 entries and counts every change, recording
+the first 8. It reported n=8 -- exactly at capacity, nothing truncated. A
+ninth change would have read n=9.
+
+    [6]@1,600,028 = 0x0   the allocation zeroes it
+    [7]@1,610,796 = 0x1   startNewTasks starts the one task
+
+Nothing after. The read completes -- asyncq done=1, the callback runs its
+success path, all measured days ago -- and the in-flight count stays at 1
+forever.
+
+WHAT THIS RETIRES
+-----------------
+Four rounds went into "the limit is zero and nothing sets it", including two
+hardware runs and a metadata investigation. The limit was correct the whole
+time. The question was always on the other side of the comparison.
+
+The earlier note that the cursor might be the wrong number was closer than
+it looked -- but the reason is not that it should never have reached 1. It
+should have reached 1, and then gone back to 0.
+
+WHAT IS LEFT
+------------
+Which function is supposed to decrement it, and why does it not run?
+igArchive::updateTasks is the obvious candidate: it runs 57,785 times, it is
+the natural place to reap a finished task, and reaping is exactly what would
+release the count. It is running and not reaping.
+
+A thread worth pulling: igFileWorkItem::setStatus was last called with
+status 0x0. If updateTasks reaps on a specific status value and the item
+never reaches it, that is the same stall seen from the other end.
+
+BUILD
+-----
+176,428,409 bytes,
+sha256 bd87d7b45949e72953050ecd13414c28fdefd355683b943b92b8aab86b16b57b
+
+This build only fixes a stale watch label -- w1 printed
+"igArchive::updateTasks" while actually watching startBlockRead, because the
+address replacement was asserted and the label replacement was not. Second
+time that has happened. Both are asserted now.
+
+METHOD NOTE
+-----------
+The answer came from reading the guard's own arithmetic with measured values
+substituted in, not from another probe. Four rounds assumed a zero must be
+wrong. Walking the comparison through its first iteration showed the zero was
+load-bearing and the bug was on the other operand.
