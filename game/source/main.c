@@ -3760,6 +3760,51 @@ int main(int argc, char *argv[]) {
                found storing through these bases, but conquertron folds lis
                per-site so the same address can appear under another base --
                so measure rather than conclude. */
+            /* The game thread is parked in igFileContext::blockUntilComplete,
+               which pumps the storage device through vtable slot 0x13c:
+
+                 216e76c  lwz   r12, 0x13c(r11)
+                 216e774  mr    r3, r29        the device
+                 216e778  li    r4, 1
+                 216e77c  bctrl
+
+               If that pump is supposed to execute pending jobs on the calling
+               thread, and ours resolves elsewhere, that is the whole bug.
+               0x829a610 is the igArchive (addWork's `this`, stable across
+               runs). Read its vtable and the slot, then resolve the target
+               through the dispatch table in generated_0136.c. */
+            uint32_t arc_obj  = 0x829a610u;
+            uint32_t arc_vt   = ppc_load_u32(&g_ctx, arc_obj);
+            uint32_t arc_pump = arc_vt ? ppc_load_u32(&g_ctx, arc_vt + 0x13cu) : 0u;
+            uint32_t arc_read = arc_vt ? ppc_load_u32(&g_ctx, arc_vt + 0x1ccu) : 0u;
+            /* Cemu ground truth 2026-09-03: igJobQueue::init hardcodes the
+               processor mask to 7 (21d9a28: li r5,7) and makes the queue an
+               empty circular list (head at +0x118 points back at the base).
+               The real game shows mask=7, head=0x10136a00, count=0.
+
+               igJobQueue::init sits at 2148600, immediately before ::start at
+               2148604. We measured start running. If init did NOT, the queue
+               is uninitialised and the mask is 0 -- and jqStart ORs bit 0 to
+               get 1, "Primary only", which is precisely the crippled state
+               observed. This reads all of it. */
+            /* 2026-09-03 run 12: the queue IS correctly initialised --
+               mask=7 and head=0x6caf0 (its own base), matching the real
+               game's 7 / 0x10136a00. So igJobQueue::init ran and the workers
+               sleep because the queue is genuinely EMPTY, which is correct.
+
+               The batch went somewhere else. jqAddBatchToQueue writes
+               +0x28/+0x2c/+0x30 of its queue pointer, while the workers poll
+               head/tail/count at +0x118/+0x11c/+0x120 -- different offsets,
+               so an array of queues with the batch landing in one and the
+               workers watching another. Dump the whole structure and find
+               which slot is non-empty. */
+            uint32_t jqs[20];
+            for (int q = 0; q < 20; q++) jqs[q] = ppc_load_u32(&g_ctx, 445168u + (uint32_t)(q * 16));
+            char jqss[300] = "";
+            for (int q = 0; q < 20; q++) { char t[16]; snprintf(t, sizeof(t), "%s%x", q ? "," : "", (unsigned)jqs[q]); strncat(jqss, t, sizeof(jqss) - strlen(jqss) - 1); }
+            uint32_t jq_mask = ppc_load_u32(&g_ctx, 14236u);
+            uint32_t jq_head = ppc_load_u32(&g_ctx, 445448u);
+            uint32_t jq_tail = ppc_load_u32(&g_ctx, 445452u);
             uint32_t jqA = ppc_load_u32(&g_ctx, 445456u);
             uint32_t jqB = (uint32_t)ppc_load_u8(&g_ctx, 3524u);
             uint32_t jqC = ppc_load_u32(&g_ctx, 14244u);
@@ -4022,6 +4067,9 @@ int main(int argc, char *argv[]) {
                        " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
                        " e0d=[%s] f8d=[%s]"
                        " awimeta=0x%x m=[%s]"
+                       " arcvt: obj=0x%x vt=0x%x slot13c=0x%x slot1cc=0x%x"
+                       " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
+                       " jqstruct[+0,+0x10..]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
                        " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
@@ -4175,6 +4223,9 @@ int main(int argc, char *argv[]) {
                        arch_f8, arch_f14, arch_f18,
                        arch_e0s, arch_f8s,
                        awi_meta, awi_ms,
+                       arc_obj, arc_vt, arc_pump, arc_read,
+                       jq_mask, jq_head, jq_tail,
+                       jqss,
                        jqA, jqB, jqC,
                        upd_list, upd_n, upd_arr, upd_e0,
                        ue8, ue88, ust1, uec, ue10, ust2,

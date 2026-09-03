@@ -1,0 +1,64 @@
+2026-09-03 (run 12) -- the queue is correctly initialised; the batch is not in it
+=================================================================================
+
+Build Sep  3 2026 20:47:59.
+
+    jqinit: mask=0x7 head=0x6caf0 tail=0x0     (real game: 7 / 0x10136a00 / 0)
+    jqflags: A=0x0 B=0x0 C=0x0
+    w1(igJobQueue::addBatch) hits=1
+
+0x6caf0 is 445168 -- our synthetic address for the queue base. So head points
+at its own base, which is exactly what igJobQueue::init writes
+(21d9a14: stw r31, 0x118(r31)) and exactly what the real game shows. Mask is
+7, the value init hardcodes.
+
+**igJobQueue::init ran and the queue is correctly initialised.** The
+hypothesis that it never ran is dead.
+
+WHAT THAT ACTUALLY MEANS
+------------------------
+The queue's count is 0 and addBatch ran once. So the workers are asleep
+because the queue is genuinely EMPTY, and sleeping on an empty queue is
+correct behaviour. Every worker-related theory today was chasing code that
+was working.
+
+The batch was submitted and did not land in the queue the workers poll.
+
+THE SIGNATURE
+-------------
+jqAddBatchToQueue writes fields at +0x28, +0x2c and +0x30 of its queue
+pointer:
+
+    21dc02c  stw r8,  0x30(r24)
+    21dc044  stw r12, 0x30(r24)
+    21dc050  stw r15, 0x2c(r24)
+    21dc054  stw r15, 0x28(r24)
+
+while jqWorkerSleep polls head/tail/count at +0x118/+0x11c/+0x120 of the
+base at 445168. Different offsets, so these are different queues -- almost
+certainly slots in an array, with the batch going into one and the workers
+watching another.
+
+A NICE CONFIRMATION IN PASSING
+------------------------------
+The log captured the initialisation building up frame by frame:
+mask 0 -> 7, head 0 -> 0x6caf0, updq list appearing, then n=1 with the stuck
+entry. The probe is reading live state, not a stale snapshot.
+
+WHAT CEMU SETTLED TODAY
+-----------------------
+Idle state is IDENTICAL on both systems (A=0, C=0, sleeping=2, stopSignal=0,
+930 sweeps, nothing moving). During the archive load the real game shows
+A cycling 4,1,3,2, a worker waking (sleeping 2->1), and the task lists
+churning 1,6,3,4,5 and draining. Ours: A flat zero, no wake, list stuck at 1.
+
+That comparison is what turned "the workers are broken" into "the workers
+are correct and the queue is empty", and it took 90 seconds against eleven
+rounds of inference.
+
+NEXT
+----
+Dump the whole structure at 445168 in 16-byte strides and find the slot with
+a non-zero count. That names the queue the batch actually went into.
+
+sha256 75fa556fd60b99b081ddeb4904f0a44b6805dc7a94713e120bc7c3ad0881ac68
