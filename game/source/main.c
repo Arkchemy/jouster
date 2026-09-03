@@ -2742,7 +2742,12 @@ static void game_thread_func(void *arg) {
      *
      * If this reads 0, that assignment never happens and the limit stays as
      * the allocation left it. */
-    g_ppc_watch[1].pc = 0x2168550u; /* igArchive::startBlockRead -- r3=fd r4=buf */
+    g_ppc_watch[1].pc = 0x2168550u; /* igArchive::startBlockRead -- r3=&workItem slot (2168670 does
+                                       lwz r30,0(r28)), r4=igFileDescriptor.
+                                       NOT a buffer: work item +0x08 is _file,
+                                       and [_file+0x24] is the device that
+                                       asyncCallback resolves via vtable slot
+                                       0x1cc = getPhysicalDevice. */
     g_ppc_watch[2].pc = 0x2169830u; /* igArchive::open -- r3=this */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the

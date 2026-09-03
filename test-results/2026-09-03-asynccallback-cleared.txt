@@ -1,0 +1,75 @@
+2026-09-03 (static) -- the FS completion callback does its whole job
+====================================================================
+
+Read while a hardware run was in flight, to decide where the fix is NOT.
+
+WHAT asyncCallback ACTUALLY DOES
+--------------------------------
+igCafeStorageDevice::asyncCallback(FSClient*, FSCmdBlock*, int result,
+void* context), at 0x2155b48:
+
+    2155b68  lwz r10, 8(r6)      r6 = context = the work item
+                                 r10 = [workItem+8] = the igFileDescriptor
+    2155b6c  lwz r3, 0x24(r10)   [_file+0x24] = the device
+    2155b70  lwz r9, 0(r3)       its vtable
+    2155b74  lwz r0, 0x1cc(r9)   slot 0x1cc
+    2155b84  bctrl               -> r3 = the physical device
+    2155b88  cmpwi r30, 1        result == 1 ?
+    2155b8c  li  r4, 2           kStatusComplete
+    2155b98  mr  r4, r30         else translate via getOSError
+    2155ba4  mr  r3, r31         the work item
+    2155ba8  bl  0x216e534       setStatus(workItem, status)
+    2155bb8  bl  igMemoryPool::free(FSCmdBlock)
+    2155bbc  lwz r3, 0x50(r28)   [physical device + 0x50]
+    2155bc4  lwz r12, 0x9c(r11)  slot 0x9c
+    2155bcc  bctrl               signal
+
+SLOT 0x1cc IS getPhysicalDevice
+-------------------------------
+Identified from a tail-call stub rather than guessed:
+
+    igVirtualStorageDevice::getPhysicalDevice()
+    216df68  lwz r3, 0x24(r3)
+    216df6c  lwz r12, 0(r3)
+    216df70  lwz r0, 0x1cc(r12)
+    216df78  bctr
+
+A virtual device forwards getPhysicalDevice down the chain through the very
+same slot, so slot 0x1cc is getPhysicalDevice. That retires an earlier guess:
+this call is NOT a "notify the requester" hook. It resolves the device to its
+physical backing so the callback can reach [device+0x50] afterwards.
+
+AND THE TAIL IS A SIGNAL
+------------------------
+Slot 0x9c is class-dependent -- on an igMemoryPool vtable the same slot is a
+pool method (2155268, in igCafeStorageDevice::userRegister) -- so it cannot
+be named from the offset alone. But the shape is unambiguous: after setting
+the status and freeing the command block, the last act is a virtual call on a
+member at +0x50 of the device.
+
+igRewrite8 shows igStorageDevice derives from igFileWorkItemProcessor, which
+carries a _workPending semaphore alongside _workListLock. A completion
+callback whose final act is a virtual call on such a member is signalling
+that work is done. That is exactly the right last act.
+
+CONCLUSION: THE CALLBACK IS CLEARED
+-----------------------------------
+asyncCallback resolves the device, sets kStatusComplete on result==1, frees
+the command block, and signals. Nothing is missing. The hardware log agrees:
+it recorded setStatus(0x452cfc8, 0x2) on precisely the work item that
+igCafeStorageDevice::read was handed, and cb ok=1 skip=0 with no drops.
+
+So the stuck request is not waiting on the filesystem. It is waiting inside
+the archive's own block machinery, which is where [updq entry + 0x14] lives.
+That narrows the search and removes a whole layer from suspicion.
+
+A STALE LABEL, CORRECTED
+------------------------
+Watch slot 1 was labelled "igArchive::startBlockRead -- r3=fd r4=buf". Wrong
+on both halves. 2168670 does lwz r30, 0(r28), so r3 is a POINTER to the work
+item slot, not a descriptor; and r4 is the igFileDescriptor, not a buffer --
+work item +0x08 is _file, whose +0x24 is the device asyncCallback resolves.
+The measured values fit: r4 = 0x450f760 is exactly work item #2's +0x08.
+
+Corrected in main.c. Stale labels have produced misleading logs three times
+on this project now, and each time the log looked perfectly plausible.
