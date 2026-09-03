@@ -1,0 +1,110 @@
+2026-09-03 (run 11) -- the deadlock, traced end to end
+======================================================
+
+Build Sep  3 2026 19:16:27.
+
+    w0(igArkCore::init)      hits=1@56621     <- IT DOES RUN
+    w6(jqWorkerThread)       hits=2
+    w1(igJobQueue::addBatch) hits=1@1610868
+    w2(igRegistry::getValue) hits=9@692061
+    last_pc=0x21a564c  caller_lr=0x216e790  calls=3,913,403
+
+TWO OF MY HYPOTHESES DIED HERE
+------------------------------
+1. "igArkCore::init never runs." It runs, at call 56,621, very early.
+2. "The unparsed config is the cause." It is a SYMPTOM. init descends into
+   the bootstrap load and parks there, so it never reaches the alchemy.xml
+   registration at 2147fc4. That is why addReadOnlyMemoryEntry fired once,
+   for ram:/tfbGameIGX.igx, and never for the config.
+
+WHERE THE GAME THREAD ACTUALLY IS
+---------------------------------
+    last_pc     0x21a564c = Core::igScopeLock::~igScopeLock (entry)
+    caller_lr   0x216e790 = inside
+                igFileContext::blockUntilComplete(igStorageDevice*,
+                                                  igFileWorkItem*)
+
+and that function is a PUMP loop, not a passive wait:
+
+    216e738  lbz  r0, 0x23(r5)      workItem->_status
+    216e744  cmpwi r0, 0
+    216e74c  beq  216e758           status 0 kStatusInactive -> pump
+    216e750  cmpwi r0, 1
+    216e754  bne  216e7b0           status not 1 -> leave
+    216e758  lwz  r4, 0x10(r28)     the semaphore
+    216e764  bl   igScopeLock::igScopeLock   take it
+    216e76c  lwz  r12, 0x13c(r11)   storage device vtable slot 0x13c
+    216e77c  bctrl                  let the device make progress
+    216e78c  bl   igScopeLock::~igScopeLock  release it
+    216e790  lbz  r0, 0x23(r30)     re-read status and loop
+
+The game thread has been going round this loop for the entire run. That is
+exactly why igArchive::updateTasks shows 56,659 hits and why calls climbs
+past 3.9 million with nothing hung. The pump is working. It simply cannot
+finish, because what it waits on needs a job nothing will run.
+
+THE COMPLETE CHAIN, EVERY LINK MEASURED
+---------------------------------------
+    main
+      -> Core::igRefAlchemy(+1)            64-bit refcount, 0 -> 1
+        -> igArkCore::igArkCore()
+        -> igArkCore::initBootstrap()      opens bootstrap.bld
+        -> igArkCore::init()               @56,621  <-- entered, never returns
+             ...descends into the bootstrap archive load...
+             -> igFileContext::blockUntilComplete()   <-- parked here, forever
+                  pumps the device via vtable 0x13c
+                  -> igArchive::updateTasks   56,659 hits, correct behaviour
+                       task _state = kStateDecompressing
+                       polls _decompressJobFlag, which stays 0
+    and separately:
+      igJobQueue::addBatch  @1,610,868  one non-blocking batch submitted
+      Core::jqFlush              hits 0
+      Core::jqTempWorkerLoopOnce hits 0    nothing executes it
+      workers: created, running, and permanently asleep because
+      jqKeepWorkersAwakeCount and flag A are each written exactly once,
+      at init, to zero, and never again
+
+So: the game thread blocks on a file read; the read needs its block
+decompressed; the decompression is queued as a background job; the only
+things that could execute that job are two worker threads whose wake
+condition nothing ever sets, and an inline path that is never called.
+
+WHAT IS NOW CERTAIN
+-------------------
+  * igArkCore::init runs and does not return
+  * the game thread is in blockUntilComplete, pumping, not hung
+  * updateTasks is correct and always was
+  * the decompression batch is submitted exactly once
+  * nothing anywhere executes it
+  * the workers cannot wake, and no instruction in the binary ever sets
+    either flag that would let them (confirmed by store watch, not just by
+    static search)
+
+WHAT IS NOT YET KNOWN
+---------------------
+Why retail does not deadlock here. Three candidates, in order of how much I
+would bet on them:
+
+  1. The pump (vtable slot 0x13c) is supposed to execute pending jobs on the
+     calling thread, and in our build it resolves to something that does not.
+     Identifying what slot 0x13c is for an igArchive is the next job.
+  2. The workers' wake flags are set through a store our address folding has
+     mis-attributed, so the store watch is watching the wrong word.
+  3. Something in the bootstrap path should have made the batch blocking
+     (addBatch's r7), which would run it inline immediately.
+
+A METHOD NOTE, WRITTEN AGAINST MYSELF
+-------------------------------------
+Today produced roughly six confident theories and measurement killed five of
+them: nothing sets the limit, the empty list, the removal path, the missing
+workers, the atomics, the unparsed config. Every one explained the evidence
+available when it was formed.
+
+The two that survived contact were the ones taken from the engine's own
+words rather than inferred: the igFileWorkItem status enum from igRewrite8,
+and the igArchiveBlockTask field names from the binary's own reflection
+metadata. Both were decisive within minutes.
+
+The lesson is not "theorise less". It is that a name recovered from the
+artifact beats a structure inferred from its shape, every time, and should
+be the first thing tried rather than the last.
