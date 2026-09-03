@@ -2438,7 +2438,7 @@ static void game_thread_func(void *arg) {
      * It measured 0. This watch, with lr/r3/r29/r31 history, says whether
      * it is ever written and by whom -- the same instrument that named
      * instantiateFromPool as the writer of +0x18. */
-    g_ppc_watch_store_addr  = 0xf7d05bcu;  /* updq entry +0x14 -- gates completion */
+    g_ppc_watch_store_addr  = 14244u;   /* jq sleep-loop cond C */  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2475,7 +2475,7 @@ static void game_thread_func(void *arg) {
      * keeps it. This watch answers whether +0x1c is ever written at all,
      * and from where, the same way the watch on +0x18 identified
      * instantiateFromPool. */
-    g_ppc_watch_store_addr2 = 0xf7d0608u;  /* entry +0x1c -- gates completion */
+    g_ppc_watch_store_addr2 = 445456u;  /* jq sleep-loop cond A */  /* entry +0x1c -- gates completion */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
@@ -2730,7 +2730,7 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x21da40cu; /* Core::jqPopNextBatch -- r3=worker r4=out batch */
+    g_ppc_watch[0].pc = 0x21da748u; /* Core::jqFlush -- inline executor; addBatch calls it for BLOCKING batches */
     /* updateTasks answered (57,785 calls, it runs constantly). The open
      * question is what sets the limit the archive gates on. It is NOT
      * metadata: blaster's field-schema extractor shows igArchiveWorkItem
@@ -2754,7 +2754,7 @@ static void game_thread_func(void *arg) {
                                        and [_file+0x24] is the device that
                                        asyncCallback resolves via vtable slot
                                        0x1cc = getPhysicalDevice. */
-    g_ppc_watch[2].pc = 0x21da10cu; /* Core::jqWorkerSleep -- r3=worker */
+    g_ppc_watch[2].pc = 0x21dc134u; /* Core::jqTempWorkerLoopOnce -- does ANYTHING execute a batch? */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -3744,6 +3744,25 @@ int main(int argc, char *argv[]) {
                function entry -- which is exactly what 57,785 hits with zero
                reaping looks like. If this count is 0, that is why the cursor
                is never released. */
+            /* 2026-09-03: the job-queue worker sleep loop (jqWorkerSleep,
+               0x21da10c) does NOT poll the batch queue. It polls three
+               globals and only leaves the loop if one is non-zero:
+
+                 21da17c  lwz r10, 0x6b20(r27)  A = [445456]
+                 21da184  bne exit
+                 21da188  lbz r11, -0x29fe(r30) B = byte[3524]
+                 21da190  bne exit
+                 21da194  lwz r0, -0x2a1c(r29)  C = [14244]
+                 21da19c  beq loop back and sleep again
+
+               All three zero means sleep forever, which is what 285 timed
+               wakeups with only 4 pops looks like. No site in the tree was
+               found storing through these bases, but conquertron folds lis
+               per-site so the same address can appear under another base --
+               so measure rather than conclude. */
+            uint32_t jqA = ppc_load_u32(&g_ctx, 445456u);
+            uint32_t jqB = (uint32_t)ppc_load_u8(&g_ctx, 3524u);
+            uint32_t jqC = ppc_load_u32(&g_ctx, 14244u);
             uint32_t upd_list = ppc_load_u32(&g_ctx, 421316u);
             uint32_t upd_n    = upd_list ? ppc_load_u32(&g_ctx, upd_list + 8u) : 0u;
             uint32_t upd_arr  = upd_list ? ppc_load_u32(&g_ctx, upd_list + 0x14u) : 0u;
@@ -3948,9 +3967,9 @@ int main(int argc, char *argv[]) {
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
                        " w6(jqWorkerThread) hits=%u"
                        " w7(appendToArkCore) hits=%u"
-                       " -- w0(jqPopNextBatch) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
+                       " -- w0(Core::jqFlush) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w2(jqWorkerSleep) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w2(jqTempWorkerLoopOnce) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
@@ -4003,6 +4022,7 @@ int main(int argc, char *argv[]) {
                        " -- archq: owner=0x%x list=0x%x n=%u arr=0x%x e0=0x%x f8=0x%x f14=%u f18=%u"
                        " e0d=[%s] f8d=[%s]"
                        " awimeta=0x%x m=[%s]"
+                       " jqflags: A=0x%x B=0x%x C=0x%x"
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
                        " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
                        " rel: e18=0x%x[+14]=%d e1c=0x%x[+14]=%d"
@@ -4155,6 +4175,7 @@ int main(int argc, char *argv[]) {
                        arch_f8, arch_f14, arch_f18,
                        arch_e0s, arch_f8s,
                        awi_meta, awi_ms,
+                       jqA, jqB, jqC,
                        upd_list, upd_n, upd_arr, upd_e0,
                        ue8, ue88, ust1, uec, ue10, ust2,
                        ue18, (int)ue18c, ue1c, (int)ue1cc,

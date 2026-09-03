@@ -1,0 +1,87 @@
+2026-09-03 (run 8) -- the worker wake condition is never set, by anything
+=========================================================================
+
+Build Sep  3 2026 18:22:59.
+
+    jqflags: A=0x0 B=0x0 C=0x0     -- all three, in all 420 frames
+    storewatch [14244] jqKeepWorkersAwakeCount: hits=1@204131 value=0
+    control    [445456] flag A:                 hits=1@204131 value=0
+
+Each flag is written exactly once, at call 204,131, by igJobQueue::init
+(lr 0x21d9b1c), and set to zero. Never written again in a 3.98M-call run.
+
+WHAT THAT MEANS
+---------------
+Core::jqWorkerSleep leaves its loop only if A, B or C is non-zero:
+
+    L_21da17c:  A = [445456]     bne -> exit
+                B = byte[3524]   bne -> exit      (jqStopSignal)
+                C = [14244]      beq -> sleep     (jqKeepWorkersAwakeCount)
+
+B staying zero is correct; nothing is shutting down. A and C never become
+non-zero, so **the workers can never leave the sleep loop.**
+
+Static confirmation, each with the caveat below:
+  * jqKeepWorkersAwakeCount is written only by igJobQueue::init and
+    igJobQueue::shutdown. The two init sites (21d9a5c, 21d9b48) are
+    identical duplicated code that zero both counters and initialise the
+    event -- neither ever writes a non-zero value.
+  * flag A is READ at exactly one instruction in the entire binary
+    (21da17c) and written by none.
+
+THE PRODUCER DOES SIGNAL -- IT JUST IS NOT ENOUGH
+-------------------------------------------------
+jqAddBatchToQueue ends with:
+
+    21dc058  lwz   r11, -0x2a18(r11)   jqSleepingWorkersCount
+    21dc060  cmpwi r11, 0
+    21dc064  ble   skip
+    21dc070  bl    OSSignalEvent       wake a sleeping worker
+
+and evt reports sig=2, so signalling happened. But waking a worker does not
+help: it re-tests A/B/C, finds all zero, and sleeps again. The wake is not
+the missing piece; the wake CONDITION is.
+
+THE INLINE PATH, WHICH IS THE REAL LEAD
+---------------------------------------
+Immediately before returning, jqAddBatchToQueue has:
+
+    21dc074  lwz    r5, 0xc(r16)     the batch's flags word
+    21dc078  clrlwi. r4, r5, 0x1f    test bit 0
+    21dc07c  beq    skip
+    21dc084  bl     0x21da748        Core::jqFlush -- execute inline
+
+That is the kBlocking / kNonBlocking pair recovered from .rodata earlier. A
+BLOCKING batch is executed inline, on the submitting thread, immediately. A
+non-blocking one is left for workers who, in this build, can never wake.
+
+So either the archive submits a blocking batch and our translation is taking
+the wrong side of that branch, or it submits non-blocking and something else
+is meant to drive the queue.
+
+A CAVEAT ON EVERY "COMPLETE CALLER LIST" IN THESE NOTES
+-------------------------------------------------------
+generated_0136.c contains a `dispatch(PpcContext*, uint32_t addr)` function
+holding the indirect-call table, and it references igJobQueue::init, start,
+flush, jqStart, jqAttachQueueToWorkers and others. So any of these can be
+reached through a function pointer.
+
+Every "the complete caller list is X" statement in these write-ups was built
+from DIRECT calls only. Those lists are lower bounds, not complete. Stated
+here because at least two conclusions in this investigation leaned on them.
+
+NEXT
+----
+    w0 -> Core::jqFlush              (0x21da748) the inline executor
+    w2 -> Core::jqTempWorkerLoopOnce (0x21dc134) does anything run a batch?
+
+Reading:
+  jqFlush hits >= 1   -> the inline path IS taken; the batch should have run,
+                         and the fault is inside execution rather than
+                         dispatch
+  both zero           -> nothing anywhere executes a batch; the archive
+                         submitted non-blocking work into a queue with no
+                         live consumer, and the question becomes what makes
+                         the batch blocking on real hardware
+
+sha256 06c14d4b9f40c5091f87320f9c94d9da6b343f08e8cedab5db6507acd298a042
