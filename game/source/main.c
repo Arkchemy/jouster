@@ -2471,7 +2471,16 @@ static void game_thread_func(void *arg) {
      * lzmaInflate runs, so the batch executes. If this address is never
      * written, the guard at 21da640 is failing closed and the work is
      * silently discarded after being done. */
-    g_ppc_watch_store_addr  = 0x34a0u;   /* the REAL completion flag (guest 0x100CD2E0) */  /* updq entry +0x14 -- gates completion */
+    /* Run 26. The job system is fully working -- [module+4]=1 so the guard
+     * passes, and the module's batch counter reaches 36 over the run. The
+     * archive's own bookkeeping is what is stuck: after addBatch it sets
+     * _state=1 at 2168150, and thereafter progress needs EITHER
+     * [task+0x14] (_decompressJobFlag) non-zero OR [parent+0x1c] zero.
+     *
+     * Both were previously measured as "never written" -- with store
+     * watches that could not see stwcx. Both are lock-free counters, the
+     * exact category that gap hid. Re-measure with the fix in place. */
+    g_ppc_watch_store_addr  = 0xf7d05bcu; /* _decompressJobFlag, atomic-aware now */  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2508,7 +2517,7 @@ static void game_thread_func(void *arg) {
      * keeps it. This watch answers whether +0x1c is ever written at all,
      * and from where, the same way the watch on +0x18 identified
      * instantiateFromPool. */
-    g_ppc_watch_store_addr2 = 0xf7d05bcu; /* the task's _decompressJobFlag */  /* entry +0x1c -- gates completion */
+    g_ppc_watch_store_addr2 = 0xf7d0608u; /* parent +0x1c, the other gate */  /* entry +0x1c -- gates completion */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
@@ -3890,6 +3899,24 @@ int main(int argc, char *argv[]) {
                Read them from the queue pointer (0x6cc18) rather than from
                absolute addresses, so the offsets are anchored to the object
                the engine actually uses. */
+            /* Run 25. The completion guard reads [batch+8], and
+               jqAddBatchToQueue sets it directly from the module:
+
+                 21db9ac  lwz r5, 0(r4)     module = [batch+0]
+                 21db9bc  lwz r11, 4(r5)    [module+4]
+                 21db9d0  stw r11, 8(r4)    batch+8 = [module+4]
+
+               and the completion path treats it as a unit count
+               (r7 = [batch+8]; r5 = r7 << 7). So [module+4] == 0 means zero
+               work units, the guard at 21da640 fails closed, and the
+               finished decompression is discarded.
+
+               addBatch captured module = 0x66da0. Dump its header. */
+            uint32_t mod = 0x66da0u;
+            uint32_t modd[8];
+            for (int q = 0; q < 8; q++) modd[q] = ppc_load_u32(&g_ctx, mod + (uint32_t)(q * 4));
+            char mods[120] = "";
+            for (int q = 0; q < 8; q++) { char t[16]; snprintf(t, sizeof(t), "%s0x%x", q ? "," : "", (unsigned)modd[q]); strncat(mods, t, sizeof(mods) - strlen(mods) - 1); }
             uint32_t cflag = ppc_load_u32(&g_ctx, 0x34a0u);   /* completion flag value */
             uint32_t jqq = 0x6cc18u;                       /* the attached queue */
             uint32_t jq_c1 = ppc_load_u32(&g_ctx, jqq - 0xcu);  /* counter  */
@@ -4165,6 +4192,7 @@ int main(int argc, char *argv[]) {
                        " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
                        " jqq: cnt=%u flagA=%u ring=[0x%x,0x%x] (retail: cnt 0-6, flagA 0-4, ring 8 objs)"
                        " cflag@0x34a0=%u"
+                       " module@0x66da0=[%s]  (+4 is the unit count; 0 skips completion)"
                        " stwcx: ok=%llu fail=%llu nores=%llu"
                        " jq[+0x100..+0x14c by4]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
@@ -4324,6 +4352,7 @@ int main(int argc, char *argv[]) {
                        jq_mask, jq_head, jq_tail,
                        jq_c1, jq_c2, jq_r0, jq_r1,
                        cflag,
+                       mods,
                        (unsigned long long)g_ppc_stwcx_ok, (unsigned long long)g_ppc_stwcx_fail, (unsigned long long)g_ppc_stwcx_nores,
                        jqss,
                        jqA, jqB, jqC,

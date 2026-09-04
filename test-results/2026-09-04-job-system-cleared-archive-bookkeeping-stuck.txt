@@ -1,0 +1,59 @@
+2026-09-04 (run 25) -- the job system is fine; the archive's bookkeeping is not
+==============================================================================
+
+Build Sep  4 2026 13:13:35. Module header at 0x66da0, dumped per frame.
+
+    [+0]   0x1097f4
+    [+4]   0x1          <- the unit count feeding the completion guard
+    [+8]   0x216b954    <- the decompress function pointer
+    [+0x10] 0 -> 0x24   <- batches processed, climbing to 36
+    [+0x14] climbing steadily (ticks)
+
+[module+4] IS ONE, NOT ZERO
+---------------------------
+jqAddBatchToQueue copies it into [batch+8], and the worker's guard at
+21da640 skips completion only when that is zero. It is 1, so the guard
+passes. "The completion guard fails closed" is withdrawn.
+
+And the job system is not merely working, it is busy: the module's own batch
+counter reaches 36 over the run, with a tick accumulator advancing beside
+it. Submit, queue, pop, execute, complete -- the whole subsystem handles
+dozens of batches, and the archive's single batch went through with them.
+
+So nothing in the job queue is broken. Everything measured there for two
+days was working code.
+
+WHERE IT IS ACTUALLY STUCK
+--------------------------
+Immediately after addBatch:
+
+    21680bc  lwz   r9, -0x2a78(r20)
+    21680c4  bne   0x2168144
+    2168144  lwz   r9, 0x1c(r17)      the parent's +0x1c
+    2168148  li    r6, 1
+    2168150  stw   r6, 0xc(r16)       _state = 1, kStateDecompressing
+    2168154  bne   0x216852c          parent +0x1c non-zero -> skip
+    2168158  b     0x2168348          zero -> COMPLETE the work item
+
+_state = 1 is measured and correct. From then on updateTasks needs EITHER
+
+    [task+0x14]   _decompressJobFlag  non-zero, or
+    [parent+0x1c]                     zero
+
+and neither moves.
+
+THE PROBLEM WITH BOTH OF THOSE MEASUREMENTS
+-------------------------------------------
+Both were previously reported as "never written after init". Both were
+measured with store watches that could not see stwcx., because the atomics
+fix routed atomic stores around the watch hook. Both are lock-free counters
+-- exactly the category that gap concealed.
+
+So those two results, which a large amount of yesterday's reasoning rested
+on, are unsound and are being re-measured with the corrected watches.
+
+This is the second time an instrument, rather than the engine, produced the
+wrong answer today. The first was sampling a microsecond-scale ring once per
+frame and reading the settled state as no activity. Both were mine.
+
+sha256 e5f1c226b4fb2649bb140d1cead0147241521f31a638835dc0de418916806440
