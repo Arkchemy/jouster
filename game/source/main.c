@@ -4093,7 +4093,7 @@ int main(int argc, char *argv[]) {
                        " w6(jqWorkerLoop) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igArkCore::init) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
-                       " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
+                       " -- w1(igJobQueue::addBatch) hits=%u@%llu module=0x%x data=0x%x count=0x%x FLAGPTR=0x%x"
                        " -- w2(lzmaInflate) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(jqAddBatchToQueue) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
@@ -4178,7 +4178,7 @@ int main(int argc, char *argv[]) {
                        g_ppc_watch[5].hit_count, g_ppc_watch[5].r3, g_ppc_watch[5].r4,
                        g_ppc_watch[6].hit_count, g_ppc_watch[7].hit_count,
                        g_ppc_watch[0].hit_count, (unsigned long long)g_ppc_watch[0].last_hit_call_count, g_ppc_watch[0].r3, g_ppc_watch[0].r4, g_ppc_watch[0].r5, g_ppc_watch[0].r6,
-                       g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3, g_ppc_watch[1].r4,
+                       g_ppc_watch[1].hit_count, (unsigned long long)g_ppc_watch[1].last_hit_call_count, g_ppc_watch[1].r3, g_ppc_watch[1].r4, g_ppc_watch[1].r5, g_ppc_watch[1].r6,
                        g_ppc_watch[2].hit_count, (unsigned long long)g_ppc_watch[2].last_hit_call_count, g_ppc_watch[2].r3, g_ppc_watch[2].r4,
                        g_ppc_watch[3].hit_count, (unsigned long long)g_ppc_watch[3].last_hit_call_count, g_ppc_watch[3].r3, g_ppc_watch[3].r4, g_ppc_watch[3].r5, g_ppc_watch[3].r6,
                        pool_dump[0], pool_dump[1], pool_dump[2], pool_dump[3], pool_dump[4], pool_dump[5], pool_dump[6], pool_dump[7],

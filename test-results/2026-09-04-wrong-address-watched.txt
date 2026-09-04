@@ -1,0 +1,65 @@
+2026-09-04 (run 23) -- I watched the wrong address, and nearly shipped a broken build
+=====================================================================================
+
+Build Sep  4 2026 12:35:42.
+
+    storewatch on 1920            hits=0    "the completion flag is never written"
+    control on 0xf7d05bc          hits=6@1362591  changed=5  last=0x1a
+
+THE FIRST RESULT IS VOID
+------------------------
+I derived the completion-flag pointer as synthetic 1920, from
+
+    21680b0  addi r6, r27, -0x2d20
+
+by subtracting 0x2d20 from r27's earlier value of 13472. The emitted C is:
+
+    /* 21680b0: addi r6, r27, -0x2d20 */
+    ctx->r[6] = ctx->r[27];
+
+Conquertron had already folded the offset into r27's assignment, so r6 = r27
+and my subtraction applied it a second time. Worse, r27 is reloaded from the
+stack before this point:
+
+    ctx->r[27] = ppc_load_u32(ctx, ctx->r[1] + (int32_t)100);
+
+so the flag pointer is a RUNTIME value and no static derivation could have
+produced it. hits=0 means I watched an address that is not the flag. It
+proves nothing.
+
+The lesson: when this tree folds `lis`+`addi`, the disassembly comment still
+shows the original offset while the C has already applied it. Read the
+emitted C, never the comment, before deriving an address from an offset.
+I had already been bitten by folding once (searching for writers of flag A
+under two lis encodings) and did not generalise it.
+
+WHAT THE SECOND RESULT DOES SAY
+-------------------------------
+The task's _decompressJobFlag at 0xf7d05bc shows 6 writes, last at call
+1,362,591 with value 0x1a. The block task is constructed around call
+1,610,796 -- AFTER all six. So those writes belong to a previous occupant of
+that memory, and the task's own flag is untouched for its whole life. That
+matches every frame reading 0, and it stands.
+
+A BUILD THAT WAS NOT SHIPPED
+----------------------------
+The follow-up edit added two printf specifiers but left the original r3/r4
+arguments in place, shifting every argument after them: 46 "expects argument
+of type" warnings. That is the same class of defect that caused a hardware
+data abort on this project on 2026-09-03, when a %s received a guest pointer.
+
+The build check caught it, the queued binary was deleted before the courier
+could push it, and the rebuild is clean at zero warnings. The check exists
+because of the earlier crash; this is the second time it has paid for
+itself.
+
+NEXT
+----
+Capture the flag pointer at runtime instead of deriving it:
+
+    w1(igJobQueue::addBatch) hits=%u@%llu module=0x%x data=0x%x count=0x%x FLAGPTR=0x%x
+
+Then watch that address and see whether the completion atomic at 21da648
+ever fires after lzmaInflate runs.
+
+sha256 23a8717aeb4eabae05b80f508a71116b20df6d00ee05eae05c1bbe88388aa2f2
