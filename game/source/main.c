@@ -2754,7 +2754,24 @@ static void game_thread_func(void *arg) {
                                        and [_file+0x24] is the device that
                                        asyncCallback resolves via vtable slot
                                        0x1cc = getPhysicalDevice. */
-    g_ppc_watch[2].pc = 0x21c3e7cu; /* igRegistry::getValue -- is the registry ever queried, and how often? */
+    /* Run 14. The queue at 445168 is confirmed correctly empty: head =
+     * 0x6caf0 (its own base), tail 0, count 0 -- byte-identical to the real
+     * game's idle values. So the batch went to a DIFFERENT queue.
+     *
+     * Core::jqAddBatchToQueue(jqQueue*, jqBatch*) takes the destination
+     * queue as r3. Capturing it names the mismatch outright instead of
+     * inferring it from offsets. */
+    /* Run 17: the yield fix did not change the outcome. The batch still
+     * goes to 0x6cc18 while the workers poll 0x6caf0 -- queue[1] vs
+     * queue[0]. So the question is which queue got attached to which
+     * workers.
+     *
+     * Core::jqAttachQueueToWorkers(jqQueue* r3, uint mask r4, int r5) is
+     * called from igJobQueue::init and loops workers 0..N testing
+     * mask & (1 << i) -- so r4 decides which workers ever poll r3. If
+     * queue[1] is attached with a mask that covers no running worker, the
+     * batch lands somewhere nobody watches, and that is the bug. */
+    g_ppc_watch[2].pc = 0x21d8de8u; /* Core::jqAttachQueueToWorkers -- r3=queue r4=mask r5 */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -3798,8 +3815,19 @@ int main(int argc, char *argv[]) {
                so an array of queues with the batch landing in one and the
                workers watching another. Dump the whole structure and find
                which slot is non-empty. */
+            /* Run 13: the stride-16 survey showed the structure is populated
+               (two descriptors with buffers of 0x800 and 0x8000 -- the block
+               task's _chunkLength and _batchOutputSize) and that +0x100,
+               +0x110, +0x120 are all zero, so the workers' queue really is
+               empty. But +0x130 holds a pointer that CHANGES between frames
+               (45f3980 -> 45f3a10), so something is live in here.
+
+               That survey could not see +0x118/+0x11c (head/tail) because
+               they are not 16-byte aligned. Re-dump +0x100..+0x14c at a
+               4-byte stride to read head, tail, count and the live pointer
+               properly. */
             uint32_t jqs[20];
-            for (int q = 0; q < 20; q++) jqs[q] = ppc_load_u32(&g_ctx, 445168u + (uint32_t)(q * 16));
+            for (int q = 0; q < 20; q++) jqs[q] = ppc_load_u32(&g_ctx, 445168u + 0x100u + (uint32_t)(q * 4));
             char jqss[300] = "";
             for (int q = 0; q < 20; q++) { char t[16]; snprintf(t, sizeof(t), "%s%x", q ? "," : "", (unsigned)jqs[q]); strncat(jqss, t, sizeof(jqss) - strlen(jqss) - 1); }
             uint32_t jq_mask = ppc_load_u32(&g_ctx, 14236u);
@@ -4014,7 +4042,7 @@ int main(int argc, char *argv[]) {
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igArkCore::init) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w2(igRegistry::getValue) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w2(jqAttachQueueToWorkers) hits=%u@%llu this=0x%x r4=0x%x"
                        " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
@@ -4069,7 +4097,7 @@ int main(int argc, char *argv[]) {
                        " awimeta=0x%x m=[%s]"
                        " arcvt: obj=0x%x vt=0x%x slot13c=0x%x slot1cc=0x%x"
                        " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
-                       " jqstruct[+0,+0x10..]=[%s]"
+                       " jq[+0x100..+0x14c by4]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
                        " updent: e8=0x%x e88=0x%x st1=0x%x ec=0x%x e10=0x%x st2=0x%x"
