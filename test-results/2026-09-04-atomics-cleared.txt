@@ -1,0 +1,52 @@
+2026-09-04 (run 19) -- the atomics are not the cause
+====================================================
+
+Build Sep  4 2026 03:39:59, full run.
+
+    stwcx: ok=683405  fail=0  nores=0
+
+683,405 compare-exchanges over the run, ZERO failures and zero lost
+reservations. The atomics fix is not losing any increment.
+
+This was worth testing first because I introduced the risk myself: before
+the fix stwcx. always reported success, so every guest retry branch was dead
+code; afterwards it can genuinely fail, and a failing compare-exchange would
+lose an atomic increment -- exactly the shape of the ring pointers cycling
+while the counters stay at zero. It isn't happening. The mechanism is sound
+in practice, not just in principle.
+
+Unchanged otherwise:
+    jq[+0x100..+0x14c] index 7 (+0x11c) = 0
+    jq[+0x100..+0x14c] index 8 (+0x120) = 0    flag A
+    ring at +0x130/+0x134 alternating 45f3980 / 45f3a10
+    wi1: ty=4 pri=1 st=1 -- still kStatusActive
+
+A DETAIL WORTH NOTING
+---------------------
+Our ring alternates between exactly TWO pointers. Retail cycles through
+five or six, spaced 0xd0 apart (0x117cca00, b20, bb0, c40, ccd0). So either
+our batch pool is much smaller, or what looks like a cycling ring in our
+build is only two values toggling and is not the same activity at all.
+
+That distinction matters and has not been established. It is the reason not
+to conclude "our queue is working" from the alternation alone -- I made that
+inference once already and it deserves a measurement.
+
+NEXT
+----
+jqAddBatchToQueue writes +0x28/+0x2c/+0x30 of its queue pointer, which for
+the queue at guest 0x10136b28 means 0x10136b50/54/58 -- NOT the counters at
+0x10136b1c/0x10136b20. So the enqueue provably does not touch the counters
+that wake the workers; something else must.
+
+The cheap discriminator is on the Cemu side: poll retail's 0x10136b50/54/58
+during the archive load.
+
+  they move on retail   -> both queues are in use and ours is too; the gap
+                           is whatever bumps the counters
+  they never move       -> retail does not use that queue for this work at
+                           all, and our enqueue is going somewhere retail
+                           never sends it -- which would revive the queue
+                           mismatch I retracted, on better evidence
+
+Dead theories now number eight.
