@@ -1,0 +1,61 @@
+2026-09-04 (run 26) -- both gates re-measured with working instrumentation
+==========================================================================
+
+Build Sep  4 2026 13:36:49, with atomic-aware store watches.
+
+    _decompressJobFlag (0xf7d05bc)  hits=7@1610796  changed=6  last=0x0
+                                     lr=0x21690f4
+    parent +0x1c       (0xf7d0608)  hits=11@1610588 changed=2  last=0x1
+
+THE EARLIER RESULTS SURVIVE
+---------------------------
+I flagged both of these as potentially unsound, because they were measured
+before ppc_stwcx reported to the store watches and both are lock-free
+counters. Re-measured with the fix, the counts and values are unchanged: 7
+writes and 11 writes, same last values. These two addresses are written with
+plain stores, so the gap never touched them.
+
+Worth stating plainly: the instrumentation gap was real and worth fixing,
+and these particular conclusions were not affected by it. Checking was
+right; the alarm was larger than the damage.
+
+THE GATE, WALKED WITH MEASURED VALUES
+-------------------------------------
+    2167d24  bne 0x21681cc      _state = 1, so taken
+    21681cc  cmpwi r11, 1       _state == 1, so fall through
+    21681d4  lwz r12, 0x14(r16) _decompressJobFlag = 0
+    2168204  bne 0x2168218      not taken
+    2168208  lwz r9, 0x1c(r17)  parent +0x1c = 1
+    2168210  bne 0x216852c      taken -- skip, forever
+
+**_decompressJobFlag is the gate**, and it is written only during the block
+task's construction, seven times, ending at zero. Nothing sets it afterwards
+for the life of the task. That is now a trustworthy negative rather than an
+instrument artefact.
+
+THE DISCREPANCY
+---------------
+igArchive::updateTasks submits the decompression with
+
+    addBatch(module=0x66da0, data=0x3fffe714, count=0x18, flag=0x34a0)
+
+captured at runtime. 0x34a0 is a GLOBAL. But updateTasks then polls the
+task's own _decompressJobFlag at 0xf7d05bc. Two different addresses, and the
+global does move (0 -> 1 at enqueue, 1 -> 0 at completion) while the task
+field never does.
+
+The stack slot the flag pointer comes from turned out to be the prologue
+spill of r27 (stmw r15, 0x34(r1) puts r27 at offset 100), not a data path,
+so the value is simply the lis-folded global and there is no lost pointer
+there.
+
+NEXT
+----
+The question is what sets _decompressJobFlag on a working boot. Our build:
+nothing. Retail: unknown, and answerable -- find the equivalent block task
+in Cemu, read its +0x14 during the archive load, and see whether it moves
+and when relative to the global at 0x100CD2E0.
+
+That is a Cemu job, not a hardware one, and it is the same move that broke
+this open before: compare against the system that works instead of
+reasoning about the one that does not.
