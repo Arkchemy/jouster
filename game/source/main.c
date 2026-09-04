@@ -2438,7 +2438,15 @@ static void game_thread_func(void *arg) {
      * It measured 0. This watch, with lr/r3/r29/r31 history, says whether
      * it is ever written and by whom -- the same instrument that named
      * instantiateFromPool as the writer of +0x18. */
-    g_ppc_watch_store_addr  = 14244u;   /* jq sleep-loop cond C */  /* updq entry +0x14 -- gates completion */
+    /* Run 21. jqAddBatchToQueue is entered once with the right queue
+     * (0x6cc18), a batch pointer and count 0x18, and the ring head/tail are
+     * NEVER different across 420 frames -- head == tail is the empty-ring
+     * condition, and on retail they differ while work is queued.
+     *
+     * So the enqueue runs and enqueues nothing. Watch the ring tail, which
+     * an enqueue must advance: history, writer lr, and the value. If it is
+     * never written, the function is bailing before the ring update. */
+    g_ppc_watch_store_addr  = 0x6cc24u;  /* ring tail, queue+0xc */  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2475,7 +2483,7 @@ static void game_thread_func(void *arg) {
      * keeps it. This watch answers whether +0x1c is ever written at all,
      * and from where, the same way the watch on +0x18 identified
      * instantiateFromPool. */
-    g_ppc_watch_store_addr2 = 445456u;  /* jq sleep-loop cond A */  /* entry +0x1c -- gates completion */
+    g_ppc_watch_store_addr2 = 0x6cc20u; /* ring head, queue+0x8 */  /* entry +0x1c -- gates completion */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
@@ -2715,7 +2723,7 @@ static void game_thread_func(void *arg) {
      * sit on the file path. Slot 7 stays as the control. */
     g_ppc_watch[4].pc = 0x216e534u; /* igFileWorkItem::setStatus -- r3=item r4=status */
     g_ppc_watch[5].pc = 0x2155bf0u; /* igCafeStorageDevice::read -- r3=this r4=workItem */
-    g_ppc_watch[6].pc = 0x21db584u; /* Core::jqWorkerThread -- hits=0 means no worker ever ran */
+    g_ppc_watch[6].pc = 0x21da4c0u; /* Core::jqWorkerLoop -- how often does the worker loop run? */
     g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
 
     /* Slots 0-2 repurposed 2026-09-02 (were igStringBuf::append,
@@ -2771,7 +2779,17 @@ static void game_thread_func(void *arg) {
      * mask & (1 << i) -- so r4 decides which workers ever poll r3. If
      * queue[1] is attached with a mask that covers no running worker, the
      * batch lands somewhere nobody watches, and that is the bug. */
-    g_ppc_watch[2].pc = 0x21d8de8u; /* Core::jqAttachQueueToWorkers -- r3=queue r4=mask r5 */
+    /* Run 22. The queue works end to end: the batch is enqueued at call
+     * 1,610,871 (tail advances) and POPPED four calls later by
+     * __jqPopNextBatchFromQueue (head advances to match). So the failure is
+     * after the pop.
+     *
+     * jqWorkerLoop invokes the batch through a module function pointer:
+     *   21da628  lwz r0, 8(r19)
+     *   21da634  bctrl
+     * If that runs, the decompressor runs. Watch Core::lzmaInflate itself --
+     * hits=0 means the batch is popped and never executed. */
+    g_ppc_watch[2].pc = 0x216b76cu; /* Core::lzmaInflate -- does the work EVER run? */
     // Slot 1 repurposed 2026-08-21: bootstrapInitialize had already told
     // its story (hits=1@21795, r3=1, stable every run since). Traced the
     // NULL "current memory context" global back to its real setter,
@@ -2918,7 +2936,13 @@ static void game_thread_func(void *arg) {
      *
      * so it should fire exactly once. If hit_count is 0 the list was never
      * built, and updateTasks' empty-list early exit is fully explained. */
-    g_ppc_watch[3].pc = 0x21db624u; /* Core::_jqStart -- does it reach OSCreateThread? */
+    /* Run 20. Stop inferring from addresses. _jqStart is answered (hits=1),
+     * so this slot now watches the enqueue itself: Core::jqAddBatchToQueue
+     * at 0x21db99c, r3 = the destination queue, r4 = the batch. Paired with
+     * the counter snapshot below, taken every frame, this shows whether the
+     * counters ever move around an enqueue rather than guessing which
+     * offset is which. */
+    g_ppc_watch[3].pc = 0x21db99cu; /* Core::jqAddBatchToQueue -- r3=queue r4=batch */
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -3830,6 +3854,22 @@ int main(int argc, char *argv[]) {
             for (int q = 0; q < 20; q++) jqs[q] = ppc_load_u32(&g_ctx, 445168u + 0x100u + (uint32_t)(q * 4));
             char jqss[300] = "";
             for (int q = 0; q < 20; q++) { char t[16]; snprintf(t, sizeof(t), "%s%x", q ? "," : "", (unsigned)jqs[q]); strncat(jqss, t, sizeof(jqss) - strlen(jqss) - 1); }
+            /* Retail comparison, measured in Cemu 2026-09-04:
+                 counter at guest 0x10136b1c climbs 0..6
+                 flag A  at guest 0x10136b20 climbs 0..4
+                 ring at +0x08/+0x0c of the queue cycles 8 batch objects
+                       spaced 0x90 apart
+               Ours: ring holds 2 objects, ALSO spaced 0x90 -- same struct,
+               same object size -- but both counters stay at zero.
+
+               Read them from the queue pointer (0x6cc18) rather than from
+               absolute addresses, so the offsets are anchored to the object
+               the engine actually uses. */
+            uint32_t jqq = 0x6cc18u;                       /* the attached queue */
+            uint32_t jq_c1 = ppc_load_u32(&g_ctx, jqq - 0xcu);  /* counter  */
+            uint32_t jq_c2 = ppc_load_u32(&g_ctx, jqq - 0x8u);  /* flag A   */
+            uint32_t jq_r0 = ppc_load_u32(&g_ctx, jqq + 0x8u);  /* ring head */
+            uint32_t jq_r1 = ppc_load_u32(&g_ctx, jqq + 0xcu);  /* ring tail */
             uint32_t jq_mask = ppc_load_u32(&g_ctx, 14236u);
             uint32_t jq_head = ppc_load_u32(&g_ctx, 445448u);
             uint32_t jq_tail = ppc_load_u32(&g_ctx, 445452u);
@@ -4038,12 +4078,12 @@ int main(int argc, char *argv[]) {
                        " -- mem: fail=%llu free=%llu reuse=%llu"
                        " -- w4(setStatus) hits=%u item=0x%x status=0x%x"
                        " w5(storageRead) hits=%u this=0x%x wi=0x%x"
-                       " w6(jqWorkerThread) hits=%u"
+                       " w6(jqWorkerLoop) hits=%u"
                        " w7(appendToArkCore) hits=%u"
                        " -- w0(igArkCore::init) hits=%u@%llu this=0x%x wi=0x%x r5=0x%x r6=0x%x"
                        " -- w1(igJobQueue::addBatch) hits=%u@%llu r3=0x%x r4=0x%x"
-                       " -- w2(jqAttachQueueToWorkers) hits=%u@%llu this=0x%x r4=0x%x"
-                       " -- w3(Core::_jqStart) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
+                       " -- w2(lzmaInflate) hits=%u@%llu this=0x%x r4=0x%x"
+                       " -- w3(jqAddBatchToQueue) hits=%u@%llu r3=0x%x r4=0x%x r5=0x%x caller_lr=0x%x"
                        " -- pool_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- ctx_dump[0..7]=0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x,0x%x"
                        " -- pool0x810128[0..3]=0x%x,0x%x,0x%x,0x%x"
@@ -4097,6 +4137,7 @@ int main(int argc, char *argv[]) {
                        " awimeta=0x%x m=[%s]"
                        " arcvt: obj=0x%x vt=0x%x slot13c=0x%x slot1cc=0x%x"
                        " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
+                       " jqq: cnt=%u flagA=%u ring=[0x%x,0x%x] (retail: cnt 0-6, flagA 0-4, ring 8 objs)"
                        " stwcx: ok=%llu fail=%llu nores=%llu"
                        " jq[+0x100..+0x14c by4]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
@@ -4254,6 +4295,7 @@ int main(int argc, char *argv[]) {
                        awi_meta, awi_ms,
                        arc_obj, arc_vt, arc_pump, arc_read,
                        jq_mask, jq_head, jq_tail,
+                       jq_c1, jq_c2, jq_r0, jq_r1,
                        (unsigned long long)g_ppc_stwcx_ok, (unsigned long long)g_ppc_stwcx_fail, (unsigned long long)g_ppc_stwcx_nores,
                        jqss,
                        jqA, jqB, jqC,

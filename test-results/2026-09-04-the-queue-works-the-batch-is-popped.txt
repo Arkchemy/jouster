@@ -1,0 +1,65 @@
+2026-09-04 (run 21) -- the queue works end to end, and two of my conclusions were wrong
+=======================================================================================
+
+Build Sep  4 2026 11:49:46. Store watch on the ring tail (queue+0xc) with
+history, and on the ring head (queue+0x8).
+
+    tail  hits=2  last=0x45f3a10
+      memwatch history:
+        [1] @204132   = 0x45f3980  pc=0x21d8de8  (jqAttachQueueToWorkers)
+        [2] @1610871  = 0x45f3a10  pc=0x2168900  lr=0x21696bc
+    head  hits=2  last=0x45f3a10  writer_pc=0x21da1c4
+
+Resolved:
+    0x21da1c4 = Core::__jqPopNextBatchFromQueue
+    0x21696bc = inside igArchive::updateArchiveSystem
+    0x21dbfec = inside Core::jqAddBatchToQueue
+
+So at call ~1,610,871 the archive's pump enqueues the batch and the tail
+advances; four calls later a worker POPS it and the head advances to match.
+
+**The batch is produced, queued, and consumed. The queue works.**
+
+TWO WRONG CONCLUSIONS, WITHDRAWN
+--------------------------------
+1. "The enqueue fails inside jqAddBatchToQueue." It does not. The tail
+   advances, from that exact function.
+2. "The ring is always empty -- head == tail in all 420 frames." True as
+   measured and false as interpreted. The enqueue/dequeue pair completes in
+   about four guest calls; a once-per-frame snapshot can only ever catch the
+   settled state.
+
+Both came from the same error: reading a once-per-frame sample of something
+that moves in microseconds as evidence of no activity. The "double buffer"
+misreading earlier was this same ring, sampled the same way. Three
+conclusions, one bad habit.
+
+The lesson is specific enough to be worth stating: a per-frame snapshot can
+prove a value IS something, never that it is never anything else. For that,
+a store watch with history is the right instrument, and it was available the
+whole time.
+
+WHAT IS ACTUALLY LEFT
+---------------------
+The failure is after the pop. jqWorkerLoop invokes the batch through a
+module function pointer:
+
+    21da628  lwz   r0, 8(r19)
+    21da62c  mtctr r0
+    21da630  addi  r3, r1, 0x18
+    21da634  bctrl
+
+Note jqWorkerLoop's call inventory contains no execute function -- the work
+is reached only through that pointer, so nothing static will name it.
+
+NEXT
+----
+    w2 -> Core::lzmaInflate  (0x216b76c)  the decompressor itself
+    w6 -> Core::jqWorkerLoop (0x21da4c0)  loop iterations
+
+  lzmaInflate hits=0  -> the batch is popped and never executed; the fault
+                         is that indirect call
+  lzmaInflate hits>0  -> decompression runs and the failure is in what
+                         signals completion afterwards
+
+sha256 9a866cc3c602f0fff313086ee797ea49127c319ed32530ad343bf30173e0c140
