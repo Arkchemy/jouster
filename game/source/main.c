@@ -2446,7 +2446,19 @@ static void game_thread_func(void *arg) {
      * So the enqueue runs and enqueues nothing. Watch the ring tail, which
      * an enqueue must advance: history, writer lr, and the value. If it is
      * never written, the function is bailing before the ring update. */
-    g_ppc_watch_store_addr  = 0x6cc24u;  /* ring tail, queue+0xc */  /* updq entry +0x14 -- gates completion */
+    /* Run 23. lzmaInflate RUNS -- hits=1 at call 1,610,877, with the block
+     * task's own _batchOutput (0xf7f0880) and _batchOutputSize (0x8000).
+     * So enqueue -> pop -> decompress all happen, and the work item is
+     * still kStatusActive with done=0.
+     *
+     * The gap is the completion. igArchive::updateTasks passed addBatch a
+     * completion-flag pointer in r6 (2168 0b0: addi r6, r27, -0x2d20), which
+     * resolves to synthetic 1920 -- a global, NOT the task's own
+     * _decompressJobFlag at [task+0x14]. Watch it: if the job system sets
+     * 1920 and nothing propagates that to the task field, the gap is the
+     * propagation; if 1920 is never set either, the batch completes without
+     * signalling at all. */
+    g_ppc_watch_store_addr  = 1920u;     /* the completion flag addBatch was given */  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2483,7 +2495,7 @@ static void game_thread_func(void *arg) {
      * keeps it. This watch answers whether +0x1c is ever written at all,
      * and from where, the same way the watch on +0x18 identified
      * instantiateFromPool. */
-    g_ppc_watch_store_addr2 = 0x6cc20u; /* ring head, queue+0x8 */  /* entry +0x1c -- gates completion */
+    g_ppc_watch_store_addr2 = 0xf7d05bcu; /* the task's _decompressJobFlag */  /* entry +0x1c -- gates completion */
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'

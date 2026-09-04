@@ -1,0 +1,47 @@
+2026-09-04 (run 22) -- the decompressor runs; the gap is the completion signal
+==============================================================================
+
+Build Sep  4 2026 12:25:42.
+
+    w2(Core::lzmaInflate)  hits=1@1610877  this=0xf7f0880  r4=0x8000
+    w6(Core::jqWorkerLoop) hits=2
+    w3(jqAddBatchToQueue)  hits=1@1610869
+    wi1: ty=4 pri=1 st=1 off=0x0 sz=0x800 done=0x0
+
+The arguments confirm this is our work and not some unrelated call:
+0xf7f0880 is the block task's own _batchOutput and 0x8000 its
+_batchOutputSize, both read off the task days earlier.
+
+THE WHOLE CHAIN EXECUTES
+------------------------
+    @1,610,869  igJobQueue::addBatch
+    @1,610,871  jqAddBatchToQueue     ring tail advances
+    @1,610,875  __jqPopNextBatchFromQueue   ring head advances -- popped
+    @1,610,877  Core::lzmaInflate     the decompression RUNS
+
+Six guest calls, start to finish. Everything suspected for three days --
+the archive submitting, the queue accepting, a worker popping, the
+decompressor running -- works.
+
+And the work item is still kStatusActive with done=0.
+
+So the failure is the completion signal, and nothing before it.
+
+THE DISCREPANCY TO TEST
+-----------------------
+igArchive::updateTasks hands addBatch a completion-flag pointer:
+
+    21680b0  addi r6, r27, -0x2d20     -> synthetic 1920, a global
+
+but updateTasks then polls the task's OWN field:
+
+    21681d4  lwz r12, 0x14(r16)        -> [task+0x14] _decompressJobFlag
+
+Two different addresses. Both are now watched.
+
+  1920 set, task flag not  -> the signal lands and nothing propagates it
+  neither set              -> the batch finishes without signalling
+  both set                 -> one of my address derivations is wrong; re-derive
+                              from the code rather than theorise about it
+
+sha256 2270d1c4e00d2d250a709f715e74fe44466c4d9ce0b8e55a89dcf31a45148d8a
