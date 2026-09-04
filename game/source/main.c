@@ -4097,6 +4097,7 @@ int main(int argc, char *argv[]) {
                        " awimeta=0x%x m=[%s]"
                        " arcvt: obj=0x%x vt=0x%x slot13c=0x%x slot1cc=0x%x"
                        " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
+                       " stwcx: ok=%llu fail=%llu nores=%llu"
                        " jq[+0x100..+0x14c by4]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
                        " updq: list=0x%x n=%u arr=0x%x e0=0x%x"
@@ -4253,6 +4254,7 @@ int main(int argc, char *argv[]) {
                        awi_meta, awi_ms,
                        arc_obj, arc_vt, arc_pump, arc_read,
                        jq_mask, jq_head, jq_tail,
+                       (unsigned long long)g_ppc_stwcx_ok, (unsigned long long)g_ppc_stwcx_fail, (unsigned long long)g_ppc_stwcx_nores,
                        jqss,
                        jqA, jqB, jqC,
                        upd_list, upd_n, upd_arr, upd_e0,
