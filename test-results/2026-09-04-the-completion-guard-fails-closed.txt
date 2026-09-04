@@ -1,0 +1,64 @@
+2026-09-04 (run 24) -- the work is done and thrown away
+=======================================================
+
+Build Sep  4 2026 12:59:49. Watch on the real completion flag, guest
+0x100CD2E0 (synthetic 0x34a0), captured at runtime rather than derived.
+
+    store watch      hits=0
+    per-frame value  0 in every frame
+    poll history:
+      [1] @1610870 = 0x1  pc=0x2168900 (startNewTasks)  lr=0x21696bc
+      [2] @1610898 = 0x0  pc=0x21da40c (jqPopNextBatch) lr=0x21da708
+
+THE FLAG MOVES: 0 -> 1 at the enqueue, 1 -> 0 at the pop.
+
+And lr=0x21da708 places that second write in the SKIP path beginning at
+0x21da6c4, which decrements -- not the completion path, which would have
+added 0x80:
+
+    21da638  lwz   r11, 8(r29)     the batch's flag field
+    21da63c  cmpwi r11, 0
+    21da640  beq   0x21da6c4       ZERO -> skip completion entirely
+    21da644  lwz   r10, 4(r29)
+    21da648  lwarx r19, 0, r10     the completion path we never take
+    21da650  addi  r4, r19, 0x80   += 128 per completed unit
+
+So: the worker pops the batch, runs Core::lzmaInflate (measured, hits=1 at
+call 1,610,877, with the task's own _batchOutput and _batchOutputSize),
+then finds [batch+8] == 0, takes the skip branch, decrements the outstanding
+count 1 -> 0, and signals nothing.
+
+**The decompression is performed and the result is discarded.** That is the
+defect, and it is one guard away from working.
+
+AN INSTRUMENTATION GAP I INTRODUCED
+-----------------------------------
+The store watch reported hits=0 while the value demonstrably changed. Both
+writes are stwcx., and yesterday's atomics fix routes atomic stores through
+ppc_stwcx, which did not report to the store watches at all. Before that fix
+every guest write went through ppc_store_u32, which does.
+
+So every "never written" store-watch result since 2026-09-03 17:36 is
+unreliable for any atomically-updated address. That includes two conclusions
+in this log: "flag A is written once at init and never again" and "the
+task's _decompressJobFlag is untouched". Both were about lock-free counters,
+which is exactly the category the gap hides.
+
+Fixed: ppc_stwcx now reports to both store watches the same way a plain
+store does. Those two conclusions should be re-measured before being relied
+on.
+
+The build that first carried the fix failed to compile -- the watch globals
+are declared below the atomics block -- and the failure left the previous
+binary in Jouster.nro, which was queued for push. Cleared before it went,
+forward declarations added, rebuilt clean.
+
+NEXT
+----
+Find why [batch+8] is zero. addBatch takes the completion flag in r6 and
+jqAddBatchToQueue writes the batch's +0x8 and +0xc at 21db9d0/21db9dc. The
+flag pointer arrives correctly -- FLAGPTR=0x34a0 was captured at addBatch,
+and 0x34a0 is genuinely written at enqueue -- so the pointer is right and
+something between there and the worker's copy of the batch loses it.
+
+sha256 f9f5dd0128549b443ad965294ebefea336c324573b2d02252669a82d6c9a0bd2

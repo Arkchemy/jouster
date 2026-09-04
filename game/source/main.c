@@ -2458,7 +2458,20 @@ static void game_thread_func(void *arg) {
      * 1920 and nothing propagates that to the task field, the gap is the
      * propagation; if 1920 is never set either, the batch completes without
      * signalling at all. */
-    g_ppc_watch_store_addr  = 1920u;     /* the completion flag addBatch was given */  /* updq entry +0x14 -- gates completion */
+    /* Run 24. FLAGPTR captured at runtime = 0x34a0 (13472), which is
+     * exactly r27's folded value -- confirming my earlier 1920 applied the
+     * -0x2d20 offset a second time. Guest 0x100CD2E0.
+     *
+     * This is the address the worker's completion path would write:
+     *   21da638  lwz  r11, 8(r29)      the batch's flag field
+     *   21da640  beq  0x21da6c4        zero -> skip completion entirely
+     *   21da644  lwz  r10, 4(r29)
+     *   21da648  lwarx r19, 0, r10     atomic update on the flag
+     *
+     * lzmaInflate runs, so the batch executes. If this address is never
+     * written, the guard at 21da640 is failing closed and the work is
+     * silently discarded after being done. */
+    g_ppc_watch_store_addr  = 0x34a0u;   /* the REAL completion flag (guest 0x100CD2E0) */  /* updq entry +0x14 -- gates completion */
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -3877,6 +3890,7 @@ int main(int argc, char *argv[]) {
                Read them from the queue pointer (0x6cc18) rather than from
                absolute addresses, so the offsets are anchored to the object
                the engine actually uses. */
+            uint32_t cflag = ppc_load_u32(&g_ctx, 0x34a0u);   /* completion flag value */
             uint32_t jqq = 0x6cc18u;                       /* the attached queue */
             uint32_t jq_c1 = ppc_load_u32(&g_ctx, jqq - 0xcu);  /* counter  */
             uint32_t jq_c2 = ppc_load_u32(&g_ctx, jqq - 0x8u);  /* flag A   */
@@ -4150,6 +4164,7 @@ int main(int argc, char *argv[]) {
                        " arcvt: obj=0x%x vt=0x%x slot13c=0x%x slot1cc=0x%x"
                        " jqinit: mask=0x%x head=0x%x tail=0x%x (real game: 7 / 0x10136a00 / 0)"
                        " jqq: cnt=%u flagA=%u ring=[0x%x,0x%x] (retail: cnt 0-6, flagA 0-4, ring 8 objs)"
+                       " cflag@0x34a0=%u"
                        " stwcx: ok=%llu fail=%llu nores=%llu"
                        " jq[+0x100..+0x14c by4]=[%s]"
                        " jqflags: A=0x%x B=0x%x C=0x%x"
@@ -4308,6 +4323,7 @@ int main(int argc, char *argv[]) {
                        arc_obj, arc_vt, arc_pump, arc_read,
                        jq_mask, jq_head, jq_tail,
                        jq_c1, jq_c2, jq_r0, jq_r1,
+                       cflag,
                        (unsigned long long)g_ppc_stwcx_ok, (unsigned long long)g_ppc_stwcx_fail, (unsigned long long)g_ppc_stwcx_nores,
                        jqss,
                        jqA, jqB, jqC,
