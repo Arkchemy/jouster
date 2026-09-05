@@ -1,0 +1,57 @@
+2026-09-05 (overnight) -- the failure is refused CONSTRUCTION, not memory
+
+WHAT THE NIGHT ACTUALLY ESTABLISHED
+  igMetaImage::userRegister asks for 123 objects and gets NULL every time:
+    METAPOOL poolIndex=2 firstPool=0x4500274 nullPools=0 nullObjects=123 of 123
+  The pool resolves correctly every time, and it is nowhere near full:
+    DUMP1 0x4500274  08:01000000 (16MB total)  34/38/3c: ~1.45M/~1.45M/~1.39M
+  So this is not exhaustion, not a bad resolve, and not a lifetime problem.
+
+  The call is not an allocator at all:
+    2279778: lwz r3, [ours 496268]        the class's igMetaObject
+    227977c: mr  r4, r31                  the pool
+    2279780: bl  0x215befc                igMetaObject::createInstance(pool)
+      -> 0x215bcb0  igMetaObject::constructInstance(pool, bool)
+         215bd18: lhz r12, 0x30(r30)              flags halfword
+         215bd1c: rlwinm. r5, r12, 28, 31, 31     == (flags >> 4) & 1, mask 0x10
+         215bd20: bne 0x215bedc                   -> epilogue with r3 still 0
+  So a flag in the class metadata makes construction refuse outright, and the
+  caller then dereferences the NULL it gets back.
+
+RETAIL, VIA CEMU
+  metaObject = 0x11614834 at guest 0x1014319C
+    flags@+0x30 = 0x0107   ->  0x107 & 0x10 = 0   ->  constructs normally
+    +0x10 = 0x34 (52) looks like the instance size
+  Retail constructs; ours refuses. Our metaObject is 0x443b59c and its flags
+  have not been read yet -- watch.cfg already points dump1 at it.
+
+  Address mapping cross-checked on four independent symbols, all consistent at
+  0x100c9f10, and it predicts the metadata global at guest 0x1014319C, which
+  matches the disassembly's own `lis r30,0x1014 ... 0x319c(r30)`.
+
+THE OTHER FINDING: 2,261 NULL-POINTER WRITES
+  nullwrite: count=2261 first_pc=0x2579828 addr=0x68a
+  Sitting in the log for hours, unread. .data starts at 0x2000 and the trap
+  limit is 0x1000, so everything counted is genuinely unmapped -- real null
+  dereferences, every one of which would fault on hardware. They are dropped
+  rather than applied (ARKCHEMY_DROP_NULL_WRITES), so they corrupt nothing,
+  but they show the build repeatedly walking paths retail never takes.
+  Only the FIRST was ever recorded, which is useless for finding sources, so
+  the runtime now keeps a table of distinct (pc, lr) sites with hit counts.
+
+THEORIES RETIRED (this session's tally, ~14)
+  the decompress flag; an uninitialised job Module; a zero read size; an
+  inverted inflate return; pool index 28 out of range; an unregistered worker
+  thread; a null memory context; pools registered into the wrong manager;
+  ordering of registration vs setDefaultFrame; a failing deep copy; refcount
+  imbalance; pool teardown; allocator reissuing live memory; missing class
+  metadata. Every one was an inference from two measurements rather than a
+  measurement of the thing itself.
+
+CORRECTIONS TO EARLIER WRITE-UPS
+  - "retail has 128 pools where ours has 0" measured the wrong structure. The
+    manager's +8 is normally the EMBEDDED frame stack at mgr+0x18, so that
+    chain-walk was not reading a pool count. The defensible statement is only
+    that retail's manager stays alive and ours is wiped.
+  - "the pools are registered into the wrong manager" is superseded: the
+    manager question is downstream of construction failing.

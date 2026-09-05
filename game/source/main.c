@@ -2117,7 +2117,12 @@ static const char *arkchemy_allocbucket_table(void) {
 }
 
 static const char *arkchemy_memwatch_history(void) {
-    static char buf[512];
+    /* 2026-09-04: raised from 512. The history itself was widened to 20
+     * entries to catch the writes that take the pool manager's refcount down
+     * to zero, but this buffer only fitted about 8 of them -- so the extra
+     * entries were being formatted and silently dropped, which is why the
+     * tail of the sequence never appeared. */
+    static char buf[2048];
     unsigned int n = g_ppc_memwatch_n;
     unsigned int shown = n < ARKCHEMY_MEMWATCH_HISTORY ? n : ARKCHEMY_MEMWATCH_HISTORY;
     size_t off = 0;
@@ -2131,6 +2136,9 @@ static const char *arkchemy_memwatch_history(void) {
     }
     return buf;
 }
+
+static uint32_t g_arkchemy_cfg_store1 = 0, g_arkchemy_cfg_store2 = 0,
+               g_arkchemy_cfg_dump1 = 0, g_arkchemy_cfg_dump2 = 0;
 
 static void arkchemy_boot_play_sound(void) {
     const char *path = "sdmc:/switch/Jouster/meta/bootSound.btsnd";
@@ -2480,7 +2488,74 @@ static void game_thread_func(void *arg) {
      * Both were previously measured as "never written" -- with store
      * watches that could not see stwcx. Both are lock-free counters, the
      * exact category that gap hid. Re-measure with the fix in place. */
-    g_ppc_watch_store_addr  = 0xf7d05bcu; /* _decompressJobFlag, atomic-aware now */  /* updq entry +0x14 -- gates completion */
+    /* Retargeted 2026-09-04: _decompressJobFlag is not the gate -- the retail
+     * game holds it clear too. Watching the parent's block cursor instead.
+     * It IS written here (it reads 1), so unlike +0x18 there is something to
+     * catch, and whoever writes the cursor is almost certainly the code that
+     * should also be writing the block count next to it. */
+    /* Retargeted 2026-09-04: catch who writes the archive's pool-INDEX
+     * global (ours 421612, .bss+306684). It holds 28, and the registry has
+     * no pool at that index, which is why LZMA cannot allocate its ~16KB. */
+    /* Retargeted 2026-09-04: watch context+0x18, the "no calling thread"
+     * default pool-frame manager. Job workers clear their thread slot by
+     * design (retail too), so they resolve here -- and here holds an EMPTY
+     * manager while all 52 pools sit in two others. Whoever writes this word
+     * last is what orphans them. Context has been 0x4400170 every run. */
+    /* Retargeted 2026-09-04: the default manager's frame-stack pointer.
+     * Right after copyDeep it is 0x46439c8; at the LZMA lookup it reads 0.
+     * Everything downstream ("empty pool table") was just dereferencing that
+     * null. Catch the write that clears it -- a stack pointer nulled after
+     * construction looks like a release/destructor running on an object
+     * context+0x18 still points at. The manager has been 0x45f3964 every run. */
+    /* Retargeted 2026-09-04 (late): the default manager's REFCOUNT at +4.
+     * manager+8 being zeroed turned out to be someone else's memory --
+     * igObjectList::append -> igDataList::resizeAndSetCount reused the block,
+     * i.e. the manager was freed while context+0x18 still points at it. If the
+     * refcount reaches 0 right after setDefaultFrame installs it, the retain
+     * on assignment is not landing. Refcounts are lwarx/stwcx sequences, which
+     * is code changed earlier today, so measure rather than assume. */
+    /* 2026-09-05: the manager's whole header is zeroed by the time the workers
+     * read it -- vtable included -- with no refcount release anywhere in the
+     * ledger. That is a free/wipe, not an over-release. The secondary watch
+     * records only value and pc, and pc points at the allocator's mutex
+     * because the zeroing happens in a memset-style shim that never updates
+     * it. The primary watch also records the link register, which should name
+     * the function doing the freeing. */
+    /* 2026-09-05: the manager's block is zeroed by the release/teardown path
+     * (0x215d194) yet the ledger never saw the manager passed to it -- so the
+     * release targets something that OWNS the memory. The manager is allocated
+     * from pool index 2, the pool object at 0x4500274. If that pool is torn
+     * down, everything in it dies at once, with no per-object release, the
+     * whole header zeroed, and the block later reused by a list -- which is
+     * exactly what has been observed. Watch the pool's own vtable word. */
+    /* Runtime config (2026-09-05). Rebuilding the whole NRO to change one
+     * watched address costs minutes per question; this reads them from a
+     * small text file sitting next to the log on the SD card, so most
+     * follow-up questions need no rebuild at all. Missing file or missing
+     * key just leaves the compiled-in default alone.
+     *   store1=0x...      primary store watch
+     *   store2=0x...      secondary store watch
+     *   dump1=0x...       dump 16 words from here each report
+     *   dump2=0x...       ditto
+     */
+    {
+        FILE *cf = fopen("sdmc:/switch/Jouster/watch.cfg", "r");
+        if (cf) {
+            char line[128];
+            while (fgets(line, sizeof(line), cf)) {
+                unsigned long v = 0; char *eq = strchr(line, '=');
+                if (!eq) continue;
+                v = strtoul(eq + 1, NULL, 0);
+                if (!strncmp(line, "store1", 6))      g_arkchemy_cfg_store1 = (uint32_t)v;
+                else if (!strncmp(line, "store2", 6)) g_arkchemy_cfg_store2 = (uint32_t)v;
+                else if (!strncmp(line, "dump1", 5))  g_arkchemy_cfg_dump1  = (uint32_t)v;
+                else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
+            }
+            fclose(cf);
+        }
+    }
+    g_ppc_watch_store_addr  = 0x4500274u; /* the pool object + 0 -- its vtable */
+    if (g_arkchemy_cfg_store1) g_ppc_watch_store_addr  = g_arkchemy_cfg_store1;
 
     /* Control address: generated_0071.c's init_globals does
      * ppc_store_u8(ctx, 4359280u, 200) unconditionally. If the control
@@ -2517,7 +2592,8 @@ static void game_thread_func(void *arg) {
      * keeps it. This watch answers whether +0x1c is ever written at all,
      * and from where, the same way the watch on +0x18 identified
      * instantiateFromPool. */
-    g_ppc_watch_store_addr2 = 0xf7d0608u; /* parent +0x1c, the other gate */  /* entry +0x1c -- gates completion */
+    g_ppc_watch_store_addr2 = 0x45f396cu; /* defaultManager + 8 -- the frame stack */
+    if (g_arkchemy_cfg_store2) g_ppc_watch_store_addr2 = g_arkchemy_cfg_store2;
 
     /* 0x119f08 -- the meta-object table slot holding
      * arkRegisterMetaValidate's address, found by scanning init_globals'
@@ -2755,10 +2831,25 @@ static void game_thread_func(void *arg) {
      * live question is why the loader never asks for the remaining 67,623
      * bytes of bootstrap.bld once its first read completes, so the slots now
      * sit on the file path. Slot 7 stays as the control. */
-    g_ppc_watch[4].pc = 0x216e534u; /* igFileWorkItem::setStatus -- r3=item r4=status */
+    /* Retargeted 2026-09-04. igArchive::addWork is where the block range is
+     * computed, and the arithmetic there explains the whole stall:
+     *   +0x14 = offset >> 15            (first block)
+     *   +0x18 = (offset + size - 1) >> 15  (last block)
+     * Ours reads +0x14=1, +0x18=0, which those two expressions can only
+     * produce together when size == 0. r4 is the igFileWorkItem, so this
+     * captures the offset and size it was actually handed rather than
+     * inferring them back out of the result. */
+    g_ppc_watch[4].pc = 0x216aa9cu; /* igArchive::addWork -- r3=archive r4=igFileWorkItem r5=blockingType */
     g_ppc_watch[5].pc = 0x2155bf0u; /* igCafeStorageDevice::read -- r3=this r4=workItem */
     g_ppc_watch[6].pc = 0x21da4c0u; /* Core::jqWorkerLoop -- how often does the worker loop run? */
-    g_ppc_watch[7].pc = 0x21608ecu; /* appendToArkCore (control, expect 36) */
+    /* Retargeted 2026-09-04 from appendToArkCore (which had done its job:
+     * it established the job subsystem is busy, 36 batches). Cemu says the
+     * decompress job Module at guest 0x10130CB0 holds +4 = 1 on retail and
+     * 0 here, and +4 is what jqAddBatchToQueue copies into [batch+8] -- the
+     * word jqWorkerLoop tests before crediting any completion. The ctor at
+     * 0x21dc42c takes that 1 in r5 and stores it, so this answers whether it
+     * ever ran and with what arguments. */
+    g_ppc_watch[7].pc = 0x21dc42cu; /* igJobQueue::Module::Module -- r3=obj r4=name r5=workerType r6=fn */
 
     /* Slots 0-2 repurposed 2026-09-02 (were igStringBuf::append,
      * userInstantiate, reportVaList -- all from investigations that closed
@@ -4376,6 +4467,332 @@ int main(int argc, char *argv[]) {
                        g_arkchemy_hp_w[0], g_arkchemy_hp_w[1], g_arkchemy_hp_w[2], g_arkchemy_hp_w[3],
                        g_arkchemy_hp_w[4], g_arkchemy_hp_w[5], g_arkchemy_hp_w[6], g_arkchemy_hp_w[7],
                        loopwatch_buf);
+
+            /* The Cemu comparison (2026-09-04) settled what the stall is.
+             * On retail the per-file parent object gets +0x18 = the file's
+             * total block count (33, then 8), +0x1c is set to the same and
+             * then drains to zero as blocks complete, and +0x14 walks the
+             * blocks. Retail passes through 1/0/1 for one sample on its way
+             * in -- and that is exactly where ours is parked forever. So the
+             * block count is never computed, not "the flag never gets set":
+             * _decompressJobFlag reads 0 on retail too, which killed the
+             * previous theory outright. Printed in the same shape as the
+             * Cemu poller so the two logs line up field for field. */
+            {
+                uint32_t task   = 0xf7d05a8u;              /* the one block task we have */
+                uint32_t parent = ppc_load_u32(&g_ctx, task + 8u);
+                checkpoint("ARCHQ task=0x%x _state=%u _decompressJobFlag=0x%x"
+                           " parent=0x%x +0x14=%u +0x18=%u +0x1c=%u"
+                           " -- retail: +0x18=33 +0x1c drains to 0"
+                           " || completion gate hits=%u zero=%u batch=0x%x"
+                           " [batch+8]=0x%x [batch+4]=0x%x",
+                           (unsigned)task,
+                           (unsigned)ppc_load_u32(&g_ctx, task + 0xcu),
+                           (unsigned)ppc_load_u32(&g_ctx, task + 0x14u),
+                           (unsigned)parent,
+                           (unsigned)ppc_load_u32(&g_ctx, parent + 0x14u),
+                           (unsigned)ppc_load_u32(&g_ctx, parent + 0x18u),
+                           (unsigned)ppc_load_u32(&g_ctx, parent + 0x1cu),
+                           (unsigned)g_ark_bc_hits, (unsigned)g_ark_bc_zero,
+                           (unsigned)g_ark_bc_batch,
+                           (unsigned)g_ark_bc_plus8, (unsigned)g_ark_bc_plus4);
+                /* Full 16-word dump of both objects, printed in the same
+                 * layout as the Cemu dump of the retail game, so the first
+                 * field that diverges can be found by reading down the two
+                 * lines rather than by choosing fields to compare. Choosing
+                 * them by hand is what produced two wrong theories today. */
+                {
+                    char pbuf[320], tbuf[320]; int o1 = 0, o2 = 0;
+                    for (int i = 0; i < 16; i++) {
+                        o1 += snprintf(pbuf + o1, sizeof(pbuf) - (size_t)o1, "%02x:%08x ",
+                                       i * 4, (unsigned)ppc_load_u32(&g_ctx, parent + (uint32_t)(i * 4)));
+                        o2 += snprintf(tbuf + o2, sizeof(tbuf) - (size_t)o2, "%02x:%08x ",
+                                       i * 4, (unsigned)ppc_load_u32(&g_ctx, task + (uint32_t)(i * 4)));
+                    }
+                    checkpoint("PAR 0x%x %s", (unsigned)parent, pbuf);
+                    checkpoint("TSK 0x%x %s", (unsigned)task, tbuf);
+                    checkpoint("RETAIL PAR 00:10067468 04:03800007 08:116dc840 0c:15473694"
+                               " 10:15472d44 14:00000007 18:00000021 1c:00000021 20:00000001"
+                               " 24:00000000 28:0000170b 2c:1c9d9a88 30:17766040 34:0 38:0 3c:0");
+                    checkpoint("COMPLETION reached=%u nonnull=%u flagptr=0x%x *flag=0x%x jobs_run=%u",
+                               (unsigned)g_ark_bc_zero, (unsigned)g_ark_bc_batch,
+                               (unsigned)g_ark_bc_plus4, (unsigned)g_ark_bc_plus8,
+                               (unsigned)g_ark_bc_hits);
+                }
+                {
+                    char awbuf[280]; int ao = 0;
+                    for (unsigned i = 0; i < g_ark_aw_n && i < 8u; i++)
+                        ao += snprintf(awbuf + ao, sizeof(awbuf) - (size_t)ao,
+                                       "[%u fwi=0x%x off=0x%x size=0x%x -> %u..%u] ", i,
+                                       (unsigned)g_ark_aw[i][0], (unsigned)g_ark_aw[i][1],
+                                       (unsigned)g_ark_aw[i][2],
+                                       (unsigned)(g_ark_aw[i][1] >> 15),
+                                       (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
+                    if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
+                    checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    checkpoint("INFLATE lzma n=%u ret=0x%x | zlib n=%u ret=0x%x | ok=%u fail=%u"
+                               " -- decompressBatch requires exactly 1, else the task is never"
+                               " marked complete and the work item never drains",
+                               (unsigned)g_ark_inf_lzma_n, (unsigned)g_ark_inf_lzma_ret,
+                               (unsigned)g_ark_inf_zlib_n, (unsigned)g_ark_inf_zlib_ret,
+                               (unsigned)g_ark_inf_ok, (unsigned)g_ark_inf_fail);
+                    checkpoint("LZMA err=0x%x (0=ok, 0xb=size mismatch) alloc=0x%x decode=0x%x"
+                               " | out got=0x%x expected=0x%x | in got=0x%x expected=0x%x",
+                               (unsigned)g_ark_lz_err, (unsigned)g_ark_lz_alloc,
+                               (unsigned)g_ark_lz_dec, (unsigned)g_ark_lz_outgot,
+                               (unsigned)g_ark_lz_outexp, (unsigned)g_ark_lz_ingot,
+                               (unsigned)g_ark_lz_inexp);
+                    checkpoint("LZMAALLOC n=%u propsDecode=0x%x probsAlloc=0x%x"
+                               " || dicSize=0x%x dicPtr=0x%x  allocObj=0x%x allocFn=0x%x"
+                               " -- NULL dicPtr with a sane dicSize means the engine allocator failed",
+                               (unsigned)g_ark_lza_n, (unsigned)g_ark_lza_props,
+                               (unsigned)g_ark_lza_probs, (unsigned)g_ark_lza_dicsize,
+                               (unsigned)g_ark_lza_dicptr, (unsigned)g_ark_lza_allocobj,
+                               (unsigned)g_ark_lza_allocfn);
+                    checkpoint("PROBS n=%u lc=0x%x lp=0x%x size=%u bytes ptr=0x%x"
+                               " allocObj=0x%x allocFn=0x%x"
+                               " -- a ~16KB request refused by the engine allocator",
+                               (unsigned)g_ark_pr_n, (unsigned)g_ark_pr_lc,
+                               (unsigned)g_ark_pr_lp, (unsigned)g_ark_pr_size,
+                               (unsigned)g_ark_pr_ptr, (unsigned)g_ark_pr_alloc,
+                               (unsigned)g_ark_pr_allocfn);
+                    checkpoint("LZMAPOOL n=%u poolGlobal=0x%x (raw slot 421612 = 0x%x)"
+                               " resolved=0x%x size=%u ret=0x%x"
+                               " -- a null pool here is the whole boot stall",
+                               (unsigned)g_ark_al_n, (unsigned)g_ark_al_poolglobal,
+                               (unsigned)ppc_load_u32(&g_ctx, 421612u),
+                               (unsigned)g_ark_al_resolved, (unsigned)g_ark_al_size,
+                               (unsigned)g_ark_al_ret);
+                    checkpoint("MEMCTX n=%u context=0x%x (global 13528 now = 0x%x)"
+                               " flag30=0x%x index=0x%x defaultPool(+0xc)=0x%x pool(+0x14)=0x%x"
+                               " -- index 28 falls to the default pool, which is what returned NULL",
+                               (unsigned)g_ark_mc_n, (unsigned)g_ark_mc_ctx,
+                               (unsigned)ppc_load_u32(&g_ctx, 13528u),
+                               (unsigned)g_ark_mc_flag, (unsigned)g_ark_mc_idx,
+                               (unsigned)g_ark_mc_defpool, (unsigned)g_ark_mc_pool4);
+                    checkpoint("POOL28 n=%u mgr=0x%x frame=%d topFrameCount=0x%x slot28=0x%x"
+                               " -- maxPoolCount over all frames; slot28=1 means a pool exists there",
+                               (unsigned)g_ark_gp_n, (unsigned)g_ark_gp_mgr,
+                               (int)g_ark_gp_frame, (unsigned)g_ark_gp_count,
+                               (unsigned)g_ark_gp_slot);
+                    checkpoint("POOLREG bulkSetups=%u registrations=%u maxIndex=%u got28=%u"
+                               " lastIdx=%u lastPool=0x%x indexMask(0..31)=0x%08x"
+                               " -- the archive needs index 28 registered",
+                               (unsigned)g_ark_sp_bulk, (unsigned)g_ark_sp_n,
+                               (unsigned)g_ark_sp_maxidx, (unsigned)g_ark_sp_got28,
+                               (unsigned)g_ark_sp_lastidx, (unsigned)g_ark_sp_lastpool,
+                               (unsigned)g_ark_sp_idxmask);
+                    checkpoint("LZWALK hits=%u mgr=0x%x frame=%d frames=%d maxCount=0x%x slot28=%u"
+                               " -- this is the frame stack AT the LZMA resolve, not sampled elsewhere",
+                               (unsigned)g_ark_lzhit, (unsigned)g_ark_lzmgr,
+                               (int)g_ark_lzframe, (int)g_ark_lznframes,
+                               (unsigned)g_ark_lzcount, (unsigned)g_ark_lzslot);
+                    checkpoint("TLS slot0: sets=%u gets=%u nullGets=%u lastSetValue=0x%x"
+                               " -- getCallingThread() is OSGetThreadSpecific(0); a NULL there"
+                               " sends the engine to an empty pool-frame manager",
+                               (unsigned)g_ark_ts_set0, (unsigned)g_ark_ts_get,
+                               (unsigned)g_ark_ts_getnull, (unsigned)g_ark_ts_lastset0);
+                    {
+                        char sb[240]; int so = 0;
+                        for (unsigned i = 0; i < g_ark_ts_setn && i < 6u; i++)
+                            so += snprintf(sb + so, sizeof(sb) - (size_t)so,
+                                           "[%u val=0x%x lr=0x%x thr=0x%x] ", i,
+                                           (unsigned)g_ark_ts_setlog[i][0],
+                                           (unsigned)g_ark_ts_setlog[i][1],
+                                           (unsigned)g_ark_ts_setlog[i][2]);
+                        if (so == 0) snprintf(sb, sizeof(sb), "<none>");
+                        checkpoint("TLS SETS %s", sb);
+                        so = 0;
+                        char nb[160];
+                        for (unsigned i = 0; i < g_ark_ts_nulln && i < 4u; i++)
+                            so += snprintf(nb + so, sizeof(nb) - (size_t)so,
+                                           "0x%x ", (unsigned)g_ark_ts_nulllr[i]);
+                        if (so == 0) snprintf(nb, sizeof(nb), "<none>");
+                        checkpoint("TLS NULLGET callers %s", nb);
+                        so = 0; char mb[200];
+                        for (unsigned i = 0; i < g_ark_mgrn && i < 4u; i++)
+                            so += snprintf(mb + so, sizeof(mb) - (size_t)so,
+                                           "[mgr=0x%x n=%u @%llu..%llu] ",
+                                           (unsigned)g_ark_mgrs[i][0],
+                                           (unsigned)g_ark_mgrs[i][1],
+                                           (unsigned long long)g_ark_mgrt[i][0],
+                                           (unsigned long long)g_ark_mgrt[i][1]);
+                        if (so == 0) snprintf(mb, sizeof(mb), "<none>");
+                        {
+                            uint32_t mctx = ppc_load_u32(&g_ctx, 13528u);
+                            checkpoint("POOLDEST %s || context=0x%x fallbackMgr(+0x18)=0x%x"
+                                       " ctx+0x2c=0x%x -- workers can only see the fallback",
+                                       mb, (unsigned)mctx,
+                                       (unsigned)(mctx ? ppc_load_u32(&g_ctx, mctx + 0x18u) : 0u),
+                                       (unsigned)(mctx ? ppc_load_u32(&g_ctx, mctx + 0x2cu) : 0u));
+                            {
+                                char rb[200]; int ro = 0;
+                                for (unsigned i = 0; i < g_ark_smpn && i < 4u; i++)
+                                    ro += snprintf(rb + ro, sizeof(rb) - (size_t)ro,
+                                                   "[%u target=0x%x default=0x%x%s] ", i,
+                                                   (unsigned)g_ark_smp[i][0],
+                                                   (unsigned)g_ark_smp[i][1],
+                                                   g_ark_smp[i][0] == g_ark_smp[i][1]
+                                                     ? "" : " MISMATCH");
+                                if (ro == 0) snprintf(rb, sizeof(rb), "<none>");
+                                {
+                                    char db[240]; int dof = 0;
+                                    for (unsigned i = 0; i < g_ark_sdf_n && i < 4u; i++)
+                                        dof += snprintf(db + dof, sizeof(db) - (size_t)dof,
+                                                        "[%u @%llu src=0x%x new=0x%x] ", i,
+                                                        (unsigned long long)g_ark_sdf_at[i],
+                                                        (unsigned)g_ark_sdf_src[i],
+                                                        (unsigned)g_ark_sdf_new[i]);
+                                    if (dof == 0) snprintf(db, sizeof(db), "<none>");
+                                    for (unsigned i = 0; i < g_ark_cp_n && i < 2u; i++)
+                                        checkpoint("COPY[%u] src=0x%x stack=0x%x arr=0x%x  ->"
+                                                   "  new=0x%x stack=0x%x arr=0x%x"
+                                                   " -- a null stack/arr on the new object means"
+                                                   " copyDeep did not carry the frame structure",
+                                                   i, (unsigned)g_ark_cp[i][0],
+                                                   (unsigned)g_ark_cp[i][1], (unsigned)g_ark_cp[i][2],
+                                                   (unsigned)g_ark_cp[i][3],
+                                                   (unsigned)g_ark_cp[i][4], (unsigned)g_ark_cp[i][5]);
+                                    checkpoint("ORDERING registrations @%llu..%llu | setDefaultFrame %s"
+                                               " -- a default created BEFORE the registrations"
+                                               " inherits nothing and stays empty",
+                                               (unsigned long long)g_ark_reg_first,
+                                               (unsigned long long)g_ark_reg_last, db);
+                                }
+                                {
+                                    char lb[420]; int lo = 0;
+                                    for (unsigned i = 0; i < g_ark_rc_n && i < 14u; i++)
+                                        lo += snprintf(lb + lo, sizeof(lb) - (size_t)lo,
+                                                       "[fn=0x%x lr=0x%x rc=0x%x as_r%u] ",
+                                                       (unsigned)g_ark_rc[i][0],
+                                                       (unsigned)g_ark_rc[i][1],
+                                                       (unsigned)g_ark_rc[i][2],
+                                                       (unsigned)g_ark_rc[i][3]);
+                                    if (lo == 0) snprintf(lb, sizeof(lb), "<none>");
+                                    {
+                                        char rb2[300]; int r2 = 0;
+                                        for (unsigned i = 0; i < g_ark_rel_n && i < 10u; i++)
+                                            r2 += snprintf(rb2 + r2, sizeof(rb2) - (size_t)r2,
+                                                           "[obj=0x%x lr=0x%x @%u] ",
+                                                           (unsigned)g_ark_rel[i][0],
+                                                           (unsigned)g_ark_rel[i][1],
+                                                           (unsigned)g_ark_rel[i][2]);
+                                        if (r2 == 0) snprintf(rb2, sizeof(rb2), "<none>");
+                                        {
+                                            char ob[260]; int oo = 0;
+                                            for (unsigned i = 0; i < g_ark_ov_n && i < 6u; i++)
+                                                oo += snprintf(ob + oo, sizeof(ob) - (size_t)oo,
+                                                               "[buf=0x%x cap=%u @%u lr=0x%x] ",
+                                                               (unsigned)g_ark_ov[i][0],
+                                                               (unsigned)g_ark_ov[i][1],
+                                                               (unsigned)g_ark_ov[i][2],
+                                                               (unsigned)g_ark_ov[i][3]);
+                                            if (oo == 0) snprintf(ob, sizeof(ob), "<no overlap>");
+                                            {
+                                                char mib[240]; int mo = 0;
+                                                for (unsigned i = 0; i < g_ark_mi_hit && i < 6u; i++)
+                                                    mo += snprintf(mib + mo, sizeof(mib) - (size_t)mo,
+                                                                   "[obj=0x%x @%u lr=0x%x] ",
+                                                                   (unsigned)g_ark_mi[i][0],
+                                                                   (unsigned)g_ark_mi[i][1],
+                                                                   (unsigned)g_ark_mi[i][2]);
+                                                if (mo == 0) snprintf(mib, sizeof(mib), "<none on the manager>");
+                                                {
+                                                    char nb2[420]; int no = 0;
+                                                    for (unsigned i = 0; i < g_ppc_nullsite_n
+                                                             && i < 12u; i++)
+                                                        no += snprintf(nb2 + no, sizeof(nb2) - (size_t)no,
+                                                                       "[pc=0x%x lr=0x%x n=%u addr=0x%x] ",
+                                                                       (unsigned)g_ppc_nullsite[i][0],
+                                                                       (unsigned)g_ppc_nullsite[i][1],
+                                                                       (unsigned)g_ppc_nullsite[i][2],
+                                                                       (unsigned)g_ppc_nullsite[i][3]);
+                                                    if (no == 0) snprintf(nb2, sizeof(nb2), "<none>");
+                                                    checkpoint("NULLSITES distinct=%u %s",
+                                                               (unsigned)g_ppc_nullsite_n, nb2);
+                                                }
+                                                for (int d = 0; d < 2; d++) {
+                                                    uint32_t base = d ? g_arkchemy_cfg_dump2
+                                                                      : g_arkchemy_cfg_dump1;
+                                                    char wb[300]; int wo = 0;
+                                                    if (!base) continue;
+                                                    for (int w = 0; w < 16; w++)
+                                                        wo += snprintf(wb + wo, sizeof(wb) - (size_t)wo,
+                                                                       "%02x:%08x ", w * 4,
+                                                                       (unsigned)ppc_load_u32(&g_ctx,
+                                                                           base + (uint32_t)(w * 4)));
+                                                    checkpoint("DUMP%d 0x%x %s", d + 1, (unsigned)base, wb);
+                                                }
+                                                checkpoint("METAPOOL poolIndex=%u firstPool=0x%x"
+                                                           " nullPools=%u nullObjects=%u of %u"
+                                                           " -- null pool means the resolve fails;"
+                                                           " good pool with null objects means the pool is empty",
+                                                           (unsigned)g_ark_mp_idx, (unsigned)g_ark_mp_pool,
+                                                           (unsigned)g_ark_mp_nullpool,
+                                                           (unsigned)g_ark_mp_nullobj, (unsigned)g_ark_mi_n);
+                                                checkpoint("METAIMG allocs=%u first=0x%x last=0x%x hits=%s"
+                                                           " -- these come from the same pool as the manager",
+                                                           (unsigned)g_ark_mi_n, (unsigned)g_ark_mi_first,
+                                                           (unsigned)g_ark_mi_last, mib);
+                                            }
+                                            checkpoint("OVERLAP listGrowths=%u covering 0x45f3964: %s"
+                                                       " -- an overlap means the allocator reissued live memory",
+                                                       (unsigned)g_ark_grow_n, ob);
+                                        }
+                                        checkpoint("RELWINDOW n=%u %s -- releases around the wipe at 440612",
+                                                   (unsigned)g_ark_rel_n, rb2);
+                                    }
+                                    checkpoint("POOLRC n=%u %s (ledger is now the POOL at 0x4500274)",
+                                               (unsigned)g_ark_rc_n, lb);
+                                    checkpoint("ALLOCPOOL managerPoolIndex=%u resolvedPool=0x%x"
+                                               " (archive wants index 28; pools live in 0x4502fb0)"
+                                               " -- if this is a scratch pool, the manager dies with it",
+                                               (unsigned)g_ark_ap_idx, (unsigned)g_ark_ap_pool);
+                                    checkpoint("VTABLE srcMgr=0x%x newMgr(at build)=0x%x"
+                                               " | at lookup words: +0=0x%x +4=0x%x +8=0x%x +0xc=0x%x"
+                                               " -- a changed +0 means the block was reused",
+                                               (unsigned)g_ark_vt_src, (unsigned)g_ark_vt_new,
+                                               (unsigned)g_ark_vt_w0, (unsigned)g_ark_vt_w1,
+                                               (unsigned)g_ark_vt_w2, (unsigned)g_ark_vt_w3);
+                                }
+                                checkpoint("CHAIN mgr=0x%x stack=0x%x(count=0x%x) arr=0x%x arr[0]=0x%x"
+                                           " frameIdx=%d frame=0x%x table=0x%x tableCount=0x%x pools=0x%x",
+                                           (unsigned)g_ark_ch[0], (unsigned)g_ark_ch[1],
+                                           (unsigned)g_ark_ch[8], (unsigned)g_ark_ch[2],
+                                           (unsigned)g_ark_ch[9], (int)g_ark_ch[3],
+                                           (unsigned)g_ark_ch[4], (unsigned)g_ark_ch[5],
+                                           (unsigned)g_ark_ch[6], (unsigned)g_ark_ch[7]);
+                                checkpoint("SETPOOLS %s -- a mismatch means the pools are being"
+                                           " registered into the thread's cached manager instead"
+                                           " of the default the workers read", rb);
+                            }
+                        }
+                    }
+                }
+                {
+                    uint32_t fwi = g_ppc_watch[4].r4;
+                    checkpoint("ADDWORK hits=%u archive=0x%x fileWorkItem=0x%x blocking=0x%x"
+                               " || offset=0x%x size=0x%x  -> first=%u last=%u"
+                               " -- size 0 is the whole stall; retail's size is about 1MB",
+                               (unsigned)g_ppc_watch[4].hit_count, (unsigned)g_ppc_watch[4].r3,
+                               (unsigned)fwi, (unsigned)g_ppc_watch[4].r5,
+                               (unsigned)(fwi ? ppc_load_u32(&g_ctx, fwi + 0x14u) : 0u),
+                               (unsigned)(fwi ? ppc_load_u32(&g_ctx, fwi + 0x18u) : 0u),
+                               (unsigned)(fwi ? ppc_load_u32(&g_ctx, fwi + 0x14u) >> 15 : 0u),
+                               (unsigned)(fwi ? (ppc_load_u32(&g_ctx, fwi + 0x14u)
+                                               + ppc_load_u32(&g_ctx, fwi + 0x18u) - 1u) >> 15 : 0u));
+                }
+                checkpoint("MODULE obj=0x66da0 +0=0x%x +4=0x%x +8=0x%x +0xc=0x%x"
+                           " -- retail: +0=0x10052474 +4=0x1 +8=0x216b954 +0xc=0x0"
+                           " || ctor hits=%u r3=0x%x r4=0x%x r5=0x%x r6=0x%x",
+                           (unsigned)ppc_load_u32(&g_ctx, 0x66da0u + 0u),
+                           (unsigned)ppc_load_u32(&g_ctx, 0x66da0u + 4u),
+                           (unsigned)ppc_load_u32(&g_ctx, 0x66da0u + 8u),
+                           (unsigned)ppc_load_u32(&g_ctx, 0x66da0u + 0xcu),
+                           (unsigned)g_ppc_watch[7].hit_count,
+                           (unsigned)g_ppc_watch[7].r3, (unsigned)g_ppc_watch[7].r4,
+                           (unsigned)g_ppc_watch[7].r5, (unsigned)g_ppc_watch[7].r6);
+            }
         }
 
         if (g_game_thread_done) {

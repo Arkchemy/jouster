@@ -1,0 +1,54 @@
+2026-09-04 (later) -- the stall reduces to a zero-length read
+
+TWO THEORIES DIED FIRST, BOTH TO THE SAME METHOD
+  1. "_decompressJobFlag is never set." The retail game holds that same field
+     clear on every sample, with _state=1 throughout. Not the gate.
+  2. "The job Module descriptor was left uninitialised." Measured:
+       MODULE +0=0x1097f4 +4=0x1 +8=0x216b954   retail +4=0x1 +8=0x216b954
+     Correct, and matching retail field for field. The inference came from
+     misreading jqWorkerLoop: r29 is the job TRACING buffer (base, cursor,
+     capacity), and [r29+8] is "is tracing enabled" -- zero on retail too.
+     The batch is r19, from the work slot at [r1+0x18], and it holds the
+     module pointer, which is why [r19+8] is the job function.
+
+THE JOB SYSTEM IS CLEARED ENTIRELY
+  COMPLETION reached=1 nonnull=1 flagptr=0x34a0 *flag=0x1 jobs_run=1
+  The real completion is at 0x21da6c4: load the flag pointer from [r1+0x1c]
+  and, if non-null, atomically decrement it. It ran, with the right pointer.
+  Submission, execution and completion all work. The archive simply never
+  asks for a second block.
+
+THE OBJECTS, NAMED FROM THEIR VTABLES
+  parent = Core::igArchiveWorkItem   (vtable 0x11e7e8 / retail 0x10067468)
+  task   = Core::igArchiveBlockTask  (vtable 0x11e868 / retail 0x100674e8)
+  Confirmed structurally: startNewTasks does `stw r29, 8(r31)`, so
+  task+8 = the work item.
+
+THE ARITHMETIC -- igArchive::addWork, 0x216aa9c
+  r10 = [fileWorkItem+0x14]   offset
+  r7  = [fileWorkItem+0x18]   size
+  r4  = r10 >> 15                    -> workItem+0x14   first block
+  r6  = (r10 + r7 - 1) >> 15         -> workItem+0x18   last block
+  blocks = (r6 - r4) + 1
+  (Block size 0x8000. An earlier grep missed this shift because it is `srwi`,
+  not `srawi`.)
+
+  Ours reads +0x14=1, +0x18=0. Those two expressions can produce that pair
+  only when size == 0, with offset exactly 0x8000: then r8 = 0x7fff and
+  r8>>15 = 0 while r10>>15 = 1. Block count comes out (0-1)+1 = 0.
+  Retail reads +0x14=1, +0x18=33, which implies a size of about 1 MB.
+
+  So the read length is zero. Everything downstream follows from that: no
+  blocks to issue, nothing to drain, updateTasks skipping every pass.
+
+CONFIRMED BY THE FULL 16-WORD DIFF
+  Against retail's matching transient sample, every field through +0x24 is
+  identical. Only +0x28 (0x17 vs 0x170b), +0x30 (0 vs a live pointer) and
+  +0x3c (0x23 vs 0) differ.
+
+NEXT
+  Build 15:44 watches addWork directly and prints the offset and size it was
+  actually handed, rather than inferring them back out of the result --
+  inference is what produced both of today's dead theories. If size is 0,
+  the question becomes who was supposed to fill it in: the archive TOC
+  lookup for the file being opened.

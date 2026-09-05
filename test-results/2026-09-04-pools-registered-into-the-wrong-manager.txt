@@ -1,0 +1,101 @@
+2026-09-04 (evening) -- the boot stall is pools landing in the wrong manager
+
+THE CHAIN, MEASURED END TO END
+  updateTasks skips every pass because the archive work item's outstanding
+  count (+0x1c) never drains. It never drains because the block task is never
+  reaped. It is never reaped because decompressBatch takes its failure path.
+  It takes that path because lzmaInflate returns 1 -- which is FAILURE, not
+  success (the addic/subfe idiom at 0x216b81c turns a non-zero internal error
+  into 1). The internal error is SZ_ERROR_MEM from LzmaDec_AllocateProbs2: a
+  plain 15,980-byte request (lc=3, lp=0 -- textbook parameters) returns NULL.
+  The props decode cleanly first, so the block read and the compressed data
+  are both fine.
+
+WHY THE ALLOCATION FAILS
+  The LZMA ISzAlloc shim allocates from pool INDEX 28, held in a static global
+  that is never written at runtime (store watch: hits=0), so it matches retail
+  by construction. Index 28 is resolved per-thread:
+    igThread::getCallingThread()  ==  OSGetThreadSpecific(0)
+  jqWorkerThread deliberately clears slot 0 at startup (0x21db5a0), so on the
+  job workers the calling thread is NULL BY DESIGN -- retail included. A NULL
+  thread resolves to the default manager at context+0x18.
+
+THE DIVERGENCE
+  ours    context+0x18 = 0x45f3964,  maxPoolCount = 0     (empty)
+  retail  context+0x18 = 0x116da008 / 0x117cc0b0 / 0x117cc9d0
+                                     maxPoolCount = 128   (every one)
+  Retail swaps that manager as frames are pushed, exactly as we do -- the
+  swapping is normal. What differs is that retail's newly installed manager
+  holds the pools and ours does not.
+
+  Ours registers 52 pools across two OTHER managers:
+    POOLDEST [mgr=0x4500f58 n=7] [mgr=0x4502fb0 n=45]
+  0x4502fb0 is properly populated (128 slots, index 28 present twice) -- it is
+  the MAIN THREAD's cached manager. setMemoryPools resolves its target through
+  the same per-thread function, and on the main thread that returns the cached
+  manager rather than the newly installed default. The default the workers must
+  use is left empty.
+
+  Store-watch history for context+0x18:
+    [0]@1      = 0x0
+    [1]@37316  = 0x4500f58   lr=0x2178bf0
+    [2]@160833 = 0x45f3000   lr=0x217b7f0   (inside setMemoryPools)
+    [3]@262726 = 0x45f3964   lr=0x217b7f0   final, empty
+
+NEXT
+  Capture, inside setMemoryPools just before it resolves its target, the
+  current thread's cached manager (thread+0x2c[0]) against context+0x18. If
+  the cached pointer is stale where retail's would be null, that is the bug.
+
+THEORIES RETIRED TODAY (all by measurement)
+  _decompressJobFlag as the gate; an uninitialised job Module descriptor; a
+  zero read size; lzmaInflate returning 1 as success; pool index 28 out of
+  range; the worker thread never being registered; the memory context being
+  null. Every one came from inferring backwards out of recompiled code. The
+  ones that held were direct captures at the point of the operation, and
+  diffs against the retail game running under an emulator.
+
+--- CEMU FOLLOW-UP (same evening, no hardware needed) ---
+
+CONFIRMED ON HARDWARE FIRST
+  SETPOOLS [0 target=0x4502fb0 default=0x45f3964 MISMATCH]
+           [1 target=0x4502fb0 default=0x45f3964 MISMATCH]
+  Both registration passes write into the main thread's manager, not the
+  default that the workers read.
+
+HOW THE DEFAULT IS BUILT
+  igMemoryContext::setDefaultFrame (0x217b748):
+    bl 0x21785e4              resolve the CURRENT thread's manager
+    bl 0x215e834              igObject::createCopyRefFromPool(src, out, pool, 1)
+    stw r31, 0x18(r28)        install the copy as the new default
+  With CopyMethod 1 that runs igObject::copyDeep, a metadata-driven field
+  copy. So the new default inherits whatever the source held AT COPY TIME.
+
+RETAIL, SAMPLED AT 1.5ms
+  t+1.529  defaultMgr=0x0         poolCount=-1
+  t+1.534  defaultMgr=0x116da008  poolCount=128
+  t+1.547  defaultMgr=0x117cc0b0  poolCount=128
+  t+1.554  defaultMgr=0x117cc9d0  poolCount=128
+  Never once empty, and the FIRST default is already populated -- so its copy
+  source held the pools before any default existed. Retail's order is:
+  register the pools, then derive the default.
+
+OURS
+  context+0x18 history: 0x4500f58 @37316, 0x45f3000 @160833, 0x45f3964 @262726
+  POOLDEST [mgr=0x4500f58 n=7] [mgr=0x4502fb0 n=45]
+  The first default did receive 7 registrations. Then the main thread acquired
+  its own manager (0x4502fb0) and the remaining 45 went there, while the later
+  defaults were copied from a source still empty at copy time. Result: the
+  default the workers read holds nothing, permanently.
+
+  => ORDERING. Not a broken copy, not missing metadata (nullmeta_fallbacks=0),
+     not a bad pool index.
+
+TWO SUSPICIONS CLOSED BY THE SAME RUNS
+  context+0x2c = 0        retail is null too. Normal, not a divergence.
+  pool index = 0x1c       retail sets the same 28 at t+2.10s. An earlier
+                          reading of "retail has 0" was a too-early sample.
+
+STILL NEEDS HARDWARE
+  Build 20:08 timestamps the first and last pool registration against each
+  setDefaultFrame call, which pins the inversion exactly.

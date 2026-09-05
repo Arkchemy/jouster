@@ -1,0 +1,43 @@
+2026-09-04 -- the stall is a block count that is never computed
+
+WHAT THE CEMU COMPARISON KILLED
+  _decompressJobFlag was NOT the gate. Retail reads 0x0 in [task+0x14] on
+  every sample, with _state=1 throughout -- identical to ours. Several runs
+  were built around that field being the thing that never gets set; it never
+  gets set on the working system either. Comparing against the system that
+  works retired the theory in one run.
+
+WHAT ACTUALLY DIFFERS -- the per-file parent object ([task+8])
+                 retail                        ours
+  +0x18 total    33, then 8 for the next file  0
+  +0x14 cursor   1 -> 7 -> ... -> 34           1
+  +0x1c outstanding  set to 33, drains to 0    1
+  Retail passes through 1/0/1 for exactly one sample on its way in. Ours is
+  parked in that pre-count transient forever: no count, nothing to issue,
+  the outstanding counter never drains, updateTasks takes the skip branch
+  every time.
+
+THE MECHANISM, MEASURED ON HARDWARE
+  ARCHQ  parent +0x14=1 +0x18=0 +0x1c=1
+         completion gate hits=1 zero=1 [batch+8]=0x0 [batch+4]=0x0
+  jqWorkerLoop reached its completion gate once in 25,200 frames and skipped
+  it, because [batch+8] is zero. jqAddBatchToQueue sets [batch+8] from
+  [module+4]. So the whole stall reduces to one word.
+
+THE WORD -- job Module descriptor, guest 0x10130CB0 (ours 0x66da0, .bss+306352)
+  retail  +0=0x10052474 (name)  +4=0x1  +8=0x216b954 (fn)  +0xc=0
+  ours    +4=0
+  Constructed at 0x216bc20 with r3=obj, r4=name, r5=1 (WorkerType), r6=
+  decompressBatch. The ctor at 0x21dc42c is recompiled correctly: it stores
+  r30(=r5=1) into +4, name into +0, fn into +8. So either that static-init
+  ctor never ran, or it ran with a different r5.
+
+NEXT
+  Build 14:41 measures both: w7 retargeted to 0x21dc42c (did the ctor run,
+  with what arguments) plus a direct dump of the object's four words.
+
+METHOD NOTE
+  Reading the folded C, not the disassembly comment, mattered again here:
+  lis+addi and even stwu displacements are folded into the register
+  assignment, so `addi r3,r3,0xcb0` emits as `r3 = r3` and the real address
+  is already in the lis line.
