@@ -55,3 +55,35 @@ CORRECTIONS TO EARLIER WRITE-UPS
     that retail's manager stays alive and ours is wiped.
   - "the pools are registered into the wrong manager" is superseded: the
     manager question is downstream of construction failing.
+
+NEXT SESSION -- EXACTLY WHAT TO CHECK, IN ORDER
+  The 02:13 build and watch.cfg are already on the SD card. Just launch it.
+
+  1. DUMP1 0x443b59c -- our igMetaObject's flags at word +0x30.
+     Retail: 0x0107, and (0x107 >> 4) & 1 == 0, so it constructs.
+     If ours has 0x10 set, construction is vetoed and that is the bug.
+
+  2. NULLSITES -- the new distinct (pc, lr) table for null-pointer writes.
+     2,261 of them happen per boot and only the first was ever recorded. This
+     maps the sources in one run. Expect the createInstance callers to appear;
+     anything else in that table is a separate, unexamined failure.
+
+  3. If the veto bit IS set, the cause is in registration:
+       igArkRegister (0x215efe0) sets the veto bit at 0x215f0dc when its r27
+       parameter is NULL, and clears it at 0x215f0f4 when r27 is non-null,
+       also filling meta+0x1c from it. Retail's meta+0x1c = 0x1007ead0, so
+       retail's r27 was non-null. Find what our build passes.
+       Registration reaches igArkRegister via:
+         igPlatformMetaImage_arkRegister (0x22780dc)
+           -> getClassMetaSafeInternal(&global 0x1014319C, fn 0x2272cf0)
+       The instantiability argument almost certainly originates from that
+       function-list at 0x2272cf0.
+
+  4. Do NOT re-derive any of this from two measurements and an inference.
+     Fourteen mechanisms died that way in one session. Read the value at the
+     moment it matters, and diff the same address against retail under Cemu.
+
+WORKFLOW NOTE
+  watch.cfg (store1/store2/dump1/dump2) retargets watches and dumps at run
+  time, so most questions no longer need a rebuild. Probes placed inside
+  generated_*.c are NOT tracked by git and will not survive regeneration.
