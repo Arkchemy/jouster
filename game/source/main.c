@@ -4800,7 +4800,9 @@ int main(int argc, char *argv[]) {
                                         checkpoint("RELWINDOW n=%u %s -- releases around the wipe at 440612",
                                                    (unsigned)g_ark_rel_n, rb2);
                                     }
-                                    checkpoint("POOLRC n=%u %s (ledger is now the POOL at 0x4500274)",
+                                    checkpoint("POOLRC n=%u %s (ledger is now the DEFAULT MANAGER at 0x45f3964 --"
+                                               " every Ref/Release/SmartPointerAssign touching it, with LR;"
+                                               " an imbalance names the missing retain or the extra release)",
                                                (unsigned)g_ark_rc_n, lb);
                                     checkpoint("ALLOCPOOL managerPoolIndex=%u resolvedPool=0x%x"
                                                " (archive wants index 28; pools live in 0x4502fb0)"
