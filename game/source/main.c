@@ -4823,6 +4823,24 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            static const char *bsn[6] = {
+                                                "memCtx::bootstrapInit", "memCtx::bootstrapUninit",
+                                                "arkCore::initBootstrap", "arkCore::exitBootstrap",
+                                                "strPool::bootstrapInit", "strPool::bootstrapUninit" };
+                                            char bb[420]; int bo = 0; bb[0] = 0;
+                                            for (unsigned i = 0; i < 6u; i++) {
+                                                bo += snprintf(bb + bo, sizeof bb - (size_t)bo,
+                                                               " [%s n=%u @%u..%u]", bsn[i],
+                                                               (unsigned)g_ark_bs[i][0], (unsigned)g_ark_bs[i][1],
+                                                               (unsigned)g_ark_bs[i][2]);
+                                                if (bo >= (int)sizeof bb - 1) break;
+                                            }
+                                            checkpoint("BOOTSTRAP%s -- the engine has an explicit bootstrap phase."
+                                                       " If a teardown lands near the write at call 440,611 then the"
+                                                       " manager's memory is being reclaimed on purpose and we are"
+                                                       " holding a pointer past its lifetime", bb);
+                                        }
+                                        {
                                             char tb[300]; int to = 0; tb[0] = 0;
                                             for (unsigned i = 0; i < g_ark_thr_n && i < 8u; i++) {
                                                 to += snprintf(tb + to, sizeof tb - (size_t)to,
