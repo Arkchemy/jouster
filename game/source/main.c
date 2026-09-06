@@ -2545,6 +2545,7 @@ static void game_thread_func(void *arg) {
      *   store2=0x...      secondary store watch
      *   dump1=0x...       dump 16 words from here each report
      *   dump2=0x...       ditto
+     *   owner=0x...       report every allocation covering this address
      */
     {
         FILE *cf = fopen("sdmc:/switch/Jouster/watch.cfg", "r");
@@ -2558,6 +2559,7 @@ static void game_thread_func(void *arg) {
                 else if (!strncmp(line, "store2", 6)) g_arkchemy_cfg_store2 = (uint32_t)v;
                 else if (!strncmp(line, "dump1", 5))  g_arkchemy_cfg_dump1  = (uint32_t)v;
                 else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
+                else if (!strncmp(line, "owner", 5))  g_ark_own_target      = (uint32_t)v;
             }
             fclose(cf);
         }
@@ -4813,6 +4815,25 @@ int main(int argc, char *argv[]) {
                                                    (unsigned)g_ark_rel_n, rb2);
                                     }
                                     {
+                                        /* Who owned this memory, in order. Two live entries covering the same
+                                           address with no free between is a double allocation. */
+                                        {
+                                            char ob[300]; int oo = 0; ob[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_own_n && i < 12u; i++) {
+                                                oo += snprintf(ob + oo, sizeof ob - (size_t)oo,
+                                                               " [%u @%u ret=0x%x size=%u lr=0x%x pool=0x%x]",
+                                                               i, (unsigned)g_ark_own[i][0], (unsigned)g_ark_own[i][1],
+                                                               (unsigned)g_ark_own[i][2], (unsigned)g_ark_own[i][3],
+                                                               (unsigned)g_ark_own[i][4]);
+                                                if (oo >= (int)sizeof ob - 1) break;
+                                            }
+                                            checkpoint("OWNER target=0x%x n=%u%s -- allocations whose block covers"
+                                                       " the default frame manager; >1 with no free between them"
+                                                       " means the allocator handed the same memory to two owners",
+                                                       (unsigned)g_ark_own_target, (unsigned)g_ark_own_n,
+                                                       ob[0] ? ob : " <none>");
+                                        }
+
                                         char wb[220]; wb[0] = 0;
                                         for (unsigned i = 0; i < g_ark_wipe_n && i < 8u; i++) {
                                             char one[64];
