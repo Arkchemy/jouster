@@ -302,6 +302,7 @@ static Mutex g_console_mutex;
  * the game thread and the crash report will point straight at it instead of
  * at libnx's graphics path. Either result is worth more than the screen. */
 static volatile bool g_console_enabled = true;
+static volatile bool g_splash_already_shown = false;
 /* Real gap found in an audit, 2026-08-24: this function had no printf
  * format attribute, so GCC did no format/argument checking on it at all
  * -- on the single most important diagnostic function in the project,
@@ -3359,7 +3360,8 @@ static void game_thread_func(void *arg) {
              * screen rather than the truncated one -- previously the good
              * frames were followed by the colour bars and the broken decode,
              * which read as a regression rather than as a diagnostic. */
-            arkchemy_boot_show_splash();          /* fills the staging buffer */
+            if (!g_splash_already_shown)          /* already up if shown early */
+                arkchemy_boot_show_splash();      /* fills the staging buffer */
             /* The boot movie decodes correctly -- 62 frames, matching the 62
              * slices in the file -- but a 256x128 overlay in a corner of the
              * splash simply looks wrong, so it is off. The playback path and
@@ -3454,6 +3456,33 @@ int main(int argc, char *argv[]) {
     ppc_mem_set_alloc_fail_log(mem_alloc_fail_log_sink);
     ppc_set_debug_watch(debug_watch_sink);
 
+    /* Splash first (2026-09-05). It used to be presented deep inside
+     * game_thread_func, after ppc_init_globals, the 114 static initializers
+     * and the whole engine boot -- so the screen stayed black for seconds
+     * while all of that ran. Nothing about the splash depends on the engine:
+     * it is a TGA off the SD card blitted through deko3d. Bringing it to the
+     * front means the user sees the boot image immediately and every slow
+     * step happens behind it.
+     *
+     * The cost is the on-screen console: it and deko3d cannot both own the
+     * display, so once the splash is up the live checkpoint feed is gone.
+     * Every checkpoint still goes to game-results.log, which is what the
+     * courier reads anyway. Set ARKCHEMY_SPLASH_FIRST to 0 to get the console
+     * back when a run needs to be watched live. */
+#ifndef ARKCHEMY_SPLASH_FIRST
+#define ARKCHEMY_SPLASH_FIRST 1
+#endif
+#if ARKCHEMY_SPLASH_FIRST
+    {
+        void ppc_import_gx2_GX2Init(PpcContext *ctx);
+        ppc_import_gx2_GX2Init(&g_ctx);
+        if (g_arkchemy_gx2.initialized) {
+            arkchemy_boot_show_splash();
+            g_splash_already_shown = true;
+        }
+    }
+#endif
+
     PadState pad;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
@@ -3507,7 +3536,12 @@ int main(int argc, char *argv[]) {
     // Switch runtime piece), named as its own subtitle below the main
     // wordmark, same as the other Arkchemy repos (conquertron, blaster).
     mutexInit(&g_console_mutex);
-    consoleInit(NULL);
+    /* Only take the console if the splash did not already claim the display. */
+    if (!g_splash_already_shown) {
+        consoleInit(NULL);
+    } else {
+        g_console_enabled = false;
+    }
     printf("\x1b[32m  =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~\x1b[0m\n\n");
     printf("\x1b[1;32m");
     printf("   ###  ####  #   #  #### #   # ##### #   # #   #\n");
@@ -4697,6 +4731,30 @@ int main(int argc, char *argv[]) {
                                                                    (unsigned)g_ark_mi[i][1],
                                                                    (unsigned)g_ark_mi[i][2]);
                                                 if (mo == 0) snprintf(mib, sizeof(mib), "<none on the manager>");
+                                                {
+                                                    char ab[240]; int ao2 = 0;
+                                                    for (unsigned i = 0; i < g_ark_rc_argn && i < 4u; i++)
+                                                        ao2 += snprintf(ab + ao2, sizeof(ab) - (size_t)ao2,
+                                                                        "[ptr=0x%x size=%u align=%u lr=0x%x] ",
+                                                                        (unsigned)g_ark_rc_args[i][0],
+                                                                        (unsigned)g_ark_rc_args[i][1],
+                                                                        (unsigned)g_ark_rc_args[i][2],
+                                                                        (unsigned)g_ark_rc_args[i][3]);
+                                                    if (ao2 == 0) snprintf(ab, sizeof(ab), "<none>");
+                                                    checkpoint("ALLOCONLY pool=0x4500274 allocs=%u ok=%u"
+                                                               " failAtExit[early=%u,a60=%u,a94=%u,ad8=%u,d68=%u]"
+                                                               " lastSize=%u -- frees excluded this time",
+                                                               (unsigned)g_ark_rt_allocs, (unsigned)g_ark_rt_ok,
+                                                               (unsigned)g_ark_rt_fail[0], (unsigned)g_ark_rt_fail[1],
+                                                               (unsigned)g_ark_rt_fail[2], (unsigned)g_ark_rt_fail[3],
+                                                               (unsigned)g_ark_rt_fail[4], (unsigned)g_ark_rt_size);
+                                                    checkpoint("REALLOC pool=0x4500274 calls=%u"
+                                                               " nullExits[early=%u,a60=%u,a94=%u,ad8=%u,d68=%u] %s",
+                                                               (unsigned)g_ark_rc_calls,
+                                                               (unsigned)g_ark_rc_exit[0], (unsigned)g_ark_rc_exit[1],
+                                                               (unsigned)g_ark_rc_exit[2], (unsigned)g_ark_rc_exit[3],
+                                                               (unsigned)g_ark_rc_exit[4], ab);
+                                                }
                                                 {
                                                     char nb2[420]; int no = 0;
                                                     for (unsigned i = 0; i < g_ppc_nullsite_n
