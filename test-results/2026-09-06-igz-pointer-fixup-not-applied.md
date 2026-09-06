@@ -66,3 +66,58 @@ Find where the fixup pass should run, and whether it runs at all. The tables
 are in the file; the question is whether the loader walks them. The archive
 side is now readable end to end (`blaster/igarchive_extract.py`), so the
 expected post-fixup value can be computed from the file rather than guessed.
+
+---
+
+## Confirmed: the fixup pass never runs
+
+Build `Sep  6 2026 23:33:50`.
+
+```
+IGZFIXUP [processFixupSections           n=0]
+         [processFixupSection            n=0]
+         [postProcessFixupSections()     n=0]
+         [postProcessFixupSections(sec)  n=0]
+```
+
+None of `igIGZLoader`'s four fixup entry points is ever entered.
+
+**But this may be a consequence, not the cause.** The boot fails LZMA on the
+first of 35 compressed blocks, so no igz is ever decompressed, so there is
+nothing for the fixup pass to walk. That ordering is circular as an
+explanation and cannot be the whole story.
+
+## What the value is actually consumed as
+
+The LZMA allocator's global feeds `Core::igGetMemoryPool(int)` -- an **index**,
+not a pointer:
+
+```
+216b700: lis  r3, 0x1013        ; &.bss+306684  (jouster 421612 = 0x66eec)
+216b708: lwz  r3, 0xdfc(r3)     ; -> 0x0000001C
+216b710: bl   igGetMemoryPool__4CoreFi
+```
+
+So the global is meant to hold a pool index. bone's valid values are
+`0, 8, 10, 18, 20, 28` -- `0x28` is among them, `0x1C` is not.
+
+There is **no static initialiser** for that global anywhere in the generated
+code, so something writes `0x1C` into it at runtime. That is the thing to
+catch.
+
+## Queued, no rebuild
+
+```
+store1=0x66eec     who writes the pool-index global, and what with
+dump1=0x66eec
+store2=0x45f3964   keep the manager watch
+dump2=0x45f3964
+owner=0x45f35dc
+```
+
+The store watch already captures value, LR, r1 and r0/r4/r5/r30, so whichever
+register matches the value names the writing instruction -- the same technique
+that ruled out `stw r31, 8(r30)` earlier.
+
+Note for whoever reads this next: 421612 is `0x66EEC`, not `0x66F2C`. The
+first version of this probe watched the wrong address.
