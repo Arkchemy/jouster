@@ -4823,6 +4823,23 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            static const char *fxn[4] = {
+                                                "processFixupSections", "processFixupSection",
+                                                "postProcessFixupSections()", "postProcessFixupSections(sec)" };
+                                            char fb[380]; int fo = 0; fb[0] = 0;
+                                            for (unsigned i = 0; i < 4u; i++) {
+                                                fo += snprintf(fb + fo, sizeof fb - (size_t)fo,
+                                                               " [%s n=%u @%u..%u arg=0x%x]", fxn[i],
+                                                               (unsigned)g_ark_fx[i][0], (unsigned)g_ark_fx[i][1],
+                                                               (unsigned)g_ark_fx[i][2], (unsigned)g_ark_fx[i][3]);
+                                                if (fo >= (int)sizeof fb - 1) break;
+                                            }
+                                            checkpoint("IGZFIXUP%s -- an igz packs pointers as (pool in the top 10"
+                                                       " bits, offset in the low 22) and they must be translated at"
+                                                       " load time. n=0 here means the raw packed value survives,"
+                                                       " which is exactly what the LZMA path reads as 0x1c", fb);
+                                        }
+                                        {
                                             static const char *bsn[6] = {
                                                 "memCtx::bootstrapInit", "memCtx::bootstrapUninit",
                                                 "arkCore::initBootstrap", "arkCore::exitBootstrap",
