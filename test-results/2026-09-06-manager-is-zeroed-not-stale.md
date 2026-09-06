@@ -99,3 +99,45 @@ Read it out of Cemu via `/proc/<pid>/mem` at full JIT speed, per
 [[cemu-guest-memory-reading]] -- anchor on `"ram:/alchemy.xml\0"` at guest
 `0x10051308` to derive the base, then poll `0x45f3964` and `0x45f35dc`. Do
 **not** use the gdb stub; it has cost three sessions already.
+
+---
+
+## Cemu attempt, and why the obvious version of it does not work
+
+Tried it. The tooling is fine -- `tools/cemu-peek.py` derives the base from the
+`"ram:/alchemy.xml\0"` anchor at guest `0x10051308`, the anchor verified, and
+reads come back correct. **The comparison itself is invalid as posed.**
+
+`0x45f3964` is a *jouster* address. jouster runs in a flat 1 GB `guest mem[]`
+array, so its heap sits around `0x045xxxxx`. Retail uses the Wii U map, and its
+heap pointers read back around `0x117cca00`. Reading `0x45f3964` out of Cemu
+reads unmapped space and returns zeros -- which looks exactly like "the manager
+is zeroed in retail too" and would have confirmed whatever you already believed.
+
+The static segments *do* correspond. jouster's `.data` base is 8192 (its
+"guest 13528" is `.data+5336`), retail's is `0x10000000`, so the delta is
+`0x0FFFE000`, and jouster's metaobject `0x0011ecd8` maps to retail
+`0x1011ccd8`. That lands on real structured data -- three separate metaobjects
+each holding a pointer to their own address minus `0xE8`, which is not what a
+wrong mapping produces.
+
+The heap does **not** follow that delta, because it is allocated at runtime.
+So finding retail's frame managers means scanning for the metaobject pointer
+rather than computing an address. That scan over `0x10000000-0x1C000000` found
+**zero** instances -- but that result is not usable either, because the retail
+game was not driven past boot: the job-queue head at `0x10136a00` had `+8`
+pointing at itself (empty) and nothing changed over a 3-second sample while
+Cemu sat at 283% CPU. Almost certainly parked on a title screen waiting for
+input that was never sent.
+
+**What Cemu needs before it can answer this**, in order:
+
+1. Drive the title past boot -- controller input, or start it from a save.
+2. Confirm the game has reached archive loading (watch `0x10136a00` change).
+3. Locate retail's frame managers by scanning for metaobject `0x1011ccd8`,
+   not by translating a jouster heap address.
+4. Then watch whether any of them is zeroed the way ours is at call 440,611.
+
+The mapping fact is the reusable part: **never compare jouster heap addresses
+to retail ones directly.** Statics map with `+0x0FFFE000`; the heap does not
+map at all.
