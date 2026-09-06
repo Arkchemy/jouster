@@ -6,4 +6,4 @@
 # file -- their tree wins, by design.
 #
 # Refresh with:  make -C game conquertron-update
-commit 1883b849830c1b0cf53a416db19d680379b0c6a8
+commit bf5f317cf44aacd440bf9e24bb2f6a8d73f3603b

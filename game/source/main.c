@@ -464,6 +464,7 @@ static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0xf0000021u, "storewatch_r3", 0xFFFFFFFFu, 0, 0},
     {0xf0000022u, "storewatch_r29", 0xFFFFFFFFu, 0, 0},
     {0xf0000023u, "storewatch_r31", 0xFFFFFFFFu, 0, 0},
+    {0xf0000024u, "storewatch_r1_stackptr", 0xFFFFFFFFu, 0, 0},
     {0xf0000003u, "storewatch_bytevalue", 0xFFFFFFFFu, 0, 0},
     {0xf0000004u, "storewatch_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
 
@@ -4817,6 +4818,23 @@ int main(int argc, char *argv[]) {
                                     {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
+                                        {
+                                            char tb[300]; int to = 0; tb[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_thr_n && i < 8u; i++) {
+                                                to += snprintf(tb + to, sizeof tb - (size_t)to,
+                                                               " [%u thread=0x%x stack=0x%x size=%u entry=0x%x]",
+                                                               i, (unsigned)g_ark_thr[i][0], (unsigned)g_ark_thr[i][1],
+                                                               (unsigned)g_ark_thr[i][2], (unsigned)g_ark_thr[i][3]);
+                                                if (to >= (int)sizeof tb - 1) break;
+                                            }
+                                            checkpoint("THREADSTACK n=%u%s -- the stack argument is used as r1"
+                                                       " directly. Cafe OS passes the HIGH address and the stack"
+                                                       " grows down, so the region actually used is"
+                                                       " [stack-size, stack]. If it reads [stack, stack+size]"
+                                                       " instead, every worker prologue writes below its own"
+                                                       " buffer into whatever the allocator put there",
+                                                       (unsigned)g_ark_thr_n, tb[0] ? tb : " <none>");
+                                        }
                                         {
                                             char ob[1700]; int oo = 0; ob[0] = 0;
                                             for (unsigned i = 0; i < g_ark_own_n && i < 24u; i++) {
