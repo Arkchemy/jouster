@@ -4823,6 +4823,22 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            char ab[520]; int ao = 0; ab[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_af_n && i < 10u; i++) {
+                                                ao += snprintf(ab + ao, sizeof ab - (size_t)ao,
+                                                               " [%u @%u size=%u lim(+0x18)=%u hi(+0x50)=%u f(+0x44)=0x%x lr=0x%x]",
+                                                               i, (unsigned)g_ark_af[i][0], (unsigned)g_ark_af[i][1],
+                                                               (unsigned)g_ark_af[i][2], (unsigned)g_ark_af[i][3],
+                                                               (unsigned)g_ark_af[i][4], (unsigned)g_ark_af[i][5]);
+                                                if (ao >= (int)sizeof ab - 1) break;
+                                            }
+                                            checkpoint("ALLOCFAIL n=%u%s -- refusals from igMemoryPool::reallocCommon."
+                                                       " setCapacity stores the capacity whether or not the grow"
+                                                       " succeeded, so a refusal here leaves igObjectList::append"
+                                                       " writing past the end of a buffer that never moved",
+                                                       (unsigned)g_ark_af_n, ab[0] ? ab : " <none>");
+                                        }
+                                        {
                                             static const char *fxn[4] = {
                                                 "processFixupSections", "processFixupSection",
                                                 "postProcessFixupSections()", "postProcessFixupSections(sec)" };
