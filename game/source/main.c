@@ -465,6 +465,10 @@ static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0xf0000022u, "storewatch_r29", 0xFFFFFFFFu, 0, 0},
     {0xf0000023u, "storewatch_r31", 0xFFFFFFFFu, 0, 0},
     {0xf0000024u, "storewatch_r1_stackptr", 0xFFFFFFFFu, 0, 0},
+    {0xf0000025u, "storewatch_r30", 0xFFFFFFFFu, 0, 0},
+    {0xf0000026u, "storewatch_r0",  0xFFFFFFFFu, 0, 0},
+    {0xf0000027u, "storewatch_r4",  0xFFFFFFFFu, 0, 0},
+    {0xf0000028u, "storewatch_r5",  0xFFFFFFFFu, 0, 0},
     {0xf0000003u, "storewatch_bytevalue", 0xFFFFFFFFu, 0, 0},
     {0xf0000004u, "storewatch_bytewriter_pc", 0xFFFFFFFFu, 0, 0},
 
