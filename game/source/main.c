@@ -4818,18 +4818,19 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
-                                            char ob[300]; int oo = 0; ob[0] = 0;
-                                            for (unsigned i = 0; i < g_ark_own_n && i < 12u; i++) {
+                                            char ob[460]; int oo = 0; ob[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_own_n && i < 16u; i++) {
                                                 oo += snprintf(ob + oo, sizeof ob - (size_t)oo,
-                                                               " [%u @%u ret=0x%x size=%u lr=0x%x pool=0x%x]",
-                                                               i, (unsigned)g_ark_own[i][0], (unsigned)g_ark_own[i][1],
-                                                               (unsigned)g_ark_own[i][2], (unsigned)g_ark_own[i][3],
-                                                               (unsigned)g_ark_own[i][4]);
+                                                               " [%u @%u %s ret=0x%x ptr=0x%x size=%u lr=0x%x]",
+                                                               i, (unsigned)g_ark_own[i][0],
+                                                               g_ark_own[i][5] == 1u ? "ALLOC" : "FREE",
+                                                               (unsigned)g_ark_own[i][1], (unsigned)g_ark_own[i][2],
+                                                               (unsigned)g_ark_own[i][3], (unsigned)g_ark_own[i][4]);
                                                 if (oo >= (int)sizeof ob - 1) break;
                                             }
-                                            checkpoint("OWNER target=0x%x n=%u%s -- allocations whose block covers"
-                                                       " the default frame manager; >1 with no free between them"
-                                                       " means the allocator handed the same memory to two owners",
+                                            checkpoint("OWNER target=0x%x n=%u%s -- every alloc and free through"
+                                                       " igMemoryPool::reallocCommon touching the default frame"
+                                                       " manager; ALLOC,ALLOC with no FREE between is a rewind",
                                                        (unsigned)g_ark_own_target, (unsigned)g_ark_own_n,
                                                        ob[0] ? ob : " <none>");
                                         }
