@@ -529,6 +529,13 @@ static ArkchemyDebugWatchSlot g_debug_watch_slots[] = {
     {0x2178470u, "ctor_igobject_alloc_result", 0xFFFFFFFFu, 0, 0},
     {0x2178484u, "ctor_bootstrap_heap_handle", 0xFFFFFFFFu, 0, 0},
     {0x2178490u, "ctor_bootstrap_heap_alloc_result", 0xFFFFFFFFu, 0, 0},
+    /* NOTE 2026-09-06: every setCount_* slot below reads hits=0, and that is
+     * NOT evidence the code never runs. debug_watch_sink is only ever fed by
+     * ppc_debug_watch from the store-watch path in ppc_runtime.h, using the
+     * synthetic 0xf00000xx tags -- no real PC is ever reported into it. A slot
+     * keyed on a code address here can never fire. Use the g_ppc_watch[] slots
+     * for PC-keyed capture; those are emitted into the generated code and do
+     * work. */
     {0x2164260u, "setCount_old_count", 0xFFFFFFFFu, 0, 0},
     {0x2164288u, "setCount_loop_iters", 0xFFFFFFFFu, 0, 0},
     /* Answers a real, specific question: does this loop actually run to
@@ -2840,7 +2847,8 @@ static void game_thread_func(void *arg) {
      * produce together when size == 0. r4 is the igFileWorkItem, so this
      * captures the offset and size it was actually handed rather than
      * inferring them back out of the result. */
-    g_ppc_watch[4].pc = 0x216aa9cu; /* igArchive::addWork -- r3=archive r4=igFileWorkItem r5=blockingType */
+    g_ppc_watch[4].pc = 0x215db1cu; /* igDataList resize -- r3=this r4=newCapacity r5=elemSize
+                                     * (was igArchive::addWork, answered: hits=3 size=0x800) */
     g_ppc_watch[5].pc = 0x2155bf0u; /* igCafeStorageDevice::read -- r3=this r4=workItem */
     g_ppc_watch[6].pc = 0x21da4c0u; /* Core::jqWorkerLoop -- how often does the worker loop run? */
     /* Retargeted 2026-09-04 from appendToArkCore (which had done its job:
@@ -2850,7 +2858,8 @@ static void game_thread_func(void *arg) {
      * word jqWorkerLoop tests before crediting any completion. The ctor at
      * 0x21dc42c takes that 1 in r5 and stores it, so this answers whether it
      * ever ran and with what arguments. */
-    g_ppc_watch[7].pc = 0x21dc42cu; /* igJobQueue::Module::Module -- r3=obj r4=name r5=workerType r6=fn */
+    g_ppc_watch[7].pc = 0x215dd08u; /* igObjectList::append's call into resizeAndSetCount
+                                     * (was Module::Module, answered) */
 
     /* Slots 0-2 repurposed 2026-09-02 (were igStringBuf::append,
      * userInstantiate, reportVaList -- all from investigations that closed
@@ -2864,7 +2873,10 @@ static void game_thread_func(void *arg) {
      * array, while the gated object starts with a vtable word and is an
      * igArchive instance -- same offset, different object. Whether these are
      * related is the thing being measured, not the thing being assumed. */
-    g_ppc_watch[0].pc = 0x2147e98u; /* igArkCore::init -- did engine init EVER run? */
+    /* Repointed 2026-09-06 from igArkCore::init (answered: it runs) onto the
+     * path that wipes the default frame manager. r3..r6 at the move give
+     * pool, destination and byte count. */
+    g_ppc_watch[0].pc = 0x2184e1cu; /* the move called by resize -- r3=pool r4=dest r5=bytes */
     /* updateTasks answered (57,785 calls, it runs constantly). The open
      * question is what sets the limit the archive gates on. It is NOT
      * metadata: blaster's field-schema extractor shows igArchiveWorkItem
