@@ -4818,8 +4818,8 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
-                                            char ob[460]; int oo = 0; ob[0] = 0;
-                                            for (unsigned i = 0; i < g_ark_own_n && i < 16u; i++) {
+                                            char ob[1700]; int oo = 0; ob[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_own_n && i < 24u; i++) {
                                                 oo += snprintf(ob + oo, sizeof ob - (size_t)oo,
                                                                " [%u @%u %s ret=0x%x ptr=0x%x size=%u lr=0x%x]",
                                                                i, (unsigned)g_ark_own[i][0],
