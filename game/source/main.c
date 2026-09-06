@@ -4812,6 +4812,20 @@ int main(int argc, char *argv[]) {
                                         checkpoint("RELWINDOW n=%u %s -- releases around the wipe at 440612",
                                                    (unsigned)g_ark_rel_n, rb2);
                                     }
+                                    {
+                                        char wb[220]; wb[0] = 0;
+                                        for (unsigned i = 0; i < g_ark_wipe_n && i < 8u; i++) {
+                                            char one[64];
+                                            snprintf(one, sizeof(one), "[lr=0x%x dest=0x%x n=%u @%u] ",
+                                                     (unsigned)g_ark_wipe[i][1], (unsigned)g_ark_wipe[i][2],
+                                                     (unsigned)g_ark_wipe[i][3], (unsigned)g_ark_wipe[i][4]);
+                                            strncat(wb, one, sizeof(wb) - strlen(wb) - 1);
+                                        }
+                                        checkpoint("WIPE n=%u %s -- moves whose destination range covers the"
+                                                   " default frame manager 0x45f3964; empty means the block is"
+                                                   " handed out live rather than overrun",
+                                                   (unsigned)g_ark_wipe_n, wb[0] ? wb : "<none>");
+                                    }
                                     checkpoint("POOLRC n=%u %s (ledger is now the DEFAULT MANAGER at 0x45f3964 --"
                                                " every Ref/Release/SmartPointerAssign touching it, with LR;"
                                                " an imbalance names the missing retain or the extra release)",
