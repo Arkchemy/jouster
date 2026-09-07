@@ -2563,6 +2563,7 @@ static void game_thread_func(void *arg) {
                 if (!strncmp(line, "store1", 6))      g_arkchemy_cfg_store1 = (uint32_t)v;
                 else if (!strncmp(line, "store2", 6)) g_arkchemy_cfg_store2 = (uint32_t)v;
                 else if (!strncmp(line, "dump1", 5))  g_arkchemy_cfg_dump1  = (uint32_t)v;
+                else if (!strncmp(line, "fill", 4))   g_ppc_watch_fill_addr = (uint32_t)v;
                 else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
                 else if (!strncmp(line, "owner", 5))  g_ark_own_target      = (uint32_t)v;
             }
@@ -4907,6 +4908,41 @@ int main(int argc, char *argv[]) {
                                                        (unsigned)g_ark_hw[11], (unsigned)g_ark_hw[12],
                                                        (unsigned)g_ark_hw[13], (unsigned)g_ark_hw[14],
                                                        (unsigned)g_ark_hw[15]);
+                                            {
+                                                char hbb[300]; int hbo = 0; hbb[0] = 0;
+                                                for (unsigned i = 0; i < 8u; i++) {
+                                                    if (!g_ark_hb[i][0]) continue;
+                                                    hbo += snprintf(hbb + hbo, sizeof hbb - (size_t)hbo,
+                                                                    " [0x%x sz=0x%x]", (unsigned)g_ark_hb[i][0],
+                                                                    (unsigned)g_ark_hb[i][1]);
+                                                    if (hbo >= (int)sizeof hbb - 1) break;
+                                                }
+                                                checkpoint("HEAPTRAIL%s -- the last 8 blocks walked, unordered."
+                                                           " An absurd size word here is a chain that derailed"
+                                                           " rather than ended", hbb[0] ? hbb : " <none>");
+                                                checkpoint("HEAPTAIL nonzero=%u first=0x%x last=0x%x scanned=%u"
+                                                           " -- what lies past the stop point. All zero means the"
+                                                           " memory was never built into the heap or was bulk"
+                                                           " cleared; a sentinel out there means the arena really"
+                                                           " is 5 MB and the chain was cut",
+                                                           (unsigned)g_ark_hz[0], (unsigned)g_ark_hz[1],
+                                                           (unsigned)g_ark_hz[2], (unsigned)g_ark_hz[3]);
+                                                char bwb[420]; int bwo = 0; bwb[0] = 0;
+                                                for (unsigned i = 0; i < g_ark_bw_n && i < 8u; i++) {
+                                                    bwo += snprintf(bwb + bwo, sizeof bwb - (size_t)bwo,
+                                                                    " [%s lr=0x%x dst=0x%x n=%u v=0x%x]",
+                                                                    g_ark_bw[i][4] == 1u ? "memset" : "memcpy",
+                                                                    (unsigned)g_ark_bw[i][0], (unsigned)g_ark_bw[i][1],
+                                                                    (unsigned)g_ark_bw[i][2], (unsigned)g_ark_bw[i][3]);
+                                                    if (bwo >= (int)sizeof bwb - 1) break;
+                                                }
+                                                checkpoint("BULKWRITE seen=%u n=%u%s -- memset/memcpy covering the"
+                                                           " fill= address. These bypass ppc_store_u32 entirely, so"
+                                                           " the store watch cannot see them and its hits=0 never"
+                                                           " meant unwritten",
+                                                           (unsigned)g_ark_bw_seen, (unsigned)g_ark_bw_n,
+                                                           bwb[0] ? bwb : " <none>");
+                                            }
                                         }
                                         {
                                             char qb[420]; int qo = 0; qb[0] = 0;
