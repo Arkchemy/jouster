@@ -4823,6 +4823,29 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            char pmb[420]; int pmo = 0; pmb[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_pm_n && i < 16u; i++) {
+                                                pmo += snprintf(pmb + pmo, sizeof pmb - (size_t)pmo,
+                                                                " [idx %u -> 0x%x x%u]", (unsigned)g_ark_pm[i][0],
+                                                                (unsigned)g_ark_pm[i][1], (unsigned)g_ark_pm[i][2]);
+                                                if (pmo >= (int)sizeof pmb - 1) break;
+                                            }
+                                            checkpoint("POOLMAP n=%u%s -- which pool each index resolves to."
+                                                       " Distinct indices all landing on one pool is the funnel",
+                                                       (unsigned)g_ark_pm_n, pmb[0] ? pmb : " <none>");
+                                            char pdb[420]; int pdo = 0; pdb[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_pd_n && i < 12u; i++) {
+                                                pdo += snprintf(pdb + pdo, sizeof pdb - (size_t)pdo,
+                                                                " [0x%x calls=%u ok=%u]", (unsigned)g_ark_pd[i][0],
+                                                                (unsigned)g_ark_pd[i][1], (unsigned)g_ark_pd[i][2]);
+                                                if (pdo >= (int)sizeof pdb - 1) break;
+                                            }
+                                            checkpoint("POOLDIST n=%u%s -- allocations per pool. The igz names"
+                                                       " eight and the runtime registers 52, so traffic landing"
+                                                       " almost entirely on 0x4500274 is the bug",
+                                                       (unsigned)g_ark_pd_n, pdb[0] ? pdb : " <none>");
+                                        }
+                                        {
                                             char qb[420]; int qo = 0; qb[0] = 0;
                                             for (unsigned i = 0; i < g_ark_bq_n && i < 10u; i++) {
                                                 qo += snprintf(qb + qo, sizeof qb - (size_t)qo,
