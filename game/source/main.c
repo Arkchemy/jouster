@@ -2564,6 +2564,7 @@ static void game_thread_func(void *arg) {
                 else if (!strncmp(line, "store2", 6)) g_arkchemy_cfg_store2 = (uint32_t)v;
                 else if (!strncmp(line, "dump1", 5))  g_arkchemy_cfg_dump1  = (uint32_t)v;
                 else if (!strncmp(line, "fill", 4))   g_ppc_watch_fill_addr = (uint32_t)v;
+                else if (!strncmp(line, "trace", 5)) g_ark_trace_ctrl = (uint32_t)v;
                 else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
                 else if (!strncmp(line, "owner", 5))  g_ark_own_target      = (uint32_t)v;
             }
@@ -5006,6 +5007,35 @@ int main(int argc, char *argv[]) {
                                                            " that first saw it short. runaway counts walks that left"
                                                            " the arena and were discarded rather than recorded",
                                                            (unsigned)g_ark_sw_n, swb[0] ? swb : " <none>");
+
+                                                /* TLSFTRACE: write the captured call sequence for replay by
+                                                   conquertron/hosttest. Binary rather than log text: 8192
+                                                   entries is 128 KB, which would swamp the log and be
+                                                   miserable to parse back. */
+                                                if (g_ark_tr_n) {
+                                                    FILE *tf = fopen("sdmc:/switch/Jouster/tlsf-trace.bin", "wb");
+                                                    if (tf) {
+                                                        uint32_t hdr[4];
+                                                        hdr[0] = 0x54534C46u;           /* "TSLF" */
+                                                        hdr[1] = g_ark_trace_ctrl;
+                                                        hdr[2] = g_ark_tr_n;
+                                                        hdr[3] = g_ark_tr_dropped;
+                                                        fwrite(hdr, sizeof hdr, 1, tf);
+                                                        for (unsigned i = 0; i < g_ark_tr_n && i < 8192u; i++) {
+                                                            uint32_t e[4] = { g_ark_tr[i][0], g_ark_tr[i][1],
+                                                                              g_ark_tr[i][2], g_ark_tr[i][3] };
+                                                            fwrite(e, sizeof e, 1, tf);
+                                                        }
+                                                        fclose(tf);
+                                                    }
+                                                    checkpoint("TLSFTRACE ctrl=0x%x entries=%u dropped=%u"
+                                                               " -> sdmc:/switch/Jouster/tlsf-trace.bin",
+                                                               (unsigned)g_ark_trace_ctrl, (unsigned)g_ark_tr_n,
+                                                               (unsigned)g_ark_tr_dropped);
+                                                } else {
+                                                    checkpoint("TLSFTRACE nothing captured -- set trace=0x<ctrl>"
+                                                               " in watch.cfg (the pool's _address, not the pool)");
+                                                }
                                             }
                                         }
                                         {
