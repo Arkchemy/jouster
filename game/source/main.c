@@ -4942,6 +4942,18 @@ int main(int argc, char *argv[]) {
                                                            " meant unwritten",
                                                            (unsigned)g_ark_bw_seen, (unsigned)g_ark_bw_n,
                                                            bwb[0] ? bwb : " <none>");
+
+                                                checkpoint("HEAPSPAN walks=%u arenaEnd=0x%x lastSpan=0x%x/%ub"
+                                                           " | whole until: span=0x%x blocks=%u"
+                                                           " | first short: call=%u span=0x%x blocks=%u"
+                                                           " -- the chain reaches the sentinel at arenaEnd-8"
+                                                           " while the arena is whole; the first call where it"
+                                                           " falls short is the allocation that lost the tail",
+                                                           (unsigned)g_ark_hs_n, (unsigned)g_ark_hs[7],
+                                                           (unsigned)g_ark_hs[4], (unsigned)g_ark_hs[6],
+                                                           (unsigned)g_ark_hs[8], (unsigned)g_ark_hs[9],
+                                                           (unsigned)g_ark_hs[2], (unsigned)g_ark_hs[3],
+                                                           (unsigned)g_ark_hs[5]);
                                             }
                                         }
                                         {
