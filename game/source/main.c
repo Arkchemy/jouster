@@ -4823,6 +4823,21 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            char qb[420]; int qo = 0; qb[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_bq_n && i < 10u; i++) {
+                                                qo += snprintf(qb + qo, sizeof qb - (size_t)qo,
+                                                               " [%u @%u size=%u lr=0x%x pool=0x%x]",
+                                                               i, (unsigned)g_ark_bq[i][0], (unsigned)g_ark_bq[i][1],
+                                                               (unsigned)g_ark_bq[i][2], (unsigned)g_ark_bq[i][3]);
+                                                if (qo >= (int)sizeof qb - 1) break;
+                                            }
+                                            checkpoint("BIGREQ n=%u%s -- allocations of 1 MB or more reaching"
+                                                       " allocatePoolMemory, with the caller. The arena is 5 MB,"
+                                                       " so every one of these is already wrong and lr names"
+                                                       " where the size came from", (unsigned)g_ark_bq_n,
+                                                       qb[0] ? qb : " <none>");
+                                        }
+                                        {
                                             char sb2[560]; int so2 = 0; sb2[0] = 0;
                                             for (unsigned i = 0; i < g_ark_sz_n && i < 10u; i++) {
                                                 so2 += snprintf(sb2 + so2, sizeof sb2 - (size_t)so2,
