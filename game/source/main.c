@@ -4967,6 +4967,24 @@ int main(int argc, char *argv[]) {
                                                            " brackets the allocation that lost the tail, and a"
                                                            " lastGood of 0 means this pool was never seen whole",
                                                            (unsigned)g_ark_hs_n, hsb[0] ? hsb : " <none>");
+
+                                                char svb[500]; int svo = 0; svb[0] = 0;
+                                                for (unsigned i = 0; i < g_ark_sv_n && i < 6u; i++) {
+                                                    svo += snprintf(svb + svo, sizeof svb - (size_t)svo,
+                                                                    " [@%u lr=0x%x size=%u align=%u ret=0x%x"
+                                                                    " blk=0x%x bsz=0x%x succ=0x%x]",
+                                                                    (unsigned)g_ark_sv[i][0], (unsigned)g_ark_sv[i][1],
+                                                                    (unsigned)g_ark_sv[i][2], (unsigned)g_ark_sv[i][3],
+                                                                    (unsigned)g_ark_sv[i][4], (unsigned)g_ark_sv[i][5],
+                                                                    (unsigned)g_ark_sv[i][6], (unsigned)g_ark_sv[i][7]);
+                                                    if (svo >= (int)sizeof svb - 1) break;
+                                                }
+                                                checkpoint("SPLITVERIFY calls=%u n=%u%s -- tlsf_memalign results"
+                                                           " whose returned block has NO physical successor. A"
+                                                           " live chain always has one, real or the sentinel, so"
+                                                           " each of these orphaned everything past succ",
+                                                           (unsigned)g_ark_sv_calls, (unsigned)g_ark_sv_n,
+                                                           svb[0] ? svb : " <none>");
                                             }
                                         }
                                         {
