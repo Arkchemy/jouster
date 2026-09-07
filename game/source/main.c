@@ -3607,6 +3607,21 @@ int main(int argc, char *argv[]) {
 
        Runs before ppc_init_globals so the arena is pristine, and wipes what it
        touched afterwards so the real boot is unaffected. */
+    /* watch.cfg is parsed in game_thread_func, which has not run yet -- main()
+       gets here first -- so read the one flag this needs directly rather than
+       depending on that ordering. */
+    {
+        FILE *rc = fopen("sdmc:/switch/Jouster/watch.cfg", "r");
+        if (rc) {
+            char line[128];
+            while (fgets(line, sizeof line, rc)) {
+                char *eq = strchr(line, '=');
+                if (eq && !strncmp(line, "replay", 6))
+                    g_arkchemy_cfg_replay = (uint32_t)strtoul(eq + 1, NULL, 0);
+            }
+            fclose(rc);
+        }
+    }
     if (g_arkchemy_cfg_replay) {
         FILE *tf = fopen("sdmc:/switch/Jouster/tlsf-trace.bin", "rb");
         if (!tf) {
