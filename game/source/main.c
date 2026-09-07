@@ -5109,11 +5109,12 @@ int main(int argc, char *argv[]) {
                                                 char wlb[600]; int wlo = 0; wlb[0] = 0;
                                                 for (unsigned i = 0; i < g_ark_wl_n && i < 12u; i++) {
                                                     wlo += snprintf(wlb + wlo, sizeof wlb - (size_t)wlo,
-                                                                    " [%u @%u val=0x%x pc=0x%x lr=0x%x]",
+                                                                    " [%u @%u val=0x%x pc=0x%x lr=0x%x thr=0x%x]",
                                                                     i, (unsigned)g_ark_wl[i][3],
                                                                     (unsigned)g_ark_wl[i][0],
                                                                     (unsigned)g_ark_wl[i][1],
-                                                                    (unsigned)g_ark_wl[i][2]);
+                                                                    (unsigned)g_ark_wl[i][2],
+                                                                    (unsigned)g_ark_wl[i][4]);
                                                     if (wlo >= (int)sizeof wlb - 1) break;
                                                 }
                                                 checkpoint("WRITELOG n=%u%s -- every write to store1 in order."
@@ -5121,6 +5122,15 @@ int main(int argc, char *argv[]) {
                                                            " after a call returns it names the callee; lr is the"
                                                            " one to trust", (unsigned)g_ark_wl_n,
                                                            wlb[0] ? wlb : " <none>");
+
+                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
+                                                           " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
+                                                           " The counter is not atomic and can only undercount,"
+                                                           " so peak>1 is real while peak==1 is weak evidence,"
+                                                           " not proof the pool's mutex held",
+                                                           (unsigned)g_ark_ar_peak, (unsigned)g_ark_ar_hits,
+                                                           (unsigned)g_ark_ar_threads, (unsigned)g_ark_ar_t0,
+                                                           (unsigned)g_ark_ar_t1);
 
                                                 /* TLSFTRACE: write the captured call sequence for replay by
                                                    conquertron/hosttest. Binary rather than log text: 8192
