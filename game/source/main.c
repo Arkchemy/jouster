@@ -5102,6 +5102,26 @@ int main(int argc, char *argv[]) {
                                                            " the arena and were discarded rather than recorded",
                                                            (unsigned)g_ark_sw_n, swb[0] ? swb : " <none>");
 
+                                                /* WRITELOG: every write to store1, in order. The last one is
+                                                   already known to be a size marker; the write that first
+                                                   zeroed the word is one of the earlier ones, and its lr
+                                                   names the code responsible. */
+                                                char wlb[600]; int wlo = 0; wlb[0] = 0;
+                                                for (unsigned i = 0; i < g_ark_wl_n && i < 12u; i++) {
+                                                    wlo += snprintf(wlb + wlo, sizeof wlb - (size_t)wlo,
+                                                                    " [%u @%u val=0x%x pc=0x%x lr=0x%x]",
+                                                                    i, (unsigned)g_ark_wl[i][3],
+                                                                    (unsigned)g_ark_wl[i][0],
+                                                                    (unsigned)g_ark_wl[i][1],
+                                                                    (unsigned)g_ark_wl[i][2]);
+                                                    if (wlo >= (int)sizeof wlb - 1) break;
+                                                }
+                                                checkpoint("WRITELOG n=%u%s -- every write to store1 in order."
+                                                           " pc is the last function ENTERED, so for a store made"
+                                                           " after a call returns it names the callee; lr is the"
+                                                           " one to trust", (unsigned)g_ark_wl_n,
+                                                           wlb[0] ? wlb : " <none>");
+
                                                 /* TLSFTRACE: write the captured call sequence for replay by
                                                    conquertron/hosttest. Binary rather than log text: 8192
                                                    entries is 128 KB, which would swamp the log and be
