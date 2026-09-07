@@ -4826,7 +4826,7 @@ int main(int argc, char *argv[]) {
                                             char qb[420]; int qo = 0; qb[0] = 0;
                                             for (unsigned i = 0; i < g_ark_bq_n && i < 10u; i++) {
                                                 qo += snprintf(qb + qo, sizeof qb - (size_t)qo,
-                                                               " [%u @%u size=%u lr=0x%x pool=0x%x]",
+                                                               " [%u @%u size=%u lr=0x%x ptr=0x%x]",
                                                                i, (unsigned)g_ark_bq[i][0], (unsigned)g_ark_bq[i][1],
                                                                (unsigned)g_ark_bq[i][2], (unsigned)g_ark_bq[i][3]);
                                                 if (qo >= (int)sizeof qb - 1) break;
