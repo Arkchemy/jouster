@@ -2150,6 +2150,14 @@ static const char *arkchemy_memwatch_history(void) {
     return buf;
 }
 
+/* The recompiled allocator, for ARKCHEMY-REPLAY below. main.c does not pull in
+   generated_decls.h, so declare just what is needed. */
+void ppc_tlsf_create(PpcContext *ctx);
+void ppc_tlsf_memalign(PpcContext *ctx);
+void ppc_tlsf_free(PpcContext *ctx);
+void ppc_tlsf_realloc(PpcContext *ctx);
+
+static uint32_t g_arkchemy_cfg_replay = 0;
 static uint32_t g_arkchemy_cfg_store1 = 0, g_arkchemy_cfg_store2 = 0,
                g_arkchemy_cfg_dump1 = 0, g_arkchemy_cfg_dump2 = 0;
 
@@ -2565,6 +2573,7 @@ static void game_thread_func(void *arg) {
                 else if (!strncmp(line, "dump1", 5))  g_arkchemy_cfg_dump1  = (uint32_t)v;
                 else if (!strncmp(line, "fill", 4))   g_ppc_watch_fill_addr = (uint32_t)v;
                 else if (!strncmp(line, "trace", 5)) g_ark_trace_ctrl = (uint32_t)v;
+                else if (!strncmp(line, "replay", 6)) g_arkchemy_cfg_replay = (uint32_t)v;
                 else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
                 else if (!strncmp(line, "owner", 5))  g_ark_own_target      = (uint32_t)v;
             }
@@ -3583,6 +3592,76 @@ int main(int argc, char *argv[]) {
      * was run again" impossible to tell apart from the log alone, and
      * that ambiguity has already caused at least one wrong diagnosis.
      * Stamping the compile time makes every log self-identifying. */
+    /* ARKCHEMY-REPLAY: run a captured TLSF trace through the recompiled
+       allocator here, on ARM64, and compare against what the same trace does
+       on x86-64 via conquertron/hosttest.
+
+       The host replay diverges from the device at call #216: identical prior
+       state, identical arguments, and the host returns a correctly 64-byte
+       aligned pointer while the device returns one 0x38 low. Every other
+       explanation has been eliminated -- the marker write is replayed, the
+       result is stable across -O0 through -O3, and the device builds at -O0
+       too. What has NOT been tested is the same C compiled for ARM64, because
+       there is no cross-compiler or qemu on the build machine. This is that
+       test.
+
+       Runs before ppc_init_globals so the arena is pristine, and wipes what it
+       touched afterwards so the real boot is unaffected. */
+    if (g_arkchemy_cfg_replay) {
+        FILE *tf = fopen("sdmc:/switch/Jouster/tlsf-trace.bin", "rb");
+        if (!tf) {
+            checkpoint("REPLAY no tlsf-trace.bin on the card");
+        } else {
+            uint32_t hdr[4];
+            if (fread(hdr, sizeof hdr, 1, tf) == 1 && hdr[0] == 0x54534C46u) {
+                uint32_t arena = hdr[1], size = 0x00500000u, e[4], i = 0;
+                uint32_t heap, sentinel = arena + size - 8u, diverged = 0;
+                g_ctx.r[3] = arena; g_ctx.r[4] = size; g_ctx.r[5] = 0;
+                ppc_tlsf_create(&g_ctx);
+                heap = g_ctx.r[3];
+                checkpoint("REPLAY ctrl=0x%x entries=%u create->0x%x",
+                           (unsigned)arena, (unsigned)hdr[2], (unsigned)heap);
+                while (heap && fread(e, sizeof e, 1, tf) == 1) {
+                    uint32_t got = 0;
+                    i++;
+                    g_ctx.r[3] = heap; g_ctx.r[4] = e[1]; g_ctx.r[5] = e[2];
+                    if (e[0] == 1u)      { ppc_tlsf_memalign(&g_ctx); got = g_ctx.r[3]; }
+                    else if (e[0] == 2u) { ppc_tlsf_free(&g_ctx); }
+                    else if (e[0] == 3u) { ppc_tlsf_realloc(&g_ctx); got = g_ctx.r[3]; }
+                    else continue;
+                    if (e[0] != 2u && got != e[3]) {
+                        checkpoint("REPLAY #%u DIVERGED op=%u a=0x%x b=%u"
+                                   " arm64->0x%x recorded->0x%x",
+                                   (unsigned)i, (unsigned)e[0], (unsigned)e[1],
+                                   (unsigned)e[2], (unsigned)got, (unsigned)e[3]);
+                        diverged = 1; break;
+                    }
+                    /* mallocInternal's trailing size marker, as the device does */
+                    if (got) {
+                        uint32_t bsz = ppc_load_u32(&g_ctx, got - 4u) & ~3u;
+                        if (bsz) ppc_store_u32(&g_ctx, (got + bsz - 4u) & ~3u, e[2]);
+                    }
+                }
+                if (!diverged) {
+                    uint32_t b = arena + 0xc70u, n = 0;
+                    for (;;) {
+                        uint32_t w = ppc_load_u32(&g_ctx, b + 4u), sz = w & ~3u;
+                        if (n >= 200000u || b + 8u > arena + size || sz == 0u) break;
+                        n++; b += 4u + sz;
+                    }
+                    checkpoint("REPLAY %u calls, no divergence. chain %u blocks"
+                               " span=0x%x sentinel=0x%x %s",
+                               (unsigned)i, (unsigned)n, (unsigned)b,
+                               (unsigned)sentinel, b == sentinel ? "WHOLE" : "SHORT");
+                }
+                /* leave the arena as we found it */
+                for (uint32_t a = arena; a < arena + size; a += 4u)
+                    ppc_store_u32(&g_ctx, a, 0u);
+            }
+            fclose(tf);
+        }
+    }
+
     checkpoint("Arkchemy (Jouster) game smoke test starting -- build " __DATE__ " " __TIME__);
 
     /* Report the process's real memory limits, added 2026-08-24. This
