@@ -4823,6 +4823,21 @@ int main(int argc, char *argv[]) {
                                         /* Who owned this memory, in order. Two live entries covering the same
                                            address with no free between is a double allocation. */
                                         {
+                                            char sb2[560]; int so2 = 0; sb2[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_sz_n && i < 10u; i++) {
+                                                so2 += snprintf(sb2 + so2, sizeof sb2 - (size_t)so2,
+                                                                " [%u @%u cap=%u elem=%u prod=%u div=%u -> %u]",
+                                                                i, (unsigned)g_ark_sz[i][0], (unsigned)g_ark_sz[i][1],
+                                                                (unsigned)g_ark_sz[i][2], (unsigned)g_ark_sz[i][3],
+                                                                (unsigned)g_ark_sz[i][4], (unsigned)g_ark_sz[i][5]);
+                                                if (so2 >= (int)sizeof sb2 - 1) break;
+                                            }
+                                            checkpoint("SIZECALC n=%u%s -- igDataList::setCapacity asks for"
+                                                       " (capacity * elemSize) / virtualCall(). A wrong term here"
+                                                       " is what produces a 350 MB request against a 5 MB arena",
+                                                       (unsigned)g_ark_sz_n, sb2[0] ? sb2 : " <none>");
+                                        }
+                                        {
                                             char ab[520]; int ao = 0; ab[0] = 0;
                                             for (unsigned i = 0; i < g_ark_af_n && i < 10u; i++) {
                                                 ao += snprintf(ab + ao, sizeof ab - (size_t)ao,
