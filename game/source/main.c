@@ -4881,6 +4881,21 @@ int main(int argc, char *argv[]) {
                                                        " under the arena with free=0 and fl=0 means the free"
                                                        " lists are gone, not the memory",
                                                        (unsigned)g_ark_pw_n, pwb[0] ? pwb : " <none>");
+
+                                            /* HEAPWALK: the physical block chain of the first heap pool to
+                                               refuse. usedBytes+freeBytes should account for the whole arena;
+                                               a large freeBytes beside fl=0 means the free lists lost blocks
+                                               that are still physically free, and a freeBytes near zero means
+                                               the arena really is full and the pool's own userAllocated is
+                                               under-reporting it. */
+                                            checkpoint("HEAPWALK blocks=%u used=%u/%ub free=%u/%ub largest=%u"
+                                                       " range=0x%x..0x%x stoppedAt=0x%x status=%u"
+                                                       " (1=terminator 2=out-of-range 3=cap)",
+                                                       (unsigned)g_ark_hw[0], (unsigned)g_ark_hw[1],
+                                                       (unsigned)g_ark_hw[2], (unsigned)g_ark_hw[3],
+                                                       (unsigned)g_ark_hw[4], (unsigned)g_ark_hw[5],
+                                                       (unsigned)g_ark_hw[8], (unsigned)g_ark_hw[9],
+                                                       (unsigned)g_ark_hw[6], (unsigned)g_ark_hw[7]);
                                         }
                                         {
                                             char qb[420]; int qo = 0; qb[0] = 0;
