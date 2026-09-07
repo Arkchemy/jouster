@@ -4896,6 +4896,17 @@ int main(int argc, char *argv[]) {
                                                        (unsigned)g_ark_hw[4], (unsigned)g_ark_hw[5],
                                                        (unsigned)g_ark_hw[8], (unsigned)g_ark_hw[9],
                                                        (unsigned)g_ark_hw[6], (unsigned)g_ark_hw[7]);
+                                            /* The stopping word decides it. tlsf_create's sentinel is size 0
+                                               with the used and prev_free bits, so it reads 2 or 3; a header
+                                               that has been zeroed reads 0. Same walk result, opposite
+                                               causes. */
+                                            checkpoint("HEAPSTOP at=0x%x words=[0x%x,0x%x,0x%x,0x%x]"
+                                                       " prev=0x%x prevSize=0x%x -- sizeword 2 or 3 is"
+                                                       " tlsf_create's real sentinel, 0 is a zeroed header",
+                                                       (unsigned)g_ark_hw[6], (unsigned)g_ark_hw[10],
+                                                       (unsigned)g_ark_hw[11], (unsigned)g_ark_hw[12],
+                                                       (unsigned)g_ark_hw[13], (unsigned)g_ark_hw[14],
+                                                       (unsigned)g_ark_hw[15]);
                                         }
                                         {
                                             char qb[420]; int qo = 0; qb[0] = 0;
