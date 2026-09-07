@@ -4844,6 +4844,43 @@ int main(int argc, char *argv[]) {
                                                        " eight and the runtime registers 52, so traffic landing"
                                                        " almost entirely on 0x4500274 is the bug",
                                                        (unsigned)g_ark_pd_n, pdb[0] ? pdb : " <none>");
+
+                                            /* POOLWHY: the concrete class of each refusing pool, and how much
+                                               room it said it had at the moment it refused.  vtable+0xf4 is
+                                               reallocInternal, a real .text address, so it names the class
+                                               outright.  Only igHeapMemoryPool implements
+                                               getLargestFreeBlockSize -- every other class inherits a base
+                                               that returns a constant 0, so free=0 from those means "not
+                                               reported", never "empty". */
+                                            char pwb[900]; int pwo = 0; pwb[0] = 0;
+                                            for (unsigned i = 0; i < g_ark_pw_n && i < 10u; i++) {
+                                                uint32_t vt = g_ark_pw[i][1];
+                                                const char *cls =
+                                                    vt == 0x217cca0u ? "igHeapMemoryPool" :
+                                                    vt == 0x2174b60u ? "igBlockMemoryPool" :
+                                                    vt == 0x2175134u ? "igFixedMemoryPool" :
+                                                    vt == 0x217f830u ? "igStackMemoryPool" :
+                                                    vt == 0x2156ea4u ? "igCafeSystemMemoryPool" :
+                                                    vt == 0x217c350u ? "igBidiHeapMemoryPool" : "?";
+                                                unsigned mn = (unsigned)g_ark_pw[i][4];
+                                                pwo += snprintf(pwb + pwo, sizeof pwb - (size_t)pwo,
+                                                                " [0x%x %s refused=%u small=%u free=%u..%u"
+                                                                " used=%u/%u blocks=%u ctrl+8=0x%x fl=0x%x last=%u]",
+                                                                (unsigned)g_ark_pw[i][0], cls,
+                                                                (unsigned)g_ark_pw[i][2], (unsigned)g_ark_pw[i][3],
+                                                                mn == 0xFFFFFFFFu ? 0u : mn,
+                                                                (unsigned)g_ark_pw[i][5],
+                                                                (unsigned)g_ark_pw[i][9], (unsigned)g_ark_pw[i][7],
+                                                                (unsigned)g_ark_pw[i][8], (unsigned)g_ark_pw[i][10],
+                                                                (unsigned)g_ark_pw[i][11], (unsigned)g_ark_pw[i][6]);
+                                                if (pwo >= (int)sizeof pwb - 1) break;
+                                            }
+                                            checkpoint("POOLWHY n=%u%s -- per refusing pool at the moment it"
+                                                       " refused: class, largest free block IT reported, bytes"
+                                                       " used of its arena, and the TLSF fl_bitmap. used well"
+                                                       " under the arena with free=0 and fl=0 means the free"
+                                                       " lists are gone, not the memory",
+                                                       (unsigned)g_ark_pw_n, pwb[0] ? pwb : " <none>");
                                         }
                                         {
                                             char qb[420]; int qo = 0; qb[0] = 0;
