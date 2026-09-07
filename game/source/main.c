@@ -4986,24 +4986,25 @@ int main(int argc, char *argv[]) {
                                                            (unsigned)g_ark_sv_calls, (unsigned)g_ark_sv_n,
                                                            svb[0] ? svb : " <none>");
 
-                                                char swb[500]; int swo = 0; swb[0] = 0;
+                                                char swb[560]; int swo = 0; swb[0] = 0;
                                                 for (unsigned i = 0; i < g_ark_sw_n && i < 4u; i++) {
                                                     static const char *who[] = {"-","reallocCommon","memalign","free","realloc"};
                                                     unsigned w = (unsigned)g_ark_sw[i][5];
                                                     swo += snprintf(swb + swo, sizeof swb - (size_t)swo,
-                                                                    " [ctrl=0x%x walks=%u max=0x%x cur=0x%x"
+                                                                    " [ctrl=0x%x end=0x%x walks=%u runaway=%u"
+                                                                    " last=0x%x lastWhole@%u"
                                                                     " drop(@%u 0x%x blocks=%u by %s)]",
-                                                                    (unsigned)g_ark_sw[i][0], (unsigned)g_ark_sw[i][6],
-                                                                    (unsigned)g_ark_sw[i][1], (unsigned)g_ark_sw[i][2],
+                                                                    (unsigned)g_ark_sw[i][0], (unsigned)g_ark_sw[i][1],
+                                                                    (unsigned)g_ark_sw[i][6], (unsigned)g_ark_sw[i][8],
+                                                                    (unsigned)g_ark_sw[i][2], (unsigned)g_ark_sw[i][9],
                                                                     (unsigned)g_ark_sw[i][3], (unsigned)g_ark_sw[i][4],
-                                                                    (unsigned)g_ark_sw[i][7],
-                                                                    w < 5u ? who[w] : "?");
+                                                                    (unsigned)g_ark_sw[i][7], w < 5u ? who[w] : "?");
                                                     if (swo >= (int)sizeof swb - 1) break;
                                                 }
-                                                checkpoint("SPANWATCH n=%u%s -- high-water of each TLSF chain and"
-                                                           " the first walk to fall below it. The `by` tag is the"
-                                                           " entry point that first saw the chain short, which is"
-                                                           " the one that shortened it",
+                                                checkpoint("SPANWATCH n=%u%s | a walk reaching arenaEnd-8 found the"
+                                                           " sentinel and the chain is whole. `by` is the entry point"
+                                                           " that first saw it short. runaway counts walks that left"
+                                                           " the arena and were discarded rather than recorded",
                                                            (unsigned)g_ark_sw_n, swb[0] ? swb : " <none>");
                                             }
                                         }
