@@ -4943,17 +4943,30 @@ int main(int argc, char *argv[]) {
                                                            (unsigned)g_ark_bw_seen, (unsigned)g_ark_bw_n,
                                                            bwb[0] ? bwb : " <none>");
 
-                                                checkpoint("HEAPSPAN walks=%u arenaEnd=0x%x lastSpan=0x%x/%ub"
-                                                           " | whole until: span=0x%x blocks=%u"
-                                                           " | first short: call=%u span=0x%x blocks=%u"
-                                                           " -- the chain reaches the sentinel at arenaEnd-8"
-                                                           " while the arena is whole; the first call where it"
-                                                           " falls short is the allocation that lost the tail",
-                                                           (unsigned)g_ark_hs_n, (unsigned)g_ark_hs[7],
-                                                           (unsigned)g_ark_hs[4], (unsigned)g_ark_hs[6],
-                                                           (unsigned)g_ark_hs[8], (unsigned)g_ark_hs[9],
-                                                           (unsigned)g_ark_hs[2], (unsigned)g_ark_hs[3],
-                                                           (unsigned)g_ark_hs[5]);
+                                                char hsb[600]; int hso = 0; hsb[0] = 0;
+                                                for (unsigned i = 0; i < g_ark_hs_n && i < 4u; i++) {
+                                                    hso += snprintf(hsb + hso, sizeof hsb - (size_t)hso,
+                                                                    " [ctrl=0x%x end=0x%x walks=%u"
+                                                                    " first(@%u 0x%x/%u)"
+                                                                    " lastGood(@%u 0x%x/%u ptr=0x%x size=%u lr=0x%x)"
+                                                                    " firstShort(@%u 0x%x/%u)]",
+                                                                    (unsigned)g_ark_hs[i][0], (unsigned)g_ark_hs[i][1],
+                                                                    (unsigned)g_ark_hs[i][2],
+                                                                    (unsigned)g_ark_hs[i][9], (unsigned)g_ark_hs[i][10],
+                                                                    (unsigned)g_ark_hs[i][11],
+                                                                    (unsigned)g_ark_hs[i][3], (unsigned)g_ark_hs[i][4],
+                                                                    (unsigned)g_ark_hs[i][5], (unsigned)g_ark_hs[i][13],
+                                                                    (unsigned)g_ark_hs[i][14], (unsigned)g_ark_hs[i][15],
+                                                                    (unsigned)g_ark_hs[i][6], (unsigned)g_ark_hs[i][7],
+                                                                    (unsigned)g_ark_hs[i][8]);
+                                                    if (hso >= (int)sizeof hsb - 1) break;
+                                                }
+                                                checkpoint("HEAPSPAN n=%u%s -- per heap pool, keyed by control"
+                                                           " address. A walk ending at end-8 reached the sentinel"
+                                                           " and the arena is whole; lastGood against firstShort"
+                                                           " brackets the allocation that lost the tail, and a"
+                                                           " lastGood of 0 means this pool was never seen whole",
+                                                           (unsigned)g_ark_hs_n, hsb[0] ? hsb : " <none>");
                                             }
                                         }
                                         {
