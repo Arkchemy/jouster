@@ -5123,6 +5123,22 @@ int main(int argc, char *argv[]) {
                                                            " one to trust", (unsigned)g_ark_wl_n,
                                                            wlb[0] ? wlb : " <none>");
 
+                                                {
+                                                    char gxb[560]; int gxo = 0; gxb[0] = 0;
+                                                    for (unsigned i = 0; i < g_ark_gx_n && i < 24u; i++) {
+                                                        gxo += snprintf(gxb + gxo, sizeof gxb - (size_t)gxo,
+                                                                        " [lr=0x%x x%u]",
+                                                                        (unsigned)g_ark_gx[i][0],
+                                                                        (unsigned)g_ark_gx[i][1]);
+                                                        if (gxo >= (int)sizeof gxb - 1) break;
+                                                    }
+                                                    checkpoint("GX2CENSUS total=%u sites=%u%s -- graphics calls"
+                                                               " the engine actually made, by call-site lr."
+                                                               " total=0 means the render loop runs but never"
+                                                               " reaches the hardware",
+                                                               (unsigned)g_ark_gx_total, (unsigned)g_ark_gx_n,
+                                                               gxb[0] ? gxb : " <none>");
+                                                }
                                                 checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
