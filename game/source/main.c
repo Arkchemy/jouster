@@ -5313,6 +5313,21 @@ int main(int argc, char *argv[]) {
                                                                    (unsigned)g_ark_xr_file, (unsigned)g_ark_xr_path,
                                                                    (unsigned)g_ark_xa_total, (unsigned)g_ark_xa_n,
                                                                    xab[0] ? xab : " <none>");
+                                                        char mgb[300]; int mgo = 0; mgb[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_mg_n && i < 6u; i++)
+                                                            mgo += snprintf(mgb + mgo, sizeof mgb - (size_t)mgo,
+                                                                            " [dst=0x%x src=0x%x flags=%u ret=%u]",
+                                                                            (unsigned)g_ark_mg[i][0],
+                                                                            (unsigned)g_ark_mg[i][1],
+                                                                            (unsigned)g_ark_mg[i][2],
+                                                                            (unsigned)g_ark_mg[i][3]);
+                                                        checkpoint("XMLMERGE n=%u%s -- igXmlNode::merge folds"
+                                                                   " one document into another. n=0 means"
+                                                                   " alchemy.xml is parsed and never merged,"
+                                                                   " so the defaults stand and startLevel"
+                                                                   " stays \"test\"",
+                                                                   (unsigned)g_ark_mg_n,
+                                                                   mgb[0] ? mgb : " <none>");
                                                     }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
