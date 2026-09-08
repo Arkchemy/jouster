@@ -5289,25 +5289,27 @@ int main(int argc, char *argv[]) {
                                                                    " problem from an audio one being closed",
                                                                    (unsigned)g_ark_an_n,
                                                                    anb[0] ? anb : " <none>");
-                                                        char xab[1800]; int xao = 0; xab[0] = 0;
+                                                        char xab[1200]; int xao = 0; xab[0] = 0;
                                                         for (unsigned i = 0; i < g_ark_xa_n && i < 48u; i++) {
+                                                            /* only the lookups that returned something -- a
+                                                               list of 38 failures says less than the handful
+                                                               of values that actually came back */
+                                                            if (!g_ark_xa[i][1]) continue;
                                                             xao += snprintf(xab + xao, sizeof xab - (size_t)xao,
-                                                                            " [\"%s\" a=%u g=%u @%u..%u]",
+                                                                            " [\"%s\"=\"%s\" a=%u g=%u @%u]",
                                                                             (const char *)g_ark_xa_name[i],
+                                                                            (const char *)g_ark_xa_val[i],
                                                                             (unsigned)g_ark_xa[i][0],
                                                                             (unsigned)g_ark_xa[i][1],
-                                                                            (unsigned)g_ark_xa[i][2],
                                                                             (unsigned)g_ark_xa[i][3]);
                                                             if (xao >= (int)sizeof xab - 1) break;
                                                         }
-                                                        checkpoint("XMLCFG read(file)=%u read(path)=%u"
-                                                                   " getAttribute total=%u distinct=%u%s"
-                                                                   " -- alchemy.xml opens fine at 542 bytes and"
-                                                                   " says startLevel=\"Title\", yet the game"
-                                                                   " loads level/test.bld, which is the"
-                                                                   " hardcoded default. asked>0 got=0 for"
-                                                                   " startLevel means the parse produced no"
-                                                                   " such attribute",
+                                                        checkpoint("XMLVAL read(file)=%u read(path)=%u"
+                                                                   " total=%u distinct=%u | values that came"
+                                                                   " back:%s -- startLevel returned non-null"
+                                                                   " and the game still opened level/test.bld,"
+                                                                   " so what matters is the value, not the"
+                                                                   " pointer",
                                                                    (unsigned)g_ark_xr_file, (unsigned)g_ark_xr_path,
                                                                    (unsigned)g_ark_xa_total, (unsigned)g_ark_xa_n,
                                                                    xab[0] ? xab : " <none>");
