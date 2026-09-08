@@ -5289,13 +5289,15 @@ int main(int argc, char *argv[]) {
                                                                    " problem from an audio one being closed",
                                                                    (unsigned)g_ark_an_n,
                                                                    anb[0] ? anb : " <none>");
-                                                        char xab[520]; int xao = 0; xab[0] = 0;
-                                                        for (unsigned i = 0; i < g_ark_xa_n && i < 10u; i++) {
+                                                        char xab[1800]; int xao = 0; xab[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_xa_n && i < 48u; i++) {
                                                             xao += snprintf(xab + xao, sizeof xab - (size_t)xao,
-                                                                            " [\"%s\" asked=%u got=%u]",
+                                                                            " [\"%s\" a=%u g=%u @%u..%u]",
                                                                             (const char *)g_ark_xa_name[i],
                                                                             (unsigned)g_ark_xa[i][0],
-                                                                            (unsigned)g_ark_xa[i][1]);
+                                                                            (unsigned)g_ark_xa[i][1],
+                                                                            (unsigned)g_ark_xa[i][2],
+                                                                            (unsigned)g_ark_xa[i][3]);
                                                             if (xao >= (int)sizeof xab - 1) break;
                                                         }
                                                         checkpoint("XMLCFG read(file)=%u read(path)=%u"
