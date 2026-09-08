@@ -5156,6 +5156,40 @@ int main(int argc, char *argv[]) {
                                                                (unsigned)g_ark_gx_over,
                                                                gxb[0] ? gxb : " <none>");
                                                 }
+
+                                                {
+                                                    /* Does it actually draw and present? That question does
+                                                       not answer itself from a busiest-first list -- a draw
+                                                       call can sit well below a state setter and still be the
+                                                       only thing that matters. So report this fixed set by
+                                                       name whatever their rank, including zeros.
+
+                                                       Summed by name rather than read per index: several GX2
+                                                       entry points are hooked by two shim definitions, so a
+                                                       single index would undercount them. */
+                                                    static const char *const want[] = {
+                                                        "GX2DrawEx", "GX2DrawIndexedEx", "GX2DrawDone",
+                                                        "GX2BeginDisplayListEx", "GX2EndDisplayList",
+                                                        "GX2Flush", "GX2SwapScanBuffers", "GX2GetSwapStatus",
+                                                        "GX2SetSwapInterval",
+                                                    };
+                                                    char db[520]; int dbo = 0; db[0] = 0;
+                                                    for (unsigned w = 0; w < sizeof want / sizeof want[0]; w++) {
+                                                        unsigned n = 0;
+                                                        for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++)
+                                                            if (!strcmp(g_arkchemy_gx2_names[i], want[w]))
+                                                                n += (unsigned)g_ark_gx[i];
+                                                        dbo += snprintf(db + dbo, sizeof db - (size_t)dbo,
+                                                                        " [%s x%u]", want[w], n);
+                                                        if (dbo >= (int)sizeof db - 1) break;
+                                                    }
+                                                    checkpoint("GX2DRAW%s -- the draw and present path. Zero"
+                                                               " draws means the engine builds full render"
+                                                               " state every frame and never submits it;"
+                                                               " nonzero means only the shaders and the"
+                                                               " hardware itself stand between this and a"
+                                                               " picture", db);
+                                                }
                                                 checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
