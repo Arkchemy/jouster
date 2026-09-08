@@ -5251,6 +5251,29 @@ int main(int argc, char *argv[]) {
                                                                " different bug from failing the gate",
                                                                (unsigned)g_ark_arch_this,
                                                                (unsigned)g_ark_arch_vt);
+                                                    {
+                                                        char dlb[560]; int dlo = 0; dlb[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_dl_n && i < 12u; i++) {
+                                                            dlo += snprintf(dlb + dlo, sizeof dlb - (size_t)dlo,
+                                                                            " [%s dev=0x%x vt=0x%x @%u]",
+                                                                            g_ark_dl[i][0] == 1u ? "ADD" : "REM",
+                                                                            (unsigned)g_ark_dl[i][1],
+                                                                            (unsigned)g_ark_dl[i][2],
+                                                                            (unsigned)g_ark_dl[i][3]);
+                                                            if (dlo >= (int)sizeof dlb - 1) break;
+                                                        }
+                                                        checkpoint("DEVLOG open=%u reachedRegister=%u close=%u"
+                                                                   " n=%u%s -- igArchive::open is the only"
+                                                                   " caller of addStorageDevice and the call is"
+                                                                   " unconditional once reached, so an archive"
+                                                                   " missing from the list either never got"
+                                                                   " there or was removed again",
+                                                                   (unsigned)g_ark_open_n,
+                                                                   (unsigned)g_ark_open_reg,
+                                                                   (unsigned)g_ark_close_n,
+                                                                   (unsigned)g_ark_dl_n,
+                                                                   dlb[0] ? dlb : " <none>");
+                                                    }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
