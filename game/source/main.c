@@ -5328,6 +5328,17 @@ int main(int argc, char *argv[]) {
                                                                    " stays \"test\"",
                                                                    (unsigned)g_ark_mg_n,
                                                                    mgb[0] ? mgb : " <none>");
+                                                        checkpoint("XMLREAD calls=%u ret=0x%x | parseErrors=%u"
+                                                                   " first=\"%s\" at=0x%x -- igRegistry::read"
+                                                                   " skips the merge when this return is"
+                                                                   " non-zero, which is why alchemy.xml is"
+                                                                   " parsed and discarded. rapidxml's message"
+                                                                   " names the failure exactly",
+                                                                   (unsigned)g_ark_xrd_calls,
+                                                                   (unsigned)g_ark_xrd_ret,
+                                                                   (unsigned)g_ark_xerr_n,
+                                                                   (const char *)g_ark_xerr_msg,
+                                                                   (unsigned)g_ark_xerr_where);
                                                     }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
