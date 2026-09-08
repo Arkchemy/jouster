@@ -5339,6 +5339,22 @@ int main(int argc, char *argv[]) {
                                                                    (unsigned)g_ark_xerr_n,
                                                                    (const char *)g_ark_xerr_msg,
                                                                    (unsigned)g_ark_xerr_where);
+                                                        char xlb[300]; int xlo = 0; xlb[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_xrl_n && i < 6u; i++)
+                                                            xlo += snprintf(xlb + xlo, sizeof xlb - (size_t)xlo,
+                                                                            " [lr=0x%x x%u]",
+                                                                            (unsigned)g_ark_xrl[i][0],
+                                                                            (unsigned)g_ark_xrl[i][1]);
+                                                        checkpoint("XMLWHO igRegistry::read calls=%u ret=0x%x"
+                                                                   " | igXmlDocument::read callers:%s"
+                                                                   " -- read succeeded and merge never ran,"
+                                                                   " which igRegistry::read cannot do. If its"
+                                                                   " call count is 0 the successful read came"
+                                                                   " from elsewhere and the registry never"
+                                                                   " loaded the file at all",
+                                                                   (unsigned)g_ark_regread,
+                                                                   (unsigned)g_ark_regread_ret,
+                                                                   xlb[0] ? xlb : " <none>");
                                                     }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
