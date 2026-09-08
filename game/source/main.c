@@ -5214,7 +5214,16 @@ int main(int argc, char *argv[]) {
                                                            " available",
                                                            (unsigned)g_ark_ap[10], (unsigned)g_ark_ap[6],
                                                            (unsigned)g_ark_ap[11], (unsigned)g_ark_ap[12],
-                                                           (unsigned)g_ark_ap[13]);                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
+                                                           (unsigned)g_ark_ap[13]);
+                                                checkpoint("ARCHDRIVE igFileContext::update=%u"
+                                                           " igArchive::update=%u updateArchiveSystem=%u"
+                                                           " -- the chain that should pump the archive every"
+                                                           " frame. igArchive::update is reached only through"
+                                                           " a vtable, so a context that updates while the"
+                                                           " archive does not means the archive is not in the"
+                                                           " list being walked",
+                                                           (unsigned)g_ark_ap[15], (unsigned)g_ark_ap[14],
+                                                           (unsigned)g_ark_ap[0]);                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
                                                            " so peak>1 is real while peak==1 is weak evidence,"
