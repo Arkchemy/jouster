@@ -5289,6 +5289,26 @@ int main(int argc, char *argv[]) {
                                                                    " problem from an audio one being closed",
                                                                    (unsigned)g_ark_an_n,
                                                                    anb[0] ? anb : " <none>");
+                                                        char xab[520]; int xao = 0; xab[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_xa_n && i < 10u; i++) {
+                                                            xao += snprintf(xab + xao, sizeof xab - (size_t)xao,
+                                                                            " [\"%s\" asked=%u got=%u]",
+                                                                            (const char *)g_ark_xa_name[i],
+                                                                            (unsigned)g_ark_xa[i][0],
+                                                                            (unsigned)g_ark_xa[i][1]);
+                                                            if (xao >= (int)sizeof xab - 1) break;
+                                                        }
+                                                        checkpoint("XMLCFG read(file)=%u read(path)=%u"
+                                                                   " getAttribute total=%u distinct=%u%s"
+                                                                   " -- alchemy.xml opens fine at 542 bytes and"
+                                                                   " says startLevel=\"Title\", yet the game"
+                                                                   " loads level/test.bld, which is the"
+                                                                   " hardcoded default. asked>0 got=0 for"
+                                                                   " startLevel means the parse produced no"
+                                                                   " such attribute",
+                                                                   (unsigned)g_ark_xr_file, (unsigned)g_ark_xr_path,
+                                                                   (unsigned)g_ark_xa_total, (unsigned)g_ark_xa_n,
+                                                                   xab[0] ? xab : " <none>");
                                                     }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
