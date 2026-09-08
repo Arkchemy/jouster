@@ -5223,7 +5223,27 @@ int main(int argc, char *argv[]) {
                                                            " archive does not means the archive is not in the"
                                                            " list being walked",
                                                            (unsigned)g_ark_ap[15], (unsigned)g_ark_ap[14],
-                                                           (unsigned)g_ark_ap[0]);                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
+                                                           (unsigned)g_ark_ap[0]);
+                                                {
+                                                    char dvb[420]; int dvo = 0; dvb[0] = 0;
+                                                    for (unsigned i = 0; i < g_ark_dev_n && i < 8u; i++) {
+                                                        dvo += snprintf(dvb + dvo, sizeof dvb - (size_t)dvo,
+                                                                        " [dev=0x%x seen=%u active=%u flag=0x%x]",
+                                                                        (unsigned)g_ark_dev[i][0],
+                                                                        (unsigned)g_ark_dev[i][1],
+                                                                        (unsigned)g_ark_dev[i][2],
+                                                                        (unsigned)g_ark_dev[i][3]);
+                                                        if (dvo >= (int)sizeof dvb - 1) break;
+                                                    }
+                                                    checkpoint("ARCHDEV spinUp=%u spinDown=%u n=%u%s"
+                                                               " -- igFileContext::update gates each device on"
+                                                               " getIsActive, a byte at +0x20. seen counts the"
+                                                               " walks, active counts the ones that passed. A"
+                                                               " device with seen high and active 0 is being"
+                                                               " skipped every frame",
+                                                               (unsigned)g_ark_spinup, (unsigned)g_ark_spindown,
+                                                               (unsigned)g_ark_dev_n, dvb[0] ? dvb : " <none>");
+                                                }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
                                                            " so peak>1 is real while peak==1 is weak evidence,"
