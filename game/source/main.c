@@ -5228,8 +5228,9 @@ int main(int argc, char *argv[]) {
                                                     char dvb[420]; int dvo = 0; dvb[0] = 0;
                                                     for (unsigned i = 0; i < g_ark_dev_n && i < 8u; i++) {
                                                         dvo += snprintf(dvb + dvo, sizeof dvb - (size_t)dvo,
-                                                                        " [dev=0x%x seen=%u active=%u flag=0x%x]",
+                                                                        " [dev=0x%x vt=0x%x seen=%u active=%u f20=0x%x]",
                                                                         (unsigned)g_ark_dev[i][0],
+                                                                        (unsigned)g_ark_dev[i][4],
                                                                         (unsigned)g_ark_dev[i][1],
                                                                         (unsigned)g_ark_dev[i][2],
                                                                         (unsigned)g_ark_dev[i][3]);
@@ -5243,6 +5244,13 @@ int main(int argc, char *argv[]) {
                                                                " skipped every frame",
                                                                (unsigned)g_ark_spinup, (unsigned)g_ark_spindown,
                                                                (unsigned)g_ark_dev_n, dvb[0] ? dvb : " <none>");
+                                                    checkpoint("ARCHSELF archive this=0x%x vtable=0x%x"
+                                                               " -- match this against the device list above."
+                                                               " Absent from it means the archive was never"
+                                                               " registered as a storage device, which is a"
+                                                               " different bug from failing the gate",
+                                                               (unsigned)g_ark_arch_this,
+                                                               (unsigned)g_ark_arch_vt);
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
