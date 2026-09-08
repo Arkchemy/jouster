@@ -5190,7 +5190,21 @@ int main(int argc, char *argv[]) {
                                                                " hardware itself stand between this and a"
                                                                " picture", db);
                                                 }
-                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
+
+                                                checkpoint("ARCHPUMP updateArchiveSystem=%u updateTasks=%u"
+                                                           " startNewTasks=%u startBlockRead=%u"
+                                                           " decompressBatch=%u addWork=%u"
+                                                           " | blockMgr alloc=%u gotBlock=%u"
+                                                           " avail(calls=%u last=%u)"
+                                                           " -- the archive read loop. The file is 198,695"
+                                                           " bytes and 131,072 were read in one request, so"
+                                                           " whichever link here stops running, or runs and"
+                                                           " starts nothing, is where the load dies",
+                                                           (unsigned)g_ark_ap[0], (unsigned)g_ark_ap[1],
+                                                           (unsigned)g_ark_ap[2], (unsigned)g_ark_ap[3],
+                                                           (unsigned)g_ark_ap[4], (unsigned)g_ark_ap[9],
+                                                           (unsigned)g_ark_ap[5], (unsigned)g_ark_ap[6],
+                                                           (unsigned)g_ark_ap[7], (unsigned)g_ark_ap[8]);                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
                                                            " The counter is not atomic and can only undercount,"
                                                            " so peak>1 is real while peak==1 is weak evidence,"
