@@ -5273,6 +5273,22 @@ int main(int argc, char *argv[]) {
                                                                    (unsigned)g_ark_close_n,
                                                                    (unsigned)g_ark_dl_n,
                                                                    dlb[0] ? dlb : " <none>");
+                                                        char anb[420]; int ano = 0; anb[0] = 0;
+                                                        for (unsigned i = 0; i < g_ark_an_n && i < 4u; i++) {
+                                                            ano += snprintf(anb + ano, sizeof anb - (size_t)ano,
+                                                                            " [this=0x%x \"%s\" closedBy=0x%x]",
+                                                                            (unsigned)g_ark_an[i][0],
+                                                                            (const char *)g_ark_an_name[i],
+                                                                            (unsigned)g_ark_an[i][1]);
+                                                            if (ano >= (int)sizeof anb - 1) break;
+                                                        }
+                                                        checkpoint("ARCHNAME n=%u%s -- which archive each open"
+                                                                   " refers to, and the lr that closed it."
+                                                                   " closedBy=0 means still open. The boot"
+                                                                   " archive being closed is a different"
+                                                                   " problem from an audio one being closed",
+                                                                   (unsigned)g_ark_an_n,
+                                                                   anb[0] ? anb : " <none>");
                                                     }
                                                 }                                                checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
                                                            " [t0=0x%x t1=0x%x] -- threads inside tlsf_* at once."
