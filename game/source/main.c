@@ -38,6 +38,7 @@
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
 #include "cafeos_gx2.h"
+#include "cafeos_gx2_names.h"
 #include "cafeos_vpad.h"
 
 // Real, deliberate architecture: the actual, complete recompiled game
@@ -5124,19 +5125,35 @@ int main(int argc, char *argv[]) {
                                                            wlb[0] ? wlb : " <none>");
 
                                                 {
-                                                    char gxb[560]; int gxo = 0; gxb[0] = 0;
-                                                    for (unsigned i = 0; i < g_ark_gx_n && i < 24u; i++) {
+                                                    /* Top graphics calls by count, names from
+                                                       cafeos_gx2_names.h. Selection-sorted rather than
+                                                       ring-recorded, so the busiest entries are the ones
+                                                       reported instead of whichever happened first. */
+                                                    char gxb[720]; int gxo = 0; gxb[0] = 0;
+                                                    unsigned shown[14]; unsigned ns = 0;
+                                                    for (unsigned pick = 0; pick < 14u; pick++) {
+                                                        unsigned best = 0xFFFFFFFFu, bestv = 0;
+                                                        for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++) {
+                                                            unsigned already = 0;
+                                                            for (unsigned k = 0; k < ns; k++) if (shown[k] == i) already = 1;
+                                                            if (already || !g_ark_gx[i]) continue;
+                                                            if ((unsigned)g_ark_gx[i] > bestv) { bestv = (unsigned)g_ark_gx[i]; best = i; }
+                                                        }
+                                                        if (best == 0xFFFFFFFFu) break;
+                                                        shown[ns++] = best;
                                                         gxo += snprintf(gxb + gxo, sizeof gxb - (size_t)gxo,
-                                                                        " [lr=0x%x x%u]",
-                                                                        (unsigned)g_ark_gx[i][0],
-                                                                        (unsigned)g_ark_gx[i][1]);
+                                                                        " [%s x%u]", g_arkchemy_gx2_names[best], bestv);
                                                         if (gxo >= (int)sizeof gxb - 1) break;
                                                     }
-                                                    checkpoint("GX2CENSUS total=%u sites=%u%s -- graphics calls"
-                                                               " the engine actually made, by call-site lr."
-                                                               " total=0 means the render loop runs but never"
-                                                               " reaches the hardware",
-                                                               (unsigned)g_ark_gx_total, (unsigned)g_ark_gx_n,
+                                                    unsigned distinct = 0;
+                                                    for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++)
+                                                        if (g_ark_gx[i]) distinct++;
+                                                    checkpoint("GX2CENSUS total=%u distinct=%u over=%u%s"
+                                                               " -- graphics calls by function, busiest first."
+                                                               " These are the entry points that have to work"
+                                                               " before anything appears on screen",
+                                                               (unsigned)g_ark_gx_total, distinct,
+                                                               (unsigned)g_ark_gx_over,
                                                                gxb[0] ? gxb : " <none>");
                                                 }
                                                 checkpoint("ALLOCRACE peak=%u overlaps=%u threads=%u"
