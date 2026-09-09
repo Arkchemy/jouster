@@ -4680,6 +4680,27 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char iwbuf[6*72]; unsigned iwo = 0; iwbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_iw_n && iwo + 72 < sizeof(iwbuf); i++)
+                          iwo += (unsigned)snprintf(iwbuf + iwo, sizeof(iwbuf) - iwo,
+                                                    "[site%u fwi=0x%x status=%u] ",
+                                                    (unsigned)g_ark_iw_site[i], (unsigned)g_ark_iw_fwi[i],
+                                                    (unsigned)g_ark_iw_status[i]);
+                      if (iwo == 0) snprintf(iwbuf, sizeof(iwbuf), "<none>");
+                      checkpoint("IGZWORK %s -- site0 is the loader's own _fileWorkItem"
+                                 " (status 0 there means it was NULL, never attached); site1 is one"
+                                 " of the section work items. Anything above 2 is an error status.",
+                                 iwbuf);
+                      char ssbuf[12*56]; unsigned sso = 0; ssbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_ss_n && sso + 56 < sizeof(ssbuf); i++)
+                          sso += (unsigned)snprintf(ssbuf + sso, sizeof(ssbuf) - sso,
+                                                    "[0x%x=%u lr=0x%x] ", (unsigned)g_ark_ss_item[i],
+                                                    (unsigned)g_ark_ss_val[i], (unsigned)g_ark_ss_lr[i]);
+                      if (sso == 0) snprintf(ssbuf, sizeof(ssbuf), "<none>");
+                      checkpoint("SETSTATUS total=%u kept=%u %s -- first four plus every status > 2,"
+                                 " so a flood of routine 1/2 writes cannot push the error out",
+                                 (unsigned)g_ark_ss_total, (unsigned)g_ark_ss_n, ssbuf); }
+
                     { char isbuf[6*96]; unsigned iso = 0; isbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_igs_n && iso + 96 < sizeof(isbuf); i++)
                           iso += (unsigned)snprintf(isbuf + iso, sizeof(isbuf) - iso,
