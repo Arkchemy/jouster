@@ -25,12 +25,44 @@ static: walking the retail RPX's call graph, `igArkCore::init` is the *only*
 caller of `igRegistry::read`, and `__sti___22_tfbCafeApplication_cpp` is the
 only writer of `_registryPath`.
 
-**Not yet confirmed on hardware.** The build carrying the fix
-(`fbf92bcc56168b2493d3a5e757d9352e`) is on the card, unrun. What should
-change: `XMLWHO igRegistry::read calls>0`, `startLevel` becomes `Title`,
-`level/Title.bld` opens, and the archive pumps against the context rather
-than 8 times. If `calls` is still 0 after this, the guard byte was not the
-only thing being read wrong.
+**Confirmed on hardware, same day.** `XMLWHO igRegistry::read calls=1`, and
+the caller of `igXmlDocument::read` is now `lr=0x21c3a5c` — inside
+`igRegistry::read` itself, which is a real client rather than the sibling
+overload the previous run reported. The registry loads.
+
+## Second wall, immediately behind it (2026-09-09)
+
+Loading the registry runs a path that had never executed, and it deadlocked
+on the first file read:
+
+```
+igArkCore::init -> igRegistry::read -> igPhysicalStorageDevice::update
+  FSReadFileWithPosAsync   -- shim reads alchemy.xml, QUEUES the completion
+igCafeSignal::wait -> b OSWaitEvent   -- parks forever
+```
+
+```
+fs: ard=1/542  fsz=542  head="<root>\n\t<Core\n\t\t"   <- the file is IN the buffer
+asyncq: q=1 done=0 pend=1     cb: ok=0     evt: sig=0
+threads: created=0 started=0
+guest calls frozen at 159,416, last_pc = igCafeSignal::wait
+```
+
+`OSWaitEventWithTimeout` pumped queued FS completions before parking;
+`OSWaitEvent` did not. That only worked because two workers normally sit in
+the timeout variant forever and one of them always ran the pump. The registry
+read happens *before any guest thread is created*, so there was nobody left to
+drain a queue one entry deep.
+
+Fixed in conquertron `104a16d`. Write-up:
+`conquertron/findings/2026-09-09-oswaitevent-never-pumped-fs-completions.md`.
+
+**Also found:** `codegen.cpp` had not compiled since `9ca5e40` (2026-09-03) —
+`ppc.id` where `cs_ppc` has no such member. `regenerate.sh` had been silently
+using a stale `build/recomp`, so the per-instruction memory barriers that
+commit added have **never been in a generated build**. Fixed; the current tree
+still predates them, deliberately, so that the OSWaitEvent fix is the only
+variable in the next run.
 
 ## State before the fix (2026-09-08)
 
