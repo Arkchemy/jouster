@@ -4680,6 +4680,23 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char isbuf[6*96]; unsigned iso = 0; isbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_igs_n && iso + 96 < sizeof(isbuf); i++)
+                          iso += (unsigned)snprintf(isbuf + iso, sizeof(isbuf) - iso,
+                                                    "[%s(%u) ret=0x%x iters=%u] ",
+                                                    ark_igz_state_name(g_ark_igs_state[i]),
+                                                    (unsigned)g_ark_igs_state[i],
+                                                    (unsigned)g_ark_igs_ret[i],
+                                                    (unsigned)g_ark_igs_iters[i]);
+                      if (iso == 0) snprintf(isbuf, sizeof(isbuf), "<none>");
+                      checkpoint("IGZSTATE update calls=%u max=%s(%u) exits=%s"
+                                 " -- the loop runs while state != 7 (kStateFinished); the exit state"
+                                 " names the step it could not pass, and iters separates a spin from"
+                                 " an immediate bail. ret is isFileWorkFinished's, and 1 forces"
+                                 " kStateFailed.", (unsigned)g_ark_igs_calls,
+                                 ark_igz_state_name(g_ark_igs_maxstate),
+                                 (unsigned)g_ark_igs_maxstate, isbuf); }
+
                     { char izbuf[4*96]; unsigned izo = 0; izbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_igz_n && izo + 96 < sizeof(izbuf); i++)
                           izo += (unsigned)snprintf(izbuf + izo, sizeof(izbuf) - izo,
