@@ -182,3 +182,13 @@ project Discord are in [`llms.txt`](llms.txt).
 
 Contributors are listed in [`CONTRIBUTORS.csv`](https://github.com/Arkchemy/woodburrow/blob/main/CONTRIBUTORS.csv); the codename
 scheme is explained in [`CODENAMES.md`](CODENAMES.md).
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [`ROADMAP.md`](ROADMAP.md) | What has to work, in the order it has to work |
+| [`docs/boot-chain.md`](docs/boot-chain.md) | Where boot actually gets to, measured, and what stops it |
+| [`docs/SDLC.md`](docs/SDLC.md) | Development lifecycle: methodology, requirements, testing, risk |
+| [`docs/schedule.md`](docs/schedule.md) | Gantt chart, critical path and milestones |
+| [`test-results/`](test-results/) | One note per hardware run, newest first, each with its build hash |
