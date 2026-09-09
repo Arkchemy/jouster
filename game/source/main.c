@@ -4691,6 +4691,14 @@ int main(int argc, char *argv[]) {
                                                     (unsigned)g_ark_rs_align[i],
                                                     (unsigned)g_ark_rs_ret[i]);
                       if (rso == 0) snprintf(rsbuf, sizeof(rsbuf), "<none>");
+                      for (unsigned i = 0; i < (unsigned)g_ark_rs_n; i++) {
+                          char pd[16*10]; unsigned pdo = 0; pd[0] = 0;
+                          for (unsigned w = 0; w < 16u; w++)
+                              pdo += (unsigned)snprintf(pd + pdo, sizeof(pd) - pdo, "%08x ",
+                                                        (unsigned)g_ark_rs_dump[i][w]);
+                          checkpoint("RSPOOL %s pool=0x%x %s", (const char *)g_ark_rs_name[i],
+                                     (unsigned)g_ark_rs_pool[i], pd);
+                      }
                       checkpoint("RSALLOC calls=%u kept=%u %s -- igMemoryPool::mallocAligned"
                                  " returning 0 is what makes readSections return 1, and everything"
                                  " above it follows. A null pool means the lookup failed; a real pool"
