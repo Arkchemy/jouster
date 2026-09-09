@@ -4680,9 +4680,21 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char slbuf[8*64]; unsigned slo = 0; slbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_sl_n && slo + 64 < sizeof(slbuf); i++)
+                          slo += (unsigned)snprintf(slbuf + slo, sizeof(slbuf) - slo, "[%u \"%s\" @%u] ",
+                                                    i, (const char *)g_ark_sl_name[i], (unsigned)g_ark_sl_at[i]);
+                      if (slo == 0) snprintf(slbuf, sizeof(slbuf), "<none>");
+                      checkpoint("STREAMLOAD calls=%u recorded=%u %s -- each entry closes the previous"
+                                 " archive first, so a call with no new archive in ARCHNAME is what"
+                                 " removed the last one", (unsigned)g_ark_sl_calls,
+                                 (unsigned)g_ark_sl_n, slbuf); }
+
                     checkpoint("INFLATE lzma n=%u ret=0x%x | zlib n=%u ret=0x%x | ok=%u fail=%u"
-                               " -- decompressBatch requires exactly 1, else the task is never"
-                               " marked complete and the work item never drains",
+                               " -- ret is (err != 0): 0 IS success. decompressBatch's"
+                               " `cmpwi r3,1; bne 0x216bb14` branches to the success path,"
+                               " which stores 1 into the job flag; falling through is the"
+                               " error path. This read backwards until 2026-09-09.",
                                (unsigned)g_ark_inf_lzma_n, (unsigned)g_ark_inf_lzma_ret,
                                (unsigned)g_ark_inf_zlib_n, (unsigned)g_ark_inf_zlib_ret,
                                (unsigned)g_ark_inf_ok, (unsigned)g_ark_inf_fail);
