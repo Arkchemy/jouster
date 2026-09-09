@@ -4,7 +4,35 @@ Where the recompiled game actually gets to, and what stops it. Every figure
 here came off hardware; nothing is estimated. Individual runs are written up in
 `test-results/`, newest first — this is the standing summary.
 
-## Current state (2026-09-08)
+## Root cause found (2026-09-09)
+
+The chain below was measured correctly link by link, and **not one link was
+the bug**. The cause sat above all of them, in the recompiler:
+`igArkCore::init` gates the entire configuration load on a single `lbz` of
+`igRegistry::_autoLoad`, and eleven D-form load/store handlers in
+`codegen.cpp` were adding a relocation placeholder on top of an
+already-relocated address. That byte was read 8,528 bytes short of the flag,
+came back zero, and the registry load was skipped whole.
+
+Fixed in conquertron `188bf6f`; 423 instructions in this binary were
+affected, all narrow accesses to relocated globals. Full write-up:
+`conquertron/findings/2026-09-09-lo-reloc-fold-missing-on-narrow-loads.md`.
+
+The `XMLWHO` run that pointed at it reported `igRegistry::read calls=0` with
+exactly one caller of `igXmlDocument::read` — and that caller turned out to
+be the sibling `read(const char*)` overload, not a real client. The rest was
+static: walking the retail RPX's call graph, `igArkCore::init` is the *only*
+caller of `igRegistry::read`, and `__sti___22_tfbCafeApplication_cpp` is the
+only writer of `_registryPath`.
+
+**Not yet confirmed on hardware.** The build carrying the fix
+(`fbf92bcc56168b2493d3a5e757d9352e`) is on the card, unrun. What should
+change: `XMLWHO igRegistry::read calls>0`, `startLevel` becomes `Title`,
+`level/Title.bld` opens, and the archive pumps against the context rather
+than 8 times. If `calls` is still 0 after this, the guard byte was not the
+only thing being read wrong.
+
+## State before the fix (2026-09-08)
 
 The engine boots, loads and decompresses part of its first archive, builds a
 scene, and runs a **complete render pipeline** — 134,606 GX2 calls across 53
