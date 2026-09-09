@@ -4680,6 +4680,23 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char rsbuf[8*88]; unsigned rso = 0; rsbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_rs_n && rso + 88 < sizeof(rsbuf); i++)
+                          rso += (unsigned)snprintf(rsbuf + rso, sizeof(rsbuf) - rso,
+                                                    "[pool=0x%x(%s) size=%u align=%u -> 0x%x] ",
+                                                    (unsigned)g_ark_rs_pool[i],
+                                                    ark_rs_src_name(g_ark_rs_from[i]),
+                                                    (unsigned)g_ark_rs_size[i],
+                                                    (unsigned)g_ark_rs_align[i],
+                                                    (unsigned)g_ark_rs_ret[i]);
+                      if (rso == 0) snprintf(rsbuf, sizeof(rsbuf), "<none>");
+                      checkpoint("RSALLOC calls=%u kept=%u %s -- igMemoryPool::mallocAligned"
+                                 " returning 0 is what makes readSections return 1, and everything"
+                                 " above it follows. A null pool means the lookup failed; a real pool"
+                                 " with a sane size means it is full or corrupt; a huge size means the"
+                                 " section header was read wrong.", (unsigned)g_ark_rs_calls,
+                                 (unsigned)g_ark_rs_n, rsbuf); }
+
                     { char itbuf[4*80]; unsigned ito = 0; itbuf[0] = 0;
                       for (unsigned c = 0; c < 4u && ito + 80 < sizeof(itbuf); c++) {
                           if (g_ark_it_n[c] == 0u) continue;
