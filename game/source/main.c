@@ -4680,6 +4680,27 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char itbuf[4*80]; unsigned ito = 0; itbuf[0] = 0;
+                      for (unsigned c = 0; c < 4u && ito + 80 < sizeof(itbuf); c++) {
+                          if (g_ark_it_n[c] == 0u) continue;
+                          ito += (unsigned)snprintf(itbuf + ito, sizeof(itbuf) - ito, "[call%u:", c);
+                          for (unsigned i = 0; i < (unsigned)g_ark_it_n[c] && ito + 12 < sizeof(itbuf); i++)
+                              ito += (unsigned)snprintf(itbuf + ito, sizeof(itbuf) - ito, " %u",
+                                                        (unsigned)g_ark_it_state[c][i]);
+                          ito += (unsigned)snprintf(itbuf + ito, sizeof(itbuf) - ito, "] ");
+                      }
+                      if (ito == 0) snprintf(itbuf, sizeof(itbuf), "<none>");
+                      char rvbuf[12*44]; unsigned rvo = 0; rvbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_r30_n && rvo + 44 < sizeof(rvbuf); i++)
+                          rvo += (unsigned)snprintf(rvbuf + rvo, sizeof(rvbuf) - rvo, "[%s=0x%x] ",
+                                                    ark_igz_site_name(g_ark_r30_site[i]),
+                                                    (unsigned)g_ark_r30_val[i]);
+                      if (rvo == 0) snprintf(rvbuf, sizeof(rvbuf), "<none>");
+                      checkpoint("IGZTRACE states %s | r30 writes %s -- states are the loop-head"
+                                 " values (0 Idle, 2 Opened, 4 ReadHeader, 6 ReadSections, 7 Finished,"
+                                 " 9 Failed); a default-arm write means the machine was asked to step"
+                                 " a state it has no case for", itbuf, rvbuf); }
+
                     { char iwbuf[6*72]; unsigned iwo = 0; iwbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_iw_n && iwo + 72 < sizeof(iwbuf); i++)
                           iwo += (unsigned)snprintf(iwbuf + iwo, sizeof(iwbuf) - iwo,
