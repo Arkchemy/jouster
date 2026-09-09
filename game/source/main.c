@@ -4680,6 +4680,24 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char izbuf[4*96]; unsigned izo = 0; izbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_igz_n && izo + 96 < sizeof(izbuf); i++)
+                          izo += (unsigned)snprintf(izbuf + izo, sizeof(izbuf) - izo,
+                                                    "[ret=0x%x arc=0x%x arc+0x28=0x%x] ",
+                                                    (unsigned)g_ark_igz_ret[i], (unsigned)g_ark_igz_arc[i],
+                                                    (unsigned)g_ark_igz_f28[i]);
+                      if (izo == 0) snprintf(izbuf, sizeof(izbuf), "<none>");
+                      char opbuf[4*24]; unsigned opo = 0; opbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_igz_open_n && opo + 24 < sizeof(opbuf); i++)
+                          opo += (unsigned)snprintf(opbuf + opo, sizeof(opbuf) - opo, "0x%x ",
+                                                    (unsigned)g_ark_igz_open_ret[i]);
+                      if (opo == 0) snprintf(opbuf, sizeof(opbuf), "<none>");
+                      checkpoint("IGZLOAD entries=%u results=%s | igArchive::open rets: %s"
+                                 " -- ret 0 from igIGZLoader::load is the only path that links the"
+                                 " object directory into the stream; non-zero goes straight to the"
+                                 " close. The load is blocking, so it should have read the archive"
+                                 " before returning.", (unsigned)g_ark_igz_calls, izbuf, opbuf); }
+
                     { char slbuf[8*64]; unsigned slo = 0; slbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_sl_n && slo + 64 < sizeof(slbuf); i++)
                           slo += (unsigned)snprintf(slbuf + slo, sizeof(slbuf) - slo, "[%u \"%s\" @%u] ",
