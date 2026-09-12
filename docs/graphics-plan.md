@@ -44,8 +44,14 @@ The containers, layout and inventory are all established:
 * Format is GFD (`Gfx2`) v7.1, parsed by `blaster/gfd.py`.
 * Layout is CF section at byte 0, clauses from byte 256 — measured across all
   five shaders in the executable, every one identical in shape.
-* Word order is big-endian, established by the end-of-program bit and
-  confirmed by the layout coming out clean one way and as noise the other.
+* Word order is **little-endian**. An earlier note here said big-endian and
+  was wrong: that test scanned whole programs for end-of-program bits, where
+  most words are ALU and TEX and bit 21 means something else, so it counted
+  noise. Scanning the CF section alone gives zero end-of-program bits
+  big-endian -- impossible -- and exactly one little-endian. Confirmed again
+  by decoding: binkPixelShader's first CF instruction reads as TEX, count 3,
+  address 0x30, and 0x30 x 8 is byte 384, exactly where the region scan
+  independently found three 16-byte texture fetches.
 * Struct offsets confirmed **against hardware**: `GX2VertexShader` size at
   `0xD0`, program at `0xD4`; `GX2PixelShader` at `0xA4`/`0xA8`. A run reported
   size 440 with first words `00000000 00008009`, byte for byte the
