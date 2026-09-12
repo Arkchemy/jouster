@@ -3105,6 +3105,10 @@ static void game_thread_func(void *arg) {
      * shared g_ppc_current_pc cannot: it names whichever thread last entered
      * a function, and once FMOD is up that is almost never this one. */
     g_ark_game_ctx = (uintptr_t)&g_ctx;
+    /* The shader dumper writes here the first time each program is bound.
+     * fopen will not create the directory, and a silently failing dump would
+     * look exactly like a game that binds no shaders. */
+    mkdir("sdmc:/switch/Jouster/shaders", 0777);
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -3479,6 +3483,31 @@ static void game_thread_func(void *arg) {
 // content-load that eventually completes) or genuinely unbounded, which
 // 45s wasn't long enough to distinguish.
 #define GAME_TEST_DEFAULT_SECONDS 120
+
+/* Saves a shader program the engine just bound. Declared weak in
+ * ppc_runtime.h and defined here, so the runtime header stays free of stdio
+ * and hosttest can still compile recompiled code natively.
+ *
+ * Named by kind, index and size. The size is the useful half: it identifies a
+ * program against the copies extracted statically from the executable -- a
+ * 440-byte vertex shader is defaultVertexShader, and a 1296-byte pixel shader
+ * is one that is not in the binary at all and came from the archives.
+ */
+void ark_shd_sink(PpcContext *ctx, const char *kind, uint32_t idx,
+                  uint32_t prog, uint32_t size)
+{
+    if (!prog || !size || size > 65536u) return;
+    char path[128];
+    snprintf(path, sizeof(path), "sdmc:/switch/Jouster/shaders/%s%u_%u.r600.bin",
+             kind, (unsigned)idx, (unsigned)size);
+    FILE *fh = fopen(path, "wb");
+    if (!fh) return;
+    /* Guest memory is a byte array and the program is contiguous in it, so
+     * this is a straight copy out -- no endianness decision to get wrong. */
+    for (uint32_t i = 0; i < size; i++)
+        fputc((int)ppc_load_u8(ctx, prog + i), fh);
+    fclose(fh);
+}
 
 int main(int argc, char *argv[]) {
     (void)argc;
