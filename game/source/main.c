@@ -3100,6 +3100,11 @@ static void game_thread_func(void *arg) {
      * counters ever move around an enqueue rather than guessing which
      * offset is which. */
     g_ppc_watch[3].pc = 0x21db99cu; /* Core::jqAddBatchToQueue -- r3=queue r4=batch */
+    /* Claim this context as the game thread's before any guest code runs, so
+     * ppc_sample_pc can tell it apart from the audio and worker threads. The
+     * shared g_ppc_current_pc cannot: it names whichever thread last entered
+     * a function, and once FMOD is up that is almost never this one. */
+    g_ark_game_ctx = (uintptr_t)&g_ctx;
     checkpoint("[game thread] calling ppc_init_globals...");
     ppc_init_globals(&g_ctx);
     g_globals_init_done = true;
@@ -4680,6 +4685,19 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char gtbuf[32*22]; unsigned gto = 0; gtbuf[0] = 0;
+                      unsigned gtn = (unsigned)g_ark_gt_n;
+                      unsigned first = gtn > ARKCHEMY_PCSAMPLE_SLOTS ? gtn - ARKCHEMY_PCSAMPLE_SLOTS : 0;
+                      for (unsigned k = first; k < gtn && gto + 22 < sizeof(gtbuf); k++)
+                          gto += (unsigned)snprintf(gtbuf + gto, sizeof(gtbuf) - gto, "%x/%x ",
+                                                    (unsigned)g_ark_gt_pc[k & (ARKCHEMY_PCSAMPLE_SLOTS - 1u)],
+                                                    (unsigned)g_ark_gt_lr[k & (ARKCHEMY_PCSAMPLE_SLOTS - 1u)]);
+                      if (gto == 0) snprintf(gtbuf, sizeof(gtbuf), "<none>");
+                      checkpoint("GAMEPC n=%u last=%s -- pc/lr pairs from the GAME thread only,"
+                                 " newest last. The ordinary pcsample above is whichever thread"
+                                 " entered a function most recently, which since audio came up is"
+                                 " almost never this one.", gtn, gtbuf); }
+
                     { char cpbuf[12*104]; unsigned cpo = 0; cpbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_mf_n && cpo + 104 < sizeof(cpbuf); i++)
                           cpo += (unsigned)snprintf(cpbuf + cpo, sizeof(cpbuf) - cpo,
