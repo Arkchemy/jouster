@@ -5404,9 +5404,16 @@ int main(int argc, char *argv[]) {
                                                        cafeos_gx2_names.h. Selection-sorted rather than
                                                        ring-recorded, so the busiest entries are the ones
                                                        reported instead of whichever happened first. */
-                                                    char gxb[720]; int gxo = 0; gxb[0] = 0;
-                                                    unsigned shown[14]; unsigned ns = 0;
-                                                    for (unsigned pick = 0; pick < 14u; pick++) {
+                                                    /* Widened from 14 to the whole set on 2026-09-12.
+                                                       Fourteen was enough while the question was "is
+                                                       anything drawing at all"; now it is "which of
+                                                       these have to be real first", and a truncated
+                                                       list answers that badly -- the entries that got
+                                                       cut are exactly the rare-but-essential ones like
+                                                       display-list construction. */
+                                                    char gxb[3072]; int gxo = 0; gxb[0] = 0;
+                                                    unsigned shown[80]; unsigned ns = 0;
+                                                    for (unsigned pick = 0; pick < 80u; pick++) {
                                                         unsigned best = 0xFFFFFFFFu, bestv = 0;
                                                         for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++) {
                                                             unsigned already = 0;
@@ -5423,6 +5430,34 @@ int main(int argc, char *argv[]) {
                                                     unsigned distinct = 0;
                                                     for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++)
                                                         if (g_ark_gx[i]) distinct++;
+                                                    {
+                                                        /* GX2CopyDisplayList is called 42,302 times a
+                                                           run while GX2BeginDisplayListEx and
+                                                           GX2EndDisplayList are both zero, which cannot
+                                                           all be true of a program that builds its own
+                                                           lists. Either the engine uses the non-Ex
+                                                           pair, or it is replaying lists built
+                                                           somewhere else -- and that difference decides
+                                                           whether translating GX2 calls is enough or
+                                                           whether a GPU command stream has to be
+                                                           interpreted. Name every one of them and let
+                                                           the run say which. */
+                                                        char dlb[512]; int dlo = 0; dlb[0] = 0;
+                                                        for (unsigned i = 0; i < ARKCHEMY_GX2_NAME_COUNT && i < 192u; i++) {
+                                                            const char *nm = g_arkchemy_gx2_names[i];
+                                                            if (!nm) continue;
+                                                            if (!strstr(nm, "DisplayList") && !strstr(nm, "Draw")) continue;
+                                                            if (dlo >= (int)sizeof dlb - 40) break;
+                                                            dlo += snprintf(dlb + dlo, sizeof dlb - (size_t)dlo,
+                                                                            " [%s x%u]", nm, (unsigned)g_ark_gx[i]);
+                                                        }
+                                                        checkpoint("GX2LISTS%s -- every display-list and draw entry point,"
+                                                                   " called or not. If the engine builds its own lists the"
+                                                                   " Begin/End pair is non-zero; if it only copies them, the"
+                                                                   " lists come from the game's data and a command-stream"
+                                                                   " interpreter is needed rather than call translation",
+                                                                   dlb[0] ? dlb : " <none>");
+                                                    }
                                                     checkpoint("GX2CENSUS total=%u distinct=%u over=%u%s"
                                                                " -- graphics calls by function, busiest first."
                                                                " These are the entry points that have to work"
