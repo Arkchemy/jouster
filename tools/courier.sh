@@ -83,14 +83,26 @@ push_nro() {
     fi
 }
 
+# Always returns 0. Under `set -e` a bare `[ -f x ] && ...` as the last
+# command of a branch takes the whole script down the first time the file is
+# absent -- which is exactly how the first version of this died on its second
+# poll, when the Switch went away and the "mounted" marker had already been
+# removed. Explicit `if` blocks and an explicit `return 0`.
 pass() {
     if card="$(card_root)"; then
-        [ -f "$STATE/mounted" ] || { echo "SWITCH in hbmenu (MTP up)"; : > "$STATE/mounted"; }
+        if [ ! -f "$STATE/mounted" ]; then
+            echo "SWITCH in hbmenu (MTP up)"
+            : > "$STATE/mounted"
+        fi
         pull_log "$card"
         push_nro "$card"
     else
-        [ -f "$STATE/mounted" ] && { echo "SWITCH busy or unplugged (MTP down) -- a run may be in progress"; rm -f "$STATE/mounted"; }
+        if [ -f "$STATE/mounted" ]; then
+            echo "SWITCH busy or unplugged (MTP down) -- a run may be in progress"
+            rm -f "$STATE/mounted"
+        fi
     fi
+    return 0
 }
 
 if [ "${1:-}" = "--once" ]; then pass; exit 0; fi
