@@ -4688,6 +4688,12 @@ int main(int argc, char *argv[]) {
                                                     (unsigned)g_ark_mf_cfg[i], (unsigned)g_ark_mf_base[i],
                                                     (unsigned)g_ark_mf_len[i], (unsigned)g_ark_mf_parent[i]);
                       if (cpo == 0) snprintf(cpbuf, sizeof(cpbuf), "<none>");
+                      { char ppd[16*10]; unsigned ppo = 0; ppd[0] = 0;
+                        for (unsigned w = 0; w < 16u; w++)
+                            ppo += (unsigned)snprintf(ppd + ppo, sizeof(ppd) - ppo, "%08x ",
+                                                      (unsigned)g_ark_mf_parent_dump[w]);
+                        checkpoint("CFGPARENT %s -- the pool all nine allocate from;"
+                                   " +0x10 is its base and +0x14 its size", ppd); }
                       checkpoint("CFGPOOL n=%u %s -- the stack pools configureMemoryFrame builds"
                                  " for Image and Vertex. asked is the size handed to vtable+0x9c;"
                                  " base/len are what the pool holds after activate. asked=0 means"
