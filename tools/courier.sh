@@ -40,6 +40,24 @@
 # cannot tell a fresh .nro from a stale one.
 set -eu
 
+# Read the whole script into memory before running any of it.
+#
+# A POSIX shell reads a script incrementally and remembers its byte offset, so
+# editing this file while it is running can resume execution in the middle of
+# a different line. That is not theoretical -- this script is edited routinely
+# while a long poll loop is live. Re-exec through a copy, once, so the running
+# instance is immune to later edits and picks them up only on a restart.
+if [ "${ARK_COURIER_PINNED:-}" != "1" ]; then
+    ARK_COURIER_PINNED=1
+    export ARK_COURIER_PINNED
+    _pin="$(mktemp)"
+    cat "$0" > "$_pin"
+    # shellcheck disable=SC2064
+    trap "rm -f '$_pin'" EXIT INT TERM
+    sh "$_pin" "$@"
+    exit $?
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOGDIR="${ARK_LOGDIR:-$ROOT/../_hardware-logs}"
 DROP="${ARK_DROP:-$ROOT/build/courier}"
