@@ -3571,6 +3571,32 @@ int main(int argc, char *argv[]) {
     // for the full story. This specific repo/binary is "Jouster" (the
     // Switch runtime piece), named as its own subtitle below the main
     // wordmark, same as the other Arkchemy repos (conquertron, blaster).
+    /* Keep the console awake for the whole run.
+     *
+     * A test is 900 seconds with no controller input, which is well past the
+     * point the Switch dims the screen and then auto-sleeps. Sleeping
+     * suspends the process, so the run stops partway through and the log is
+     * truncated with no sign of why -- it simply looks like the game hung
+     * somewhere new, which is the most expensive kind of false signal this
+     * project produces.
+     *
+     * Done here rather than in the console's own settings so it holds for
+     * every run and on any console the build is copied to, and so nobody has
+     * to remember to put the setting back afterwards. Both calls are
+     * deliberately unchecked-but-reported: neither is essential to the test,
+     * and homebrew launched in some applet contexts is not permitted to make
+     * them, in which case the run still works and the log says so. */
+    {
+        Result rc_sleep = appletSetAutoSleepDisabled(true);
+        Result rc_dim   = appletSetLcdBacklightOffEnabled(false);
+        if (R_FAILED(rc_sleep) || R_FAILED(rc_dim)) {
+            checkpoint("[boot] auto-sleep inhibit: sleep rc=0x%x backlight rc=0x%x"
+                       " -- a long run may be cut short by the console sleeping",
+                       (unsigned)rc_sleep, (unsigned)rc_dim);
+        } else {
+            checkpoint("[boot] auto-sleep and screen dimming disabled for this run");
+        }
+    }
     mutexInit(&g_console_mutex);
     /* Only take the console if the splash did not already claim the display. */
     if (!g_splash_already_shown) {
