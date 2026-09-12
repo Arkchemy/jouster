@@ -48,6 +48,14 @@ set -eu
 # while a long poll loop is live. Re-exec through a copy, once, so the running
 # instance is immune to later edits and picks them up only on a restart.
 if [ "${ARK_COURIER_PINNED:-}" != "1" ]; then
+    # Resolve the real location BEFORE re-execing. The copy lives in /tmp, so
+    # $0 no longer says where the repo is, and every path below is relative to
+    # it -- the first version of this guard silently turned the drop directory
+    # into //build and took the script down with a permission error. Pass the
+    # answer through the environment rather than recomputing it on the far
+    # side, where it cannot be known.
+    ARK_ROOT="${ARK_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+    export ARK_ROOT
     ARK_COURIER_PINNED=1
     export ARK_COURIER_PINNED
     _pin="$(mktemp)"
@@ -58,7 +66,7 @@ if [ "${ARK_COURIER_PINNED:-}" != "1" ]; then
     exit $?
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${ARK_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOGDIR="${ARK_LOGDIR:-$ROOT/../_hardware-logs}"
 DROP="${ARK_DROP:-$ROOT/build/courier}"
 STATE="${ARK_STATE:-$HOME/.cache/arkchemy-courier}"
@@ -123,7 +131,14 @@ pull_shaders() {
         copy_in "$f" "$SHADER_DIR/$base" || continue
         got=$((got + 1))
     done
-    [ "$got" -gt 0 ] && echo "SHADERS $got new program(s) pulled -> $SHADER_DIR"
+    # Explicit if, not `[ ... ] && echo`. A test that fails as the last command
+    # of a function returns 1, and under `set -e` that takes the whole script
+    # down -- which is exactly how the first version of this script died, and
+    # I reintroduced it here within the hour. The quiet case is the common
+    # one, so this is the branch that runs almost every poll.
+    if [ "$got" -gt 0 ]; then
+        echo "SHADERS $got new program(s) pulled -> $SHADER_DIR"
+    fi
     return 0
 }
 
