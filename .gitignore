@@ -25,3 +25,6 @@ deps/
 # run; the multi-megabyte logs they are written from live outside the
 # repo (../_hardware-logs/).
 test-results/*.log
+
+# Courier drop directory -- finished .nro files staged for the Switch.
+build/courier/
