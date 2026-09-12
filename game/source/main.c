@@ -4724,6 +4724,47 @@ int main(int argc, char *argv[]) {
                                  " entered a function most recently, which since audio came up is"
                                  " almost never this one.", gtn, gtbuf); }
 
+                    { char sb[6*72]; unsigned so;
+
+                      for (int kind = 0; kind < 2; kind++) {
+
+                          unsigned n = kind ? (unsigned)g_ark_shd_ps_n : (unsigned)g_ark_shd_vs_n;
+
+                          so = 0; sb[0] = 0;
+
+                          for (unsigned i = 0; i < n && so + 72 < sizeof(sb); i++) {
+
+                              volatile uint32_t *h = kind ? g_ark_shd_ps_hdr[i] : g_ark_shd_vs_hdr[i];
+
+                              so += (unsigned)snprintf(sb + so, sizeof(sb) - so,
+
+                                       "[obj=0x%x size=%u prog=0x%x mode=%u w0=%08x w1=%08x] ",
+
+                                       (unsigned)(kind ? g_ark_shd_ps_ptr[i] : g_ark_shd_vs_ptr[i]),
+
+                                       (unsigned)h[0], (unsigned)h[1], (unsigned)h[2],
+
+                                       (unsigned)h[4], (unsigned)h[5]);
+
+                          }
+
+                          if (so == 0) snprintf(sb, sizeof(sb), "<none>");
+
+                          checkpoint("SHADERS %s distinct=%u calls=%u %s", kind ? "pixel" : "vertex",
+
+                                     n, (unsigned)(kind ? g_ark_shd_ps_calls : g_ark_shd_vs_calls), sb);
+
+                      }
+
+                      checkpoint("SHADERS fetch calls=%u -- size should be a sane byte count and prog a"
+
+                                 " guest address; if either is nonsense the struct offset is wrong"
+
+                                 " (vertex 0xD0, pixel 0xA4) and the translator must not be built on it",
+
+                                 (unsigned)g_ark_shd_fs_calls); }
+
+
                     checkpoint("EVENTPHASE OSSignalEvent enter=%u entry=%u lock=%u exit=%u"
 
                                " | OSWaitEvent enter=%u entry=%u lock=%u parked=%u slices=%u exit=%u"
