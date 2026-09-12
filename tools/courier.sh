@@ -26,6 +26,15 @@
 #   ./courier.sh            poll forever
 #   ./courier.sh --once     one pass, then exit
 #
+# Testing, without a Switch: set ARK_CARD to an ordinary directory and every
+# transfer becomes a plain cp against it.
+#
+#   T=$(mktemp -d); mkdir -p "$T/drop" "$T/card" "$T/state"
+#   head -c 900000 /dev/urandom > "$T/drop/pending.nro"
+#   head -c 500    /dev/urandom > "$T/drop/Armory.nro"
+#   ARK_CARD="$T/card" ARK_DROP="$T/drop" ARK_STATE="$T/state" \
+#       ARK_LOGDIR="$T/logs" ./courier.sh --once
+#
 # Verify card copies by HASH, never by size: consecutive builds are routinely
 # byte-identical in size because the ROM blob dominates (176MB), so size
 # cannot tell a fresh .nro from a stale one.
@@ -43,7 +52,28 @@ REMOTE_NRO='switch/Jouster.nro'
 
 mkdir -p "$LOGDIR" "$DROP" "$STATE"
 
+# ARK_CARD points this at an ordinary directory instead of the Switch, and
+# makes every transfer a plain cp. That exists so the push ordering and the
+# hash verification can be tested without a console -- the first version of
+# this was "tested" by reading it, and the bug it shipped with was an ordering
+# one that reading would never have caught.
+copy_in() {
+    if [ -n "${ARK_CARD:-}" ]; then
+        mkdir -p "$(dirname "$2")" 2>/dev/null || true
+        # Quiet on a missing source, matching gio: a poll before the first run
+        # has no log to pull and that is not an error.
+        cp "$1" "$2" 2>/dev/null
+    else
+        gio copy "$1" "$2" 2>/dev/null
+    fi
+}
+
 card_root() {
+    if [ -n "${ARK_CARD:-}" ]; then
+        [ -d "$ARK_CARD" ] || return 1
+        printf '%s\n' "$ARK_CARD"
+        return 0
+    fi
     for c in $CARD_GLOB; do
         [ -d "$c/SD Card" ] || continue
         # A stale gvfs entry can linger after the Switch launches something;
@@ -60,7 +90,7 @@ hash_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
 pull_log() {
     card="$1"
     tmp="$STATE/pull.log"
-    gio copy "$card/$REMOTE_LOG" "$tmp" 2>/dev/null || return 0
+    copy_in "$card/$REMOTE_LOG" "$tmp" || return 0
     h="$(hash_of "$tmp")"
     [ -n "$h" ] || return 0
     old="$(cat "$STATE/log.md5" 2>/dev/null || true)"
@@ -80,12 +110,12 @@ push_one() {
     card="$1"; src="$2"; dest="$3"; label="$4"
     want="$(hash_of "$src")"
     destdir="$(dirname "$dest")"
-    if [ "$destdir" != "." ]; then
+    if [ "$destdir" != "." ] && [ -z "${ARK_CARD:-}" ]; then
         ls "$card/$destdir" >/dev/null 2>&1 || gio mkdir -p "$card/$destdir" 2>/dev/null || true
     fi
-    gio copy "$src" "$card/$dest" 2>/dev/null || {
+    copy_in "$src" "$card/$dest" || {
         echo "PUSH $label FAILED (copy error) -- will retry next poll"; return 1; }
-    gio copy "$card/$dest" "$STATE/verify.bin" 2>/dev/null || {
+    copy_in "$card/$dest" "$STATE/verify.bin" || {
         echo "PUSH $label unverified (read-back failed) -- will retry next poll"; return 1; }
     got="$(hash_of "$STATE/verify.bin")"
     rm -f "$STATE/verify.bin"
@@ -97,43 +127,55 @@ push_one() {
     return 1
 }
 
+# Push order is SMALLEST FIRST, deliberately.
+#
+# A 176MB Jouster copy is about thirteen seconds during which the Switch can
+# leave hbmenu and strand everything queued behind it. On 2026-09-12 exactly
+# that happened: Jouster went across, the Switch started a run, and a 10MB
+# Armory build sat in the drop while the card kept a stale copy -- which is
+# worse than not pushing at all, because the card still holds something that
+# looks like the build you asked for.
+#
+# Smallest first means a lost window costs the big item, which is the one most
+# likely to be a rebuild of something already there, rather than the small
+# ones that are usually the new thing.
 push_nro() {
     card="$1"
     stamp="$(date +%Y%m%d-%H%M%S)"
+    queue="$STATE/queue"
+    : > "$queue"
 
-    # Historical name: pending.nro has always meant Jouster.
+    # size <TAB> kind <TAB> src <TAB> dest <TAB> label
     if [ -f "$DROP/pending.nro" ]; then
-        if push_one "$card" "$DROP/pending.nro" "$REMOTE_NRO" "Jouster"; then
-            mv "$DROP/pending.nro" "$DROP/sent-$stamp-Jouster.nro"
-        fi
+        printf '%s\tnro\t%s\t%s\tJouster\n' \
+            "$(wc -c < "$DROP/pending.nro")" "$DROP/pending.nro" "$REMOTE_NRO" >> "$queue"
     fi
-
-    # Any other .nro goes to switch/<its own name>.
     for f in "$DROP"/*.nro; do
         [ -f "$f" ] || continue
         base="$(basename "$f")"
         case "$base" in pending.nro|sent-*) continue ;; esac
-        if push_one "$card" "$f" "switch/$base" "${base%.nro}"; then
-            mv "$f" "$DROP/sent-$stamp-$base"
-        fi
+        printf '%s\tnro\t%s\tswitch/%s\t%s\n' \
+            "$(wc -c < "$f")" "$f" "$base" "${base%.nro}" >> "$queue"
     done
-
-    # Data files, mirrored under their own path.
     if [ -d "$DROP/sd" ]; then
         find "$DROP/sd" -type f 2>/dev/null | while read -r f; do
             rel="${f#$DROP/sd/}"
-            if push_one "$card" "$f" "$rel" "$rel"; then
-                rm -f "$f"
-            fi
+            printf '%s\tdata\t%s\t%s\t%s\n' "$(wc -c < "$f")" "$f" "$rel" "$rel" >> "$queue"
         done
     fi
+    [ -s "$queue" ] || { rm -f "$queue"; return 0; }
+
+    sort -n "$queue" | while IFS="$(printf '\t')" read -r size kind src dest label; do
+        push_one "$card" "$src" "$dest" "$label" || continue
+        if [ "$kind" = "nro" ]; then
+            mv "$src" "$DROP/sent-$stamp-$(basename "$src")"
+        else
+            rm -f "$src"
+        fi
+    done
+    rm -f "$queue"
 }
 
-# Always returns 0. Under `set -e` a bare `[ -f x ] && ...` as the last
-# command of a branch takes the whole script down the first time the file is
-# absent -- which is exactly how the first version of this died on its second
-# poll, when the Switch went away and the "mounted" marker had already been
-# removed. Explicit `if` blocks and an explicit `return 0`.
 pass() {
     if card="$(card_root)"; then
         if [ ! -f "$STATE/mounted" ]; then
