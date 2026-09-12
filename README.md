@@ -188,6 +188,7 @@ scheme is explained in [`CODENAMES.md`](CODENAMES.md).
 | Document | What it covers |
 | --- | --- |
 | [`ROADMAP.md`](ROADMAP.md) | What has to work, in the order it has to work |
+| [`docs/graphics-plan.md`](docs/graphics-plan.md) | Rendering: what is known, what it costs, what is blocked |
 | [`docs/boot-chain.md`](docs/boot-chain.md) | Where boot actually gets to, measured, and what stops it |
 | [`docs/SDLC.md`](docs/SDLC.md) | Development lifecycle: methodology, requirements, testing, risk |
 | [`docs/schedule.md`](docs/schedule.md) | Gantt chart, critical path and milestones |
