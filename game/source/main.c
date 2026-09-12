@@ -4724,6 +4724,31 @@ int main(int argc, char *argv[]) {
                                  " entered a function most recently, which since audio came up is"
                                  " almost never this one.", gtn, gtbuf); }
 
+                    checkpoint("EVENTPHASE OSSignalEvent enter=%u entry=%u lock=%u exit=%u"
+
+                               " | OSWaitEvent enter=%u entry=%u lock=%u parked=%u slices=%u exit=%u"
+
+                               " -- a shim bumps no call counter, so from outside \"returned and went"
+
+                               " elsewhere\" and \"never returned\" look identical. enter > exit means"
+
+                               " inside, and which counter stalls says where. Not restricted to the game"
+
+                               " thread on purpose: the question includes whether another thread holds"
+
+                               " a lock this one wants.",
+
+                               (unsigned)g_ark_sev_enter, (unsigned)g_ark_sev_got_entry,
+
+                               (unsigned)g_ark_sev_got_lock, (unsigned)g_ark_sev_exit,
+
+                               (unsigned)g_ark_wev_enter, (unsigned)g_ark_wev_got_entry,
+
+                               (unsigned)g_ark_wev_got_lock, (unsigned)g_ark_wev_parked,
+
+                               (unsigned)g_ark_wev_slices, (unsigned)g_ark_wev_exit);
+
+
                     { char bwbuf[6*72]; unsigned bwo = 0; bwbuf[0] = 0;
 
                       for (unsigned i = 0; i < (unsigned)g_ark_sdw_n && bwo + 72 < sizeof(bwbuf); i++)
