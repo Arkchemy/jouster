@@ -4698,6 +4698,35 @@ int main(int argc, char *argv[]) {
                                  " entered a function most recently, which since audio came up is"
                                  " almost never this one.", gtn, gtbuf); }
 
+                    { char bwbuf[6*72]; unsigned bwo = 0; bwbuf[0] = 0;
+
+                      for (unsigned i = 0; i < (unsigned)g_ark_sdw_n && bwo + 72 < sizeof(bwbuf); i++)
+
+                          bwo += (unsigned)snprintf(bwbuf + bwo, sizeof(bwbuf) - bwo,
+
+                                                    "[dev=0x%x vt=0x%x item=0x%x status=%u] ",
+
+                                                    (unsigned)g_ark_sdw_dev[i], (unsigned)g_ark_sdw_vt[i],
+
+                                                    (unsigned)g_ark_sdw_item[i], (unsigned)g_ark_sdw_status[i]);
+
+                      if (bwo == 0) snprintf(bwbuf, sizeof(bwbuf), "<none>");
+
+                      checkpoint("BLOCKWAIT calls=%u first=%s | update entries: igArchive=%u"
+
+                                 " igVirtualStorageDevice=%u igPhysicalStorageDevice=%u"
+
+                                 " -- igArchive::update is the only caller of updateArchiveSystem,"
+
+                                 " so a wait that dispatches straight to the physical device never"
+
+                                 " issues the next block. Map vt with find_synth_addr.",
+
+                                 (unsigned)g_ark_sdw_calls, bwbuf, (unsigned)g_ark_sdw_arcupd,
+
+                                 (unsigned)g_ark_sdw_virtupd, (unsigned)g_ark_sdw_physupd); }
+
+
                     { char cpbuf[12*104]; unsigned cpo = 0; cpbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_mf_n && cpo + 104 < sizeof(cpbuf); i++)
                           cpo += (unsigned)snprintf(cpbuf + cpo, sizeof(cpbuf) - cpo,
