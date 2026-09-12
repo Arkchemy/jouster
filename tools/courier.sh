@@ -11,9 +11,17 @@
 # turns lines into notifications. It is deliberately quiet otherwise: a poll
 # that finds nothing new prints nothing.
 #
-# Drop a finished build at $DROP/pending.nro and it lands on the card the
-# next time the Switch is in hbmenu, verified by hash. Pulled logs are kept
-# in _hardware-logs/ with a timestamp, plus a stable latest.log.
+# Drop files in $DROP and they land on the card the next time the Switch is in
+# hbmenu, verified by hash:
+#
+#   $DROP/<Name>.nro    ->  switch/<Name>.nro        (Jouster.nro, Armory.nro)
+#   $DROP/sd/<path>     ->  <card>/<path>            (anything else, e.g.
+#                                                     sd/switch/Armory/catalogue.tsv)
+#
+# Pulled logs are kept in _hardware-logs/ with a timestamp, plus latest.log.
+# `pending.nro` is still accepted and still means Jouster, because that is what
+# the previous convention was and a silently ignored drop would be worse than
+# a slightly redundant rule.
 #
 #   ./courier.sh            poll forever
 #   ./courier.sh --once     one pass, then exit
@@ -65,21 +73,59 @@ pull_log() {
     echo "LOG new run pulled -- $build -- $(wc -c < "$dest") bytes -> $dest"
 }
 
+# Copy one file and prove it arrived. Never trusts the copy: a read-back and a
+# hash compare, because size cannot tell a fresh .nro from a stale one when the
+# 176MB ROM blob dominates and consecutive builds land on the same byte count.
+push_one() {
+    card="$1"; src="$2"; dest="$3"; label="$4"
+    want="$(hash_of "$src")"
+    destdir="$(dirname "$dest")"
+    if [ "$destdir" != "." ]; then
+        ls "$card/$destdir" >/dev/null 2>&1 || gio mkdir -p "$card/$destdir" 2>/dev/null || true
+    fi
+    gio copy "$src" "$card/$dest" 2>/dev/null || {
+        echo "PUSH $label FAILED (copy error) -- will retry next poll"; return 1; }
+    gio copy "$card/$dest" "$STATE/verify.bin" 2>/dev/null || {
+        echo "PUSH $label unverified (read-back failed) -- will retry next poll"; return 1; }
+    got="$(hash_of "$STATE/verify.bin")"
+    rm -f "$STATE/verify.bin"
+    if [ "$want" = "$got" ]; then
+        echo "PUSH $label on the card and hash-verified -- $want"
+        return 0
+    fi
+    echo "PUSH $label MISMATCH -- wanted $want got $got -- left in the drop, will retry"
+    return 1
+}
+
 push_nro() {
     card="$1"
-    [ -f "$DROP/pending.nro" ] || return 0
-    want="$(hash_of "$DROP/pending.nro")"
-    gio copy "$DROP/pending.nro" "$card/$REMOTE_NRO" 2>/dev/null || {
-        echo "BUILD push FAILED (copy error) -- will retry next poll"; return 0; }
-    gio copy "$card/$REMOTE_NRO" "$STATE/verify.nro" 2>/dev/null || {
-        echo "BUILD push unverified (read-back failed) -- will retry next poll"; return 0; }
-    got="$(hash_of "$STATE/verify.nro")"
-    rm -f "$STATE/verify.nro"
-    if [ "$want" = "$got" ]; then
-        mv "$DROP/pending.nro" "$DROP/sent-$(date +%Y%m%d-%H%M%S)-$want.nro"
-        echo "BUILD on the card and hash-verified -- $want -- ready to launch"
-    else
-        echo "BUILD push MISMATCH -- wanted $want got $got -- left pending, will retry"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+
+    # Historical name: pending.nro has always meant Jouster.
+    if [ -f "$DROP/pending.nro" ]; then
+        if push_one "$card" "$DROP/pending.nro" "$REMOTE_NRO" "Jouster"; then
+            mv "$DROP/pending.nro" "$DROP/sent-$stamp-Jouster.nro"
+        fi
+    fi
+
+    # Any other .nro goes to switch/<its own name>.
+    for f in "$DROP"/*.nro; do
+        [ -f "$f" ] || continue
+        base="$(basename "$f")"
+        case "$base" in pending.nro|sent-*) continue ;; esac
+        if push_one "$card" "$f" "switch/$base" "${base%.nro}"; then
+            mv "$f" "$DROP/sent-$stamp-$base"
+        fi
+    done
+
+    # Data files, mirrored under their own path.
+    if [ -d "$DROP/sd" ]; then
+        find "$DROP/sd" -type f 2>/dev/null | while read -r f; do
+            rel="${f#$DROP/sd/}"
+            if push_one "$card" "$f" "$rel" "$rel"; then
+                rm -f "$f"
+            fi
+        done
     fi
 }
 
