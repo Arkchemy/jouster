@@ -66,6 +66,8 @@ INTERVAL="${ARK_INTERVAL:-20}"
 
 CARD_GLOB='/run/user/*/gvfs/mtp:host=Nintendo_Nintendo_Switch_*'
 REMOTE_LOG='switch/Jouster/game-results.log'
+REMOTE_SHADERS='switch/Jouster/shaders'
+SHADER_DIR="${ARK_SHADERS:-$ROOT/../_hardware-logs/shaders}"
 REMOTE_NRO='switch/Jouster.nro'
 
 mkdir -p "$LOGDIR" "$DROP" "$STATE"
@@ -104,6 +106,26 @@ card_root() {
 }
 
 hash_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+# Shader programs the game dumps out of GPU memory as it binds them. Pulled
+# whenever a new filename appears -- they are named by kind and size, so a
+# name that is already here is the same program and re-fetching it over MTP
+# costs seconds for nothing.
+pull_shaders() {
+    card="$1"
+    ls "$card/$REMOTE_SHADERS" >/dev/null 2>&1 || return 0
+    mkdir -p "$SHADER_DIR"
+    got=0
+    for f in "$card/$REMOTE_SHADERS"/*; do
+        [ -e "$f" ] || continue
+        base="$(basename "$f")"
+        [ -f "$SHADER_DIR/$base" ] && continue
+        copy_in "$f" "$SHADER_DIR/$base" || continue
+        got=$((got + 1))
+    done
+    [ "$got" -gt 0 ] && echo "SHADERS $got new program(s) pulled -> $SHADER_DIR"
+    return 0
+}
 
 pull_log() {
     card="$1"
@@ -201,6 +223,7 @@ pass() {
             : > "$STATE/mounted"
         fi
         pull_log "$card"
+        pull_shaders "$card"
         push_nro "$card"
     else
         if [ -f "$STATE/mounted" ]; then
