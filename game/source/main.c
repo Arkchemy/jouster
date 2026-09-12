@@ -4680,6 +4680,20 @@ int main(int argc, char *argv[]) {
                                        (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    { char cpbuf[12*104]; unsigned cpo = 0; cpbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_mf_n && cpo + 104 < sizeof(cpbuf); i++)
+                          cpo += (unsigned)snprintf(cpbuf + cpo, sizeof(cpbuf) - cpo,
+                                                    "[idx=%u asked=%u cfg=%u base=0x%x len=%u parent=0x%x] ",
+                                                    (unsigned)g_ark_mf_idx[i], (unsigned)g_ark_mf_size[i],
+                                                    (unsigned)g_ark_mf_cfg[i], (unsigned)g_ark_mf_base[i],
+                                                    (unsigned)g_ark_mf_len[i], (unsigned)g_ark_mf_parent[i]);
+                      if (cpo == 0) snprintf(cpbuf, sizeof(cpbuf), "<none>");
+                      checkpoint("CFGPOOL n=%u %s -- the stack pools configureMemoryFrame builds"
+                                 " for Image and Vertex. asked is the size handed to vtable+0x9c;"
+                                 " base/len are what the pool holds after activate. asked=0 means"
+                                 " the configuration never reached it; asked>0 with base=0 means"
+                                 " the allocation was refused.", (unsigned)g_ark_mf_n, cpbuf); }
+
                     { char rsbuf[8*120]; unsigned rso = 0; rsbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_rs_n && rso + 120 < sizeof(rsbuf); i++)
                           rso += (unsigned)snprintf(rsbuf + rso, sizeof(rsbuf) - rso,
@@ -4910,7 +4924,7 @@ int main(int argc, char *argv[]) {
                                                         (unsigned)g_ark_sdf_src[i],
                                                         (unsigned)g_ark_sdf_new[i]);
                                     if (dof == 0) snprintf(db, sizeof(db), "<none>");
-                                    for (unsigned i = 0; i < g_ark_cp_n && i < 2u; i++)
+                                    for (unsigned i = 0; i < g_ark_mf_n && i < 2u; i++)
                                         checkpoint("COPY[%u] src=0x%x stack=0x%x arr=0x%x  ->"
                                                    "  new=0x%x stack=0x%x arr=0x%x"
                                                    " -- a null stack/arr on the new object means"
