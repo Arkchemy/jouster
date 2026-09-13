@@ -1,3 +1,3 @@
-build=Sep_13_2026_11-56-55
+build=Sep_13_2026_13-31-55
 size=177219090
-url=https://github.com/Arkchemy/jouster/releases/download/jouster-Sep_13_2026_11-56-55/jouster.nro
+url=https://github.com/Arkchemy/jouster/releases/download/jouster-Sep_13_2026_13-31-55/jouster.nro
