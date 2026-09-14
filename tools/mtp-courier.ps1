@@ -21,13 +21,25 @@
       the old build while everything here says it was updated.
 #>
 param(
-    [ValidateSet('push','pull','both')] [string]$Action = 'both'
+    [ValidateSet('push','pull','both')] [string]$Action = 'both',
+    # Which app to carry. Jouster is the default because it is the one with a
+    # log to pull; -App Armory pushes the lobby and pulls nothing, since it
+    # writes no log.
+    [string]$App = 'Jouster',
+    # Override the local .nro when it is not where this script would look.
+    [string]$NroPath
 )
 
 $ErrorActionPreference = 'Stop'
-$Root   = Split-Path -Parent $PSScriptRoot
-$Nro    = Join-Path $Root 'game\Jouster.nro'
-$LogDir = Join-Path (Split-Path -Parent $Root) '_hardware-logs'
+$Root   = Split-Path -Parent $PSScriptRoot          # the jouster checkout
+$Repos  = Split-Path -Parent $Root                  # the directory holding them all
+$LogDir = Join-Path $Repos '_hardware-logs'
+
+if ($NroPath) { $Nro = $NroPath }
+elseif ($App -eq 'Jouster') { $Nro = Join-Path $Root 'game\Jouster.nro' }
+else { $Nro = Join-Path $Repos "$($App.ToLower())\switch\$App.nro" }
+
+$RemoteName = "$App.nro"
 
 function Say($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok ($m) { Write-Host "ok  $m" -ForegroundColor Green }
@@ -174,17 +186,17 @@ function Invoke-Push {
     if (-not (Test-Path $Nro)) { Bad "no $Nro -- build it first"; return }
     $want  = (Get-Item $Nro).Length
     $stamp = Get-BuildStamp $Nro
-    Say "pushing Jouster.nro -- $stamp -- $want bytes"
+    Say "pushing $RemoteName -- $stamp -- $want bytes"
 
     $sw = Get-FolderAt 'switch'
     if ($null -eq $sw) { Bad "no /switch on the card"; return }
 
-    $existing = $sw.Items() | Where-Object { $_.Name -eq 'Jouster.nro' }
+    $existing = $sw.Items() | Where-Object { $_.Name -eq $RemoteName }
     if ($existing) {
         Write-Host "    removing the old copy" -NoNewline
         $gone = $false
         try {
-            $gone = Remove-MtpPath -Segments @('SD Card','switch','Jouster.nro')
+            $gone = Remove-MtpPath -Segments @('SD Card','switch',$RemoteName)
         }
         catch {
             Write-Host ""
@@ -192,8 +204,8 @@ function Invoke-Push {
         }
         Write-Host ""
         if (-not $gone) {
-            Bad "could not delete the old Jouster.nro."
-            Bad "Copying now would create 'Jouster (2).nro' and the console would"
+            Bad "could not delete the old $RemoteName."
+            Bad "Copying now would create a second copy and the console would"
             Bad "keep running the old build. Delete it by hand and re-run."
             return
         }
@@ -201,10 +213,10 @@ function Invoke-Push {
 
     Write-Host "    copying (177MB over USB takes a minute) " -NoNewline
     $sw.CopyHere($Nro, 16)
-    $got = Wait-Settled $sw 'Jouster.nro' $want 1800
+    $got = Wait-Settled $sw $RemoteName $want 1800
     Write-Host ""
     if ($got -ne $want) { Bad "push incomplete -- $got of $want bytes on the card"; return }
-    Ok "Jouster.nro on the card -- $got bytes -- $stamp"
+    Ok "$RemoteName on the card -- $got bytes -- $stamp"
     Write-Host "    confirm it ran from the next log's first line: $stamp"
 }
 
