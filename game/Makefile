@@ -95,7 +95,26 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 #     picture and sound, and as an ORACLE to diff against when debugging the
 #     recompiled one.
 # Link order matters: avformat before avcodec before avutil.
-LIBS	:= -ldeko3d -lavformat -lavcodec -lswresample -lswscale -lavutil -ldav1d -lbz2 -lz -lnx -lm -lpthread
+# deko3d: the DEBUG build, deliberately, and it is not merely "with symbols".
+#
+# The two libraries do not expose the same function. Release is
+# `dk::detail::RaiseError(DkResult)`; debug is
+# `dk::detail::RaiseError(DkResult, char const*)`. Release has no message to
+# report, so a DkDeviceMaker::cbDebug callback can never be handed one and is
+# never called -- which is exactly what happened on 2026-09-14: the callback
+# was installed correctly, the process aborted in deko3d, and not one
+# [DKDEBUG] line appeared in the log. The crash report's own stack trace names
+# the one-argument form, which is how the build was identified.
+#
+# Debug also carries far more validation: 17 call sites reaching RaiseError
+# against release's 6. Those extra checks are the point -- they are what turns
+# "DkResult_Fail somewhere in submit" into a sentence naming the object.
+#
+# Set DEKO3D_LIB=deko3d to go back to release once this is understood. It
+# costs validation overhead, so it is a diagnostic default, not a shipping one.
+DEKO3D_LIB	?=	deko3dd
+
+LIBS	:= -l$(DEKO3D_LIB) -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lavformat -lavcodec -lswresample -lswscale -lavutil -ldav1d -lbz2 -lz -lnx -lm -lpthread
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
@@ -186,6 +205,13 @@ $(BUILD):
 # changed, so a genuinely new binary reports an old build time -- exactly
 # the ambiguity the stamp exists to remove. One extra compile out of 218.
 	@touch $(CURDIR)/source/main.c
+# self_update.c carries ARKCHEMY_BUILD, which is the name a build is published
+# under and the string the console compares against to decide whether it is
+# out of date. It includes none of the headers that actually change, so
+# without this it keeps the stamp of whenever it last happened to rebuild --
+# and two different binaries published under one name means a console that
+# never updates again.
+	@touch $(CURDIR)/source/self_update.c
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 clean:

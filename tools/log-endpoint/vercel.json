@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/upload.js": { "maxDuration": 60 },
+    "api/logs.js": { "maxDuration": 30 }
+  }
+}

@@ -382,6 +382,35 @@ static void unhandled_log_sink(const char *what) {
     checkpoint("[ppc_unhandled_stub] %s", what);
 }
 
+/* deko3d is about to abort the process; this is the only chance to say why.
+ *
+ * RaiseError calls this and then svcBreaks regardless, so there is no
+ * returning from it and no point trying. checkpoint() fflushes every line,
+ * which is what makes the message survive the abort -- a buffered write here
+ * would be lost with the process and leave exactly the crash report with no
+ * explanation that this exists to prevent.
+ *
+ * The DKDEBUG prefix is deliberate: it is the string to grep a log for when a
+ * run dies with no "exiting after" line. */
+static void gx2_debug_log_sink(const char *context, uint32_t result, const char *message) {
+    static const char *const names[] = {
+        "Success", "Fail", "Timeout", "OutOfMemory", "NotImplemented",
+        "MisalignedSize", "MisalignedData", "BadInput", "BadFlags", "BadState",
+    };
+    const char *name = (result < (sizeof(names) / sizeof(names[0])))
+                     ? names[result] : "?";
+    /* deko3d sends the detail of a failure as a run of separate calls carrying
+     * DkResult_Success -- the fault address, the access type, the queue status
+     * -- and only the last one carries the real result. Printing every line as
+     * "raised DkResult_Success" made the GPU page fault that actually mattered
+     * read like nine successes followed by one failure. */
+    if (result == 0)
+        checkpoint("[DKDEBUG]   %s: %s", context, message);
+    else
+        checkpoint("[DKDEBUG] deko3d raised DkResult_%s (%u) in '%s': %s",
+                   name, (unsigned)result, context, message);
+}
+
 /* Real hook into cafeos_coreinit_fs.h's own FSOpenFile logging -- see
  * that header's comment. Every real file the game's actual entry point
  * tries to open, and whether it was actually found on the SD card,
@@ -3509,6 +3538,69 @@ void ark_shd_sink(PpcContext *ctx, const char *kind, uint32_t idx,
     fclose(fh);
 }
 
+/* Where the uploader reports to. The log is closed by the time it runs, so
+ * this reopens it, appends one line and closes again -- which keeps the
+ * upload's outcome in the same file as everything else, rather than in a side
+ * channel nobody thinks to look at. */
+/* The one build-identity string, defined in self_update.c. Everything that
+ * names this build -- the log's first line, run-tally.txt, the published
+ * filename -- reads it, so they cannot disagree. */
+extern const char ark_build_marker[];
+
+void arkchemy_upload_log(void (*report)(const char *fmt, ...));
+int arkchemy_self_update(void (*report)(const char *fmt, ...));
+int arkchemy_loop_continue(void (*report)(const char *fmt, ...));
+void arkchemy_run_tally_open(void (*report)(const char *fmt, ...));
+void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
+                              int frames, unsigned draws, unsigned modules);
+
+static void upload_report(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    FILE *f = fopen("sdmc:/switch/Jouster/game-results.log", "a");
+    if (f) { vfprintf(f, fmt, ap); fputc('\n', f); fclose(f); }
+    va_end(ap);
+}
+
+/* Does a call to dkCmdBufDraw poison this file too?
+ *
+ * Calling it from the GX2 shim header stops the game booting -- from
+ * ark_draw_ex, and equally from the submit path -- while calling
+ * dkCmdBufDrawIndexed, which lives in the very same object file of libdeko3d,
+ * is harmless, as is taking dkCmdBufDraw's address without calling it. Eight
+ * builds have narrowed it to that one function and no further.
+ *
+ * main.c is the one place known to call deko3d without trouble, and no
+ * recompiled translation unit includes it. If the boot survives a call here,
+ * the draw can simply live in this file and the path is unblocked; if it dies
+ * here too, the call is toxic from anywhere in the program, which is a much
+ * stranger fact and worth knowing before another build. The branch cannot be
+ * taken -- argc is 0 or 1 under hbmenu. */
+/* The draws themselves are recorded here, and only here.
+ *
+ * Eight builds established that a call to dkCmdBufDraw anywhere inside the
+ * GX2 shim header stops the game booting -- from ark_draw_ex, from the submit
+ * path, directly, indirectly, in one translation unit or in two hundred --
+ * while the very same call from this file is harmless, as is a call to
+ * dkCmdBufDrawIndexed from the shim, which lives in the same object file of
+ * libdeko3d. The mechanism is still unexplained. What is established is where
+ * the call may live.
+ *
+ * So ark_draw_ex binds all the state a draw needs and records the draw's
+ * parameters in a queue; this drains that queue. Everything else about the
+ * path is unchanged and already verified on hardware ~500 times a run. */
+static void ark_draw_record_queued(void)
+{
+    if (!g_arkchemy_gx2.initialized || !g_arkchemy_gx2.cmdbuf) { g_ark_dq_n = 0; return; }
+    uint32_t n = g_ark_dq_n;
+    for (uint32_t i = 0; i < n; i++)
+        dkCmdBufDraw(g_arkchemy_gx2.cmdbuf, (DkPrimitive)g_ark_dq[i][0],
+                     g_ark_dq[i][1], g_ark_dq[i][2], g_ark_dq[i][3], 0);
+    g_ark_dq_n = 0;
+    g_ark_dq_recorded += n;
+}
+
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -3516,7 +3608,27 @@ int main(int argc, char *argv[]) {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/Jouster", 0777);
     g_log = fopen("sdmc:/switch/Jouster/game-results.log", "w");
+
+    /* Before anything else costs time: if a newer build is published, fetch
+     * it, replace this NRO and hand straight over to it. Returning from main
+     * is what makes hbmenu load the binary envSetNextLoad named, so this has
+     * to be the earliest thing that can end the run -- doing it at exit would
+     * mean every update costs an extra full run to take effect. */
+    if (arkchemy_self_update(checkpoint)) {
+        if (g_log) { fclose(g_log); g_log = NULL; }
+        return 0;
+    }
+
+    /* Deliberately after the self-update handover: a run that chain-loads a
+     * different build is not a run of this one, and counting it would put a
+     * FAIL against a build that was never given a chance to fail. */
+    arkchemy_run_tally_open(checkpoint);
+
     ppc_set_unhandled_log(unhandled_log_sink);
+    /* Before GX2Init, which is where the device (and its cbDebug) is created.
+     * That happens on the game thread, long after this point, so registering
+     * here is early enough with room to spare. */
+    ark_gx2_set_debug_log(gx2_debug_log_sink);
     ppc_fs_set_open_log(fs_open_log_sink);
     ppc_mem_set_alloc_fail_log(mem_alloc_fail_log_sink);
     ppc_set_debug_watch(debug_watch_sink);
@@ -3738,7 +3850,19 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    checkpoint("Arkchemy (Jouster) game smoke test starting -- build " __DATE__ " " __TIME__);
+    /* Printed from ark_build_marker, not from this file's own __DATE__ and
+     * __TIME__.
+     *
+     * They are not the same string. The marker lives in self_update.c, and on
+     * 2026-09-14 the two translation units compiled one second apart: the log
+     * announced "21:26:25" while run-tally.txt and the published filename both
+     * said "21-26-26" for the same build. self_update.c's own comment claims
+     * the marker is "the same __DATE__ __TIME__ string the log prints on its
+     * first line", and that only becomes true by printing the marker itself.
+     * A build identifier that disagrees with itself by a second is one that
+     * cannot be used to match a tally line to the log that produced it. */
+    checkpoint("Arkchemy (Jouster) game smoke test starting -- build %s",
+               ark_build_marker + sizeof("ARKCHEMY_BUILD ") - 1);
 
     /* Report the process's real memory limits, added 2026-08-24. This
      * build needs ~1GB of BSS plus ~158MB of .text, which is far past
@@ -4730,16 +4854,51 @@ int main(int argc, char *argv[]) {
                                (unsigned)g_ark_bc_hits);
                 }
                 {
-                    char awbuf[280]; int ao = 0;
-                    for (unsigned i = 0; i < g_ark_aw_n && i < 8u; i++)
+                    /* The path, not a block range. The old "-> first..last"
+                     * here was this line's own arithmetic -- (off+size-1)>>15
+                     * -- so a size of zero printed 0..131071 every time, which
+                     * looked like the engine reporting a wild range and was
+                     * nothing of the sort. It also shifted by 32KB when this
+                     * archive's block size is 2048.
+                     *
+                     * What actually decides the size is igArchive::Open: it
+                     * sets the work item's size from the archive's file-table
+                     * entry for the path it was asked for. So a read of size
+                     * zero means that lookup produced zero, and the only
+                     * question worth printing is which file it was.
+                     *
+                     * _path is the pointer at +0x04: the fields run _path,
+                     * _file, _buffer, then _offset as a big-endian 64-bit at
+                     * +0x10 -- whose low word is the +0x14 this probe already
+                     * reads as the offset -- and _size at +0x18. */
+                    char awbuf[520]; int ao = 0;
+                    for (unsigned i = 0; i < g_ark_aw_n && i < 8u; i++) {
+                        uint32_t fwi = g_ark_aw[i][0];
+                        char path[48]; path[0] = 0;
+                        if (fwi) {
+                            uint32_t pp = ppc_load_u32(&g_ctx, fwi + 4u);
+                            if (pp) {
+                                unsigned k = 0;
+                                for (; k < sizeof(path) - 1u; k++) {
+                                    uint8_t c = ppc_load_u8(&g_ctx, pp + k);
+                                    if (!c) break;
+                                    path[k] = (c >= 32 && c < 127) ? (char)c : '?';
+                                }
+                                path[k] = 0;
+                            }
+                        }
                         ao += snprintf(awbuf + ao, sizeof(awbuf) - (size_t)ao,
-                                       "[%u fwi=0x%x off=0x%x size=0x%x -> %u..%u] ", i,
-                                       (unsigned)g_ark_aw[i][0], (unsigned)g_ark_aw[i][1],
+                                       "[%u fwi=0x%x off=0x%x size=0x%x \"%s\"] ", i,
+                                       (unsigned)fwi, (unsigned)g_ark_aw[i][1],
                                        (unsigned)g_ark_aw[i][2],
-                                       (unsigned)(g_ark_aw[i][1] >> 15),
-                                       (unsigned)((g_ark_aw[i][1] + g_ark_aw[i][2] - 1u) >> 15));
+                                       path[0] ? path : "<no path>");
+                    }
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
-                    checkpoint("ADDWORK CALLS n=%u %s", (unsigned)g_ark_aw_n, awbuf);
+                    checkpoint("ADDWORK CALLS n=%u %s -- size comes from"
+                               " igArchive::Open, which sets it from the archive's"
+                               " file-table entry for that path. A size of zero means"
+                               " that lookup returned zero, so the path is the thing"
+                               " worth knowing", (unsigned)g_ark_aw_n, awbuf);
                     { char gtbuf[32*22]; unsigned gto = 0; gtbuf[0] = 0;
                       unsigned gtn = (unsigned)g_ark_gt_n;
                       unsigned first = gtn > ARKCHEMY_PCSAMPLE_SLOTS ? gtn - ARKCHEMY_PCSAMPLE_SLOTS : 0;
@@ -4791,7 +4950,103 @@ int main(int argc, char *argv[]) {
 
                                  " (vertex 0xD0, pixel 0xA4) and the translator must not be built on it",
 
-                                 (unsigned)g_ark_shd_fs_calls); }
+                                 (unsigned)g_ark_shd_fs_calls);
+
+                      { char sb[1536]; unsigned so = 0;
+
+                        for (uint32_t i = 0; i < g_ark_fs_n && so + 200 < sizeof(sb); i++) {
+
+                            so += (unsigned)snprintf(sb + so, sizeof(sb) - so,
+                                     "[set%u attribs=0x%x count=%u",
+                                     (unsigned)i, (unsigned)g_ark_fs_ptr[i],
+                                     (unsigned)g_ark_fs_count[i]);
+
+                            uint32_t n = g_ark_fs_count[i] > 6u ? 6u : g_ark_fs_count[i];
+
+                            for (uint32_t a = 0; a < n && so + 100 < sizeof(sb); a++)
+
+                                so += (unsigned)snprintf(sb + so, sizeof(sb) - so,
+                                         " a%u=%x,%x,%x,%x,%x,%x,%x,%x", (unsigned)a,
+                                         (unsigned)g_ark_fs_attr[i][a][0], (unsigned)g_ark_fs_attr[i][a][1],
+                                         (unsigned)g_ark_fs_attr[i][a][2], (unsigned)g_ark_fs_attr[i][a][3],
+                                         (unsigned)g_ark_fs_attr[i][a][4], (unsigned)g_ark_fs_attr[i][a][5],
+                                         (unsigned)g_ark_fs_attr[i][a][6], (unsigned)g_ark_fs_attr[i][a][7]);
+
+                            so += (unsigned)snprintf(sb + so, sizeof(sb) - so, "] ");
+
+                        }
+
+                        if (so == 0) snprintf(sb, sizeof(sb), "<none>");
+
+                        checkpoint("FETCHATTR n=%u %s -- eight raw words per GX2AttribStream,"
+                                   " 32-byte stride assumed and nothing else. The words say"
+                                   " which attribute lands in which GPR, which the shader"
+                                   " translator currently assumes is N->N+1; they also carry"
+                                   " the vertex formats deko3d needs as declarative state."
+                                   " A wrong stride shows up as noise where small enums belong",
+                                   (unsigned)g_ark_fs_n, sb); }
+
+                      { char sb[512]; unsigned so = 0;
+
+                        for (uint32_t i = 0; i < g_ark_unif_n && so + 60 < sizeof(sb); i++)
+
+                            so += (unsigned)snprintf(sb + so, sizeof(sb) - so,
+                                     "[%s off=%u count=%u] ",
+                                     g_ark_unif[i][0] ? "ps" : "vs",
+                                     (unsigned)g_ark_unif[i][1], (unsigned)g_ark_unif[i][2]);
+
+                        if (so == 0) snprintf(sb, sizeof(sb), "<none>");
+
+                        checkpoint("UNIFREG vs=%u ps=%u distinct=%u %s -- offset and count as"
+                                   " the game passes them. Multiples of four with counts in"
+                                   " fours means these are u32 words and constant-file index n"
+                                   " sits at offset 4n, which is what the generated GLSL's"
+                                   " uf[n] assumes; small consecutive values would mean the"
+                                   " unit is a vec4 and every uniform index is four times out",
+                                   (unsigned)g_ark_unif_calls[0], (unsigned)g_ark_unif_calls[1],
+                                   (unsigned)g_ark_unif_n, sb); }
+
+                      { char sb[640]; unsigned so = 0;
+
+                        for (uint32_t i = 0; i < g_ark_shdmod_n && so + 70 < sizeof(sb); i++)
+
+                            so += (unsigned)snprintf(sb + so, sizeof(sb) - so,
+                                     "[%s %016llx size=%u %s] ",
+                                     g_ark_shdmod[i].stage ? "ps" : "vs",
+                                     (unsigned long long)g_ark_shdmod[i].key,
+                                     (unsigned)g_ark_shdmod[i].size,
+                                     g_ark_shdmod[i].valid ? "LOADED" : "no module");
+
+                        if (so == 0) snprintf(sb, sizeof(sb), "<none>");
+
+                        checkpoint("SHADERMOD distinct=%u loaded=%u missing=%u refused=%u"
+                                   " early=%u %s"
+                                   " -- each program the engine bound, hashed by content and"
+                                   " matched against the deko3d modules translated from it."
+                                   " LOADED means uam's output was accepted by deko3d on this"
+                                   " device. 'missing' is a translator coverage gap; 'refused'"
+                                   " means the module is on the card and deko3d would not take"
+                                   " it, which is a different problem entirely. 'early' counts binds"
+                                   " that happened before GX2Init, where there is no device to"
+                                   " load code into yet. Loaded, not yet drawn with",
+                                   (unsigned)g_ark_shdmod_n,
+                                   (unsigned)(g_ark_shdmod_n - g_ark_shdmod_missing
+                                              - g_ark_shdmod_failed),
+                                   (unsigned)g_ark_shdmod_missing,
+                                   (unsigned)g_ark_shdmod_failed,
+                                   (unsigned)g_ark_shdmod_early, sb); }
+
+                      checkpoint("DRAWPATH tried=%u drawn=%u || noshader=%u nofetch=%u"
+                                 " nobuf=%u badfmt=%u badprim=%u nomem=%u -- GX2DrawEx"
+                                 " recorded as a deko3d draw. A draw is attempted only"
+                                 " when every piece of state it needs is present, because"
+                                 " a half-configured draw hangs the GPU and costs the run;"
+                                 " each counter is one missing piece, so the split says"
+                                 " what to fix rather than costing another run to find out",
+                                 (unsigned)g_ark_draw_tried, (unsigned)g_ark_draw_done,
+                                 (unsigned)g_ark_draw_noshader, (unsigned)g_ark_draw_nofetch,
+                                 (unsigned)g_ark_draw_nobuf, (unsigned)g_ark_draw_badfmt,
+                                 (unsigned)g_ark_draw_badprim, (unsigned)g_ark_draw_nomem); }
 
 
                     checkpoint("EVENTPHASE OSSignalEvent enter=%u entry=%u lock=%u exit=%u"
@@ -5923,11 +6178,26 @@ int main(int argc, char *argv[]) {
             break;
         }
 
+        /* Drain any draws the game queued this frame. */
+        ark_draw_record_queued();
+
         frame++;
     }
 
     checkpoint("exiting after %d main frames -- game thread started=%d done=%d",
                frame, g_game_thread_started, g_game_thread_done);
+
+    /* Close the tally record here rather than after the upload: reaching this
+     * line is what "the run completed" means, and the upload can fail for
+     * reasons -- no wifi, most often -- that say nothing about the build. */
+    /* g_ark_draw_done, not g_ark_dq_recorded. The latter counts draws drained
+     * from the deferred queue, and with ARK_REC_DRAW_DEFERRED off nothing is
+     * ever queued -- so the first successful run recorded "draws=0" in the
+     * tally while DRAWPATH in the same log said 517. A tally that reads zero
+     * on a good run is worse than no tally. */
+    arkchemy_run_tally_close(checkpoint, frame,
+                             (unsigned)g_ark_draw_done,
+                             (unsigned)g_ark_shdmod_n);
 
     // Real, deliberate choice: don't threadWaitForExit/threadClose here
     // if the game thread never finished -- it may be legitimately stuck
@@ -5940,6 +6210,21 @@ int main(int argc, char *argv[]) {
     }
 
     if (g_log) { fclose(g_log); g_log = NULL; }
+
+    /* Send the log, now that it is complete and closed on disk. Deliberately
+     * after the close: a half-flushed log is worse than none, because its
+     * tail is where a run says how it ended.
+     *
+     * The upload's own result is appended afterwards, so it lands in the copy
+     * the courier pulls rather than the copy that was sent -- the sent one
+     * cannot describe its own sending. */
+    arkchemy_upload_log(upload_report);
+
+    /* Then, if this console is being used as a rig, go round again: take a
+     * newer build if one was published while this run was going, otherwise
+     * relaunch this one. Deliberately after the upload, so the log for this
+     * cycle is already filed before the next cycle overwrites it. */
+    arkchemy_loop_continue(upload_report);
 
     // Real bug found and fixed here, via a real on-hardware report (an
     // "error occurred"-style abnormal-exit screen, not a crash inside

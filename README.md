@@ -78,6 +78,66 @@ That produces `game/Jouster.nro`. Copy it to your Switch's SD card under
 The generated C is not in the repository — `game/regenerate.sh` drives
 conquertron against your own dump to produce it before building.
 
+### On Windows
+
+`tools/setup-windows.ps1` installs devkitPro and the portlibs in one go, then
+checks that every library `game/Makefile` links against is actually on disk
+and names the ones that are not — a missing portlib otherwise surfaces as an
+undefined symbol at the link step, twenty minutes in.
+
+```
+powershell -ExecutionPolicy Bypass -File tools\setup-windows.ps1
+```
+
+Then build as above with `export DEVKITPRO=/c/devkitPro`, using
+`/c/devkitPro/tools/bin/make`.
+
+Note that **`install-devkitpro.sh` in the parent directory is the Linux route
+only**, and its claim that jouster needs no portlibs stopped being true when
+ffmpeg and curl went in. It will leave you with a toolchain that cannot link
+this project.
+
+Delivery differs too. `tools/courier.sh` drives the console's MTP mount
+through `gio`, which is gvfs and therefore Linux-only. Windows reaches the
+same MTP device through the shell namespace instead, so there are two options:
+
+**`tools/mtp-courier.ps1` — over USB, no network needed.** The default.
+
+```
+powershell -ExecutionPolicy Bypass -File tools\\mtp-courier.ps1
+```
+
+Three MTP quirks it exists to handle:
+
+* `CopyHere` is **asynchronous and reports nothing** — no progress, no
+  completion, no errors — so every copy is followed by polling the destination
+  until the size settles.
+* It **will not overwrite**, so the old `Jouster.nro` is deleted and the delete
+  confirmed first. Otherwise the copy silently becomes `Jouster (2).nro` and
+  the console keeps booting the old build while this end reports success.
+* Deleting it **must not go through `InvokeVerb('delete')`**, which always
+  raises "permanently delete this file?" and waits for a click — once per
+  build. `tools/mtp-delete.ps1` uses `IFileOperation` with `FOF_NO_UI` instead.
+
+That last one has a wrinkle worth knowing before touching it.
+`IFileOperation` needs an `IShellItem`, and `SHCreateItemFromParsingName`
+resolves the *device* but fails with `E_INVALIDARG` on everything inside it —
+measured: the device parses, `SD Card` and `switch` do not. An MTP item's path
+ends in object IDs like `{00000026-0000-…}`, which are not parseable display
+names. So the device is parsed and everything below it is reached by
+enumerating children and matching names, which needs no parsing at all.
+
+**`tools/ftp-courier.sh` — over wifi, via ftpd.** Needs ftpd running on the
+console, which MTP does not, so the console is doing nothing else meanwhile.
+
+```sh
+echo 192.168.1.42 > tools/switch-address.txt   # once
+./tools/ftp-courier.sh                          # push, then pull
+```
+
+Both push a build and pull back the log and `run-tally.txt`. Neither will
+re-save a log it already has — the hash decides, not the clock.
+
 ### Without a local devkitPro install
 
 The devkitPro toolchain also ships as a container image, which builds

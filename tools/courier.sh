@@ -85,15 +85,38 @@ mkdir -p "$LOGDIR" "$DROP" "$STATE"
 # hash verification can be tested without a console -- the first version of
 # this was "tested" by reading it, and the bug it shipped with was an ordering
 # one that reading would never have caught.
+# MTP transfers fail transiently -- an "Input/output error" on a file that
+# copies fine seconds later. Three tries, because one silent failure here is
+# indistinguishable from "the console produced nothing", and on 2026-09-13
+# that cost an evening: runs were happening and logs were being written while
+# the courier reported nothing new every poll.
 copy_in() {
     if [ -n "${ARK_CARD:-}" ]; then
         mkdir -p "$(dirname "$2")" 2>/dev/null || true
         # Quiet on a missing source, matching gio: a poll before the first run
         # has no log to pull and that is not an error.
         cp "$1" "$2" 2>/dev/null
-    else
-        gio copy "$1" "$2" 2>/dev/null
+        return $?
     fi
+    _try=1
+    while [ "$_try" -le 3 ]; do
+        # timeout, not just retries. A retry loop answers a copy that fails;
+        # MTP's other failure mode is a copy that never returns at all, and
+        # with no timeout that blocks this whole loop forever -- silently, so
+        # it looks exactly like a console that has not been run. It did that
+        # on 2026-09-13 while runs were happening and being reported as
+        # missing. 600s is far longer than a 176MB push legitimately takes.
+        if timeout 600 gio copy "$1" "$2" 2>"$STATE/copy.err"; then return 0; fi
+        if [ $? -eq 124 ]; then
+            echo "COPY timed out after 600s: $1 -- retrying"
+        fi
+        # A source that is simply absent is not worth retrying or reporting.
+        if grep -qi "No such file" "$STATE/copy.err" 2>/dev/null; then return 1; fi
+        _try=$((_try + 1))
+        sleep 2
+    done
+    echo "COPY failed after 3 tries: $1 -- $(tr -d '\n' < "$STATE/copy.err" | cut -c1-110)"
+    return 1
 }
 
 card_root() {
@@ -104,7 +127,9 @@ card_root() {
     fi
     for c in $CARD_GLOB; do
         [ -d "$c/SD Card" ] || continue
-        # A stale gvfs entry can linger after the Switch launches something;
+        # MTP is up only while the console is running its USB transfer app
+    # (Haze/DBI) -- NOT in hbmenu, and not while a game runs. A stale
+    # gvfs entry can also linger after the console launches something;
         # only a directory that actually lists counts as mounted.
         ls "$c/SD Card" >/dev/null 2>&1 || continue
         printf '%s/SD Card\n' "$c"
@@ -145,7 +170,7 @@ pull_shaders() {
 pull_log() {
     card="$1"
     tmp="$STATE/pull.log"
-    copy_in "$card/$REMOTE_LOG" "$tmp" || return 0
+    copy_in "$card/$REMOTE_LOG" "$tmp" || return 1
     h="$(hash_of "$tmp")"
     [ -n "$h" ] || return 0
     old="$(cat "$STATE/log.md5" 2>/dev/null || true)"
@@ -234,7 +259,7 @@ push_nro() {
 pass() {
     if card="$(card_root)"; then
         if [ ! -f "$STATE/mounted" ]; then
-            echo "SWITCH in hbmenu (MTP up)"
+            echo "CARD reachable (MTP up -- the USB transfer app is running)"
             : > "$STATE/mounted"
         fi
         pull_log "$card"
@@ -242,7 +267,7 @@ pass() {
         push_nro "$card"
     else
         if [ -f "$STATE/mounted" ]; then
-            echo "SWITCH busy or unplugged (MTP down) -- a run may be in progress"
+            echo "CARD unreachable (MTP down -- not in the USB transfer app)"
             rm -f "$STATE/mounted"
         fi
     fi
