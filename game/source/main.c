@@ -1115,6 +1115,16 @@ static uint32_t   g_video_found_y = 0, g_video_found_cr = 0, g_video_found_cb = 
 static DkMemBlock g_vid_staging = NULL;
 static uint8_t   *g_vid_staging_cpu = NULL;
 
+/* Per-frame work that does not change between frames, kept between them.
+ *
+ * g_vid_sx maps output column to source column. It is rebuilt only when the
+ * video's width or the scaled width changes, which for one movie is once.
+ * FBW entries is the most it can need: dst_w is clamped to the framebuffer. */
+static uint32_t   g_vid_sx[ARKCHEMY_GX2_FB_WIDTH];
+static uint32_t   g_vid_sx_w = 0, g_vid_sx_vw = 0;
+static int        g_vid_cleared = 0;
+static uint32_t   g_vid_clear_w = 0, g_vid_clear_h = 0;
+
 static bool arkchemy_video_staging_init(void) {
     DkMemBlockMaker maker;
     uint32_t size = ARKCHEMY_GX2_FB_WIDTH * ARKCHEMY_GX2_FB_HEIGHT * 4u;
@@ -1142,16 +1152,54 @@ static void arkchemy_video_yuv_to_rgba(uint32_t y_addr, uint32_t y_pitch,
     if (dst_h > FBH) { dst_h = FBH; dst_w = (uint32_t)((uint64_t)vw * FBH / vh); }
     off_x = (FBW - dst_w) / 2u; off_y = (FBH - dst_h) / 2u;
 
-    memset(g_vid_staging_cpu, 0, FBW * FBH * 4u);
+    /* The letterbox bars are cleared once, not every frame.
+     *
+     * This was a memset of the whole 1280x720x4 staging buffer -- 3.7MB per
+     * frame -- when the only part that stays black is the bars either side of
+     * the picture. Everything inside dst_w x dst_h is fully overwritten by the
+     * loop below regardless, so clearing it was work whose result was
+     * immediately thrown away. */
+    if (!g_vid_cleared || g_vid_clear_w != dst_w || g_vid_clear_h != dst_h) {
+        memset(g_vid_staging_cpu, 0, FBW * FBH * 4u);
+        g_vid_cleared = 1;
+        g_vid_clear_w = dst_w;
+        g_vid_clear_h = dst_h;
+    }
+
+    /* The horizontal source column for each output column, once.
+     *
+     * This was `(uint32_t)((uint64_t)dx * vw / dst_w)` inside the inner loop:
+     * a 64-bit integer divide per pixel, 921,600 of them per frame at 1280x720.
+     * A 64-bit divide is tens of cycles on this core and does not pipeline, so
+     * it dominated everything else in the loop -- the three guest reads beside
+     * it are each a mask and a load.
+     *
+     * It depends only on dx, so it is the same for every row and every frame
+     * until the video dimensions change. Computed once into a table and read
+     * back, which turns the per-pixel cost into one load. */
+    if (g_vid_sx_w != dst_w || g_vid_sx_vw != vw) {
+        uint32_t i;
+        uint32_t n = dst_w < FBW ? dst_w : FBW;
+        for (i = 0; i < n; i++)
+            g_vid_sx[i] = (uint32_t)((uint64_t)i * vw / dst_w);
+        g_vid_sx_w = dst_w;
+        g_vid_sx_vw = vw;
+    }
 
     for (dy = 0; dy < dst_h; dy++) {
         uint32_t sy = (uint32_t)((uint64_t)dy * vh / dst_h);
         uint8_t *row = g_vid_staging_cpu + ((dy + off_y) * FBW + off_x) * 4u;
+        /* Row bases hoisted: these were recomputed per pixel, and the chroma
+         * ones include a shift of a value that does not change across the row. */
+        uint32_t y_row  = y_addr  + sy * y_pitch;
+        uint32_t c_row  = (sy >> 1) * c_pitch;
+        uint32_t cr_row = cr_addr + c_row;
+        uint32_t cb_row = cb_addr + c_row;
         for (dx = 0; dx < dst_w; dx++) {
-            uint32_t sx = (uint32_t)((uint64_t)dx * vw / dst_w);
-            int Y = (int)ppc_load_u8(&g_ctx, y_addr  + sy * y_pitch + sx);
-            int V = (int)ppc_load_u8(&g_ctx, cr_addr + (sy >> 1) * c_pitch + (sx >> 1)) - 128;
-            int U = (int)ppc_load_u8(&g_ctx, cb_addr + (sy >> 1) * c_pitch + (sx >> 1)) - 128;
+            uint32_t sx = g_vid_sx[dx];
+            int Y = (int)ppc_load_u8(&g_ctx, y_row  + sx);
+            int V = (int)ppc_load_u8(&g_ctx, cr_row + (sx >> 1)) - 128;
+            int U = (int)ppc_load_u8(&g_ctx, cb_row + (sx >> 1)) - 128;
             int R = Y + ((91881 * V) >> 16);
             int G = Y - ((22554 * U + 46802 * V) >> 16);
             int B = Y + ((116130 * U) >> 16);
@@ -5046,7 +5094,41 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_draw_tried, (unsigned)g_ark_draw_done,
                                  (unsigned)g_ark_draw_noshader, (unsigned)g_ark_draw_nofetch,
                                  (unsigned)g_ark_draw_nobuf, (unsigned)g_ark_draw_badfmt,
-                                 (unsigned)g_ark_draw_badprim, (unsigned)g_ark_draw_nomem); }
+                                 (unsigned)g_ark_draw_badprim, (unsigned)g_ark_draw_nomem);
+
+                      /* FRAMEORD: the first three frames as a sequence.
+                       *
+                       * The census counts calls and says nothing about order,
+                       * and order is the whole question here: draws render
+                       * into framebuffers[acquired_slot], and
+                       * GX2CopyColorBufferToScanBuffer copies a guest-memory
+                       * upload over that same image. If COPY lands after DRAW
+                       * in a frame, every drawn frame is overwritten just
+                       * before it is presented -- which would explain ~490
+                       * draws a run and nothing on screen. If it lands before,
+                       * that explanation is wrong and the cause is elsewhere. */
+                      { static const char *evn[] = { "?", "clear", "DRAW", "copy",
+                                                     "swap", "setcb" };
+                        char fo[512]; int fp = 0;
+                        uint32_t fn = g_ark_fo_n;
+                        if (fn > ARK_FO_MAX) fn = ARK_FO_MAX;
+                        for (uint32_t i = 0; i < fn && fp < (int)sizeof(fo) - 16; i++) {
+                            uint8_t e = g_ark_fo[i];
+                            fp += snprintf(fo + fp, sizeof(fo) - fp, "%s%s",
+                                           i ? " " : "",
+                                           e < 6u ? evn[e] : "?");
+                            if (e == ARK_FO_SWAP && i + 1 < fn)
+                                fp += snprintf(fo + fp, sizeof(fo) - fp, " |");
+                        }
+                        fo[fp] = '\0';
+                        checkpoint("FRAMEORD n=%u frames=%u : %s -- the order a frame's"
+                                   " graphics calls actually happen in, '|' between"
+                                   " frames. A 'copy' after 'DRAW' in the same frame"
+                                   " overwrites the drawn image with a guest-memory"
+                                   " upload the GPU never wrote to, which is the whole"
+                                   " picture being thrown away one step before it is"
+                                   " presented",
+                                   (unsigned)g_ark_fo_n, (unsigned)g_ark_fo_frames, fo); } }
 
 
                     checkpoint("EVENTPHASE OSSignalEvent enter=%u entry=%u lock=%u exit=%u"
