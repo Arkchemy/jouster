@@ -5196,19 +5196,34 @@ int main(int argc, char *argv[]) {
                        * clear colour, in which case the draws produce nothing
                        * visible and the work moves to the shader translation
                        * and vertex data. */
-                      checkpoint("PEEK frames=%u varied=%u first=0x%08x other=0x%08x"
-                                 " -- a %ux%u patch from the centre of the surface"
-                                 " being presented, sampled after the GPU finished"
-                                 " the frame. varied counts frames holding more"
-                                 " than one pixel value: an image varies, a clear"
-                                 " colour does not. first and other are two of the"
-                                 " values seen, RGBA8",
-                                 (unsigned)g_ark_peek_frames,
-                                 (unsigned)g_ark_peek_varied,
-                                 (unsigned)g_ark_peek_first,
-                                 (unsigned)g_ark_peek_other,
-                                 (unsigned)ARKCHEMY_GX2_PEEK,
-                                 (unsigned)ARKCHEMY_GX2_PEEK);
+                      { char pk[400]; int pp = 0; pk[0] = ' ';
+                        for (unsigned i = 0; i < ARKCHEMY_GX2_SURFACE_CACHE
+                             && pp < (int)sizeof(pk) - 56; i++) {
+                            if (!g_ark_peek_seen[i]) continue;
+                            pp += snprintf(pk + pp, sizeof(pk) - pp,
+                                           " [#%u %ux%u seen=%u varied=%u 0x%08x/0x%08x]",
+                                           i,
+                                           (unsigned)g_arkchemy_gx2.surf_desc[i][1],
+                                           (unsigned)g_arkchemy_gx2.surf_desc[i][2],
+                                           (unsigned)g_ark_peek_seen[i],
+                                           (unsigned)g_ark_peek_varied[i],
+                                           (unsigned)g_ark_peek_first[i],
+                                           (unsigned)g_ark_peek_other[i]);
+                        }
+                        checkpoint("PEEK frames=%u%s -- a %ux%u patch from the centre"
+                                   " of EVERY live surface, sampled after the GPU"
+                                   " finished the frame. varied counts frames in"
+                                   " which that surface held more than one pixel"
+                                   " value: an image varies, a clear colour does"
+                                   " not. The scene is drawn into a 1024x576 target"
+                                   " and composited into the 1280x720 one, so a"
+                                   " varying 1024x576 with a flat 1280x720 puts the"
+                                   " loss in the composite, and both flat puts it in"
+                                   " the draws themselves",
+                                   (unsigned)g_ark_peek_frames,
+                                   pk[0] ? pk : " <none>",
+                                   (unsigned)ARKCHEMY_GX2_PEEK,
+                                   (unsigned)ARKCHEMY_GX2_PEEK); }
 
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
