@@ -5259,6 +5259,34 @@ int main(int argc, char *argv[]) {
                                      (unsigned)r[2], (unsigned)r[3], vb, mx);
                       }
 
+                      /* What the GPU pipeline actually did. Where the first
+                       * zero falls is the answer, and unlike PEEK this cannot
+                       * confuse "never drawn" with "drawn black". */
+                      { static const char *cn[] = { "vertices", "vsinv",
+                                                    "clipin", "clipout",
+                                                    "fsinv", "samples" };
+                        char gc[240]; int gp = 0; gc[0] = ' ';
+                        for (unsigned i = 0; i < ARKCHEMY_GX2_NCOUNTERS
+                             && gp < (int)sizeof(gc) - 32; i++)
+                            gp += snprintf(gc + gp, sizeof(gc) - gp, " %s=%u",
+                                           cn[i], (unsigned)g_ark_gpucnt[i]);
+                        checkpoint("GPUCNT frames=%u%s -- running GPU pipeline"
+                                   " totals. vertices 0: the draw never reached"
+                                   " the GPU. vsinv 0: vertices fetched, vertex"
+                                   " shader never ran. clipout 0 with clipin>0:"
+                                   " every primitive clipped away, so the"
+                                   " transform puts the geometry off-screen."
+                                   " fsinv 0 with clipout>0: primitives survived"
+                                   " and made no fragments -- degenerate, culled,"
+                                   " or a zero-area viewport. samples 0 with"
+                                   " fsinv>0: fragments ran and were all"
+                                   " discarded by depth, stencil or discard. All"
+                                   " non-zero: the GPU drew, and the black is"
+                                   " what it drew -- shading, blend or channel"
+                                   " mask",
+                                   (unsigned)g_ark_gpucnt_frames,
+                                   gc[0] ? gc : " <none>"); }
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
