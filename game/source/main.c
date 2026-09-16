@@ -5266,20 +5266,29 @@ int main(int argc, char *argv[]) {
                         if (fn > ARK_FO_MAX) fn = ARK_FO_MAX;
                         for (uint32_t i = 0; i < fn && fp < (int)sizeof(fo) - 16; i++) {
                             uint8_t e = g_ark_fo[i];
+                            uint8_t sf = g_ark_fo_surf[i];
                             fp += snprintf(fo + fp, sizeof(fo) - fp, "%s%s",
                                            i ? " " : "",
                                            e < 6u ? evn[e] : "?");
+                            /* The surface each event touched. Without it the
+                             * sequence cannot distinguish a clear that wipes
+                             * the drawn buffer from one that wipes a different
+                             * buffer entirely. */
+                            if (sf != 0xFFu)
+                                fp += snprintf(fo + fp, sizeof(fo) - fp, "#%u", (unsigned)sf);
                             if (e == ARK_FO_SWAP && i + 1 < fn)
                                 fp += snprintf(fo + fp, sizeof(fo) - fp, " |");
                         }
                         fo[fp] = '\0';
                         checkpoint("FRAMEORD n=%u frames=%u : %s -- the order a frame's"
                                    " graphics calls actually happen in, '|' between"
-                                   " frames. A 'copy' after 'DRAW' in the same frame"
-                                   " overwrites the drawn image with a guest-memory"
-                                   " upload the GPU never wrote to, which is the whole"
-                                   " picture being thrown away one step before it is"
-                                   " presented",
+                                   " frames, #n the surface-cache entry each one"
+                                   " touched. A clear on the same #n as the draws"
+                                   " before it wipes the frame; on a different #n it"
+                                   " is another buffer entirely and the draws survive."
+                                   " The copy's #n is the surface actually presented,"
+                                   " so it either matches where the draws went or"
+                                   " names what is being shown instead",
                                    (unsigned)g_ark_fo_n, (unsigned)g_ark_fo_frames, fo); } }
 
 
