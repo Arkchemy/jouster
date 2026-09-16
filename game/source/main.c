@@ -5101,6 +5101,23 @@ int main(int argc, char *argv[]) {
                        * descriptor changing every call is a different problem
                        * from the one it was written for, and worth knowing
                        * before any more is built on top of it. */
+                      /* Is anything the engine draws ever presented at all?
+                       * GX2CopyColorBufferToScanBuffer carries the same scope
+                       * checks as GX2SetColorBuffer, tiling included, so if the
+                       * colour buffer is tile 0 both refuse it and the GX2 path
+                       * never reaches the screen -- which is a different
+                       * problem from the frame being drawn and overwritten. */
+                      checkpoint("COPYPATH ok=%u rejected: tile=%u other=%u --"
+                                 " copies that actually reached the scan buffer"
+                                 " against ones refused. ok=0 means nothing the"
+                                 " engine draws is ever presented, and the splash"
+                                 " and movie come from the video path, which"
+                                 " carries its own staging buffer and bypasses"
+                                 " all of this",
+                                 (unsigned)g_ark_cpy_ok,
+                                 (unsigned)g_ark_cpy_rej_tile,
+                                 (unsigned)g_ark_cpy_rej_other);
+
                       { char sb[420]; int sp = 0;
                         for (uint32_t i = 0; i < g_ark_scb_nseen && i < 4u; i++)
                             sp += snprintf(sb + sp, sizeof(sb) - sp,
