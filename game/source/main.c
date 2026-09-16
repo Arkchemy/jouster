@@ -5096,6 +5096,20 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_draw_nobuf, (unsigned)g_ark_draw_badfmt,
                                  (unsigned)g_ark_draw_badprim, (unsigned)g_ark_draw_nomem);
 
+                      /* Did setcb keep the drawn image or rebuild over it?
+                       * kept=0 would mean the guard never fires -- the surface
+                       * descriptor changing every call is a different problem
+                       * from the one it was written for, and worth knowing
+                       * before any more is built on top of it. */
+                      checkpoint("SETCB kept=%u rebuilt=%u -- GX2SetColorBuffer"
+                                 " re-selecting the same surface (kept) against"
+                                 " genuinely building a new one (rebuilt). A"
+                                 " rebuild lands after the draws and destroys"
+                                 " the frame; the first call of a run is"
+                                 " legitimately a rebuild",
+                                 (unsigned)g_ark_scb_kept,
+                                 (unsigned)g_ark_scb_rebuilt);
+
                       /* FRAMEORD: the first three frames as a sequence.
                        *
                        * The census counts calls and says nothing about order,
