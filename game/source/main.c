@@ -5101,6 +5101,32 @@ int main(int argc, char *argv[]) {
                        * descriptor changing every call is a different problem
                        * from the one it was written for, and worth knowing
                        * before any more is built on top of it. */
+                      { char sb[420]; int sp = 0;
+                        for (uint32_t i = 0; i < g_ark_scb_nseen && i < 4u; i++)
+                            sp += snprintf(sb + sp, sizeof(sb) - sp,
+                                           " [%ux%u mips=%u fmt=0x%x tile=%u pitch=%u addr=0x%x]",
+                                           (unsigned)g_ark_scb_first[i][1],
+                                           (unsigned)g_ark_scb_first[i][2],
+                                           (unsigned)g_ark_scb_first[i][3],
+                                           (unsigned)g_ark_scb_first[i][4],
+                                           (unsigned)g_ark_scb_first[i][5],
+                                           (unsigned)g_ark_scb_first[i][6],
+                                           (unsigned)g_ark_scb_first[i][7]);
+                        if (!sp) snprintf(sb, sizeof(sb), " <none refused>");
+                        checkpoint("SETCB rejected: dim=%u tile=%u mip=%u fmt=0x%x"
+                                   " zero=%u | %u distinct surfaces refused:%s"
+                                   " -- tile 0 is GX2_TILE_MODE_DEFAULT, which for"
+                                   " a colour buffer resolves to a TILED mode, and"
+                                   " this shim only accepts linear (1 and 16). A"
+                                   " refused surface with a real pitch and address"
+                                   " is the render target proper; one with pitch=0"
+                                   " addr=0 has no memory and is not the thing to"
+                                   " support",
+                                   (unsigned)g_ark_scb_rej_dim, (unsigned)g_ark_scb_rej_tile,
+                                   (unsigned)g_ark_scb_rej_mip, (unsigned)g_ark_scb_rej_fmt,
+                                   (unsigned)g_ark_scb_rej_zero,
+                                   (unsigned)g_ark_scb_nseen, sb); }
+
                       checkpoint("SETCB kept=%u rebuilt=%u -- GX2SetColorBuffer"
                                  " re-selecting the same surface (kept) against"
                                  " genuinely building a new one (rebuilt). A"
