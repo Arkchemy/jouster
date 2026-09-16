@@ -5188,6 +5188,28 @@ int main(int argc, char *argv[]) {
                                    st[0] ? st : " <none>",
                                    (unsigned)g_ark_scan_skipped); }
 
+                      /* What the presented surface actually contains, read
+                       * back off the GPU. Counting calls cannot answer "is it
+                       * black"; this can. varied>0 means the GPU drew an
+                       * image. varied=0 with frames>0 means every presented
+                       * frame was one flat colour, and first= names it -- a
+                       * clear colour, in which case the draws produce nothing
+                       * visible and the work moves to the shader translation
+                       * and vertex data. */
+                      checkpoint("PEEK frames=%u varied=%u first=0x%08x other=0x%08x"
+                                 " -- a %ux%u patch from the centre of the surface"
+                                 " being presented, sampled after the GPU finished"
+                                 " the frame. varied counts frames holding more"
+                                 " than one pixel value: an image varies, a clear"
+                                 " colour does not. first and other are two of the"
+                                 " values seen, RGBA8",
+                                 (unsigned)g_ark_peek_frames,
+                                 (unsigned)g_ark_peek_varied,
+                                 (unsigned)g_ark_peek_first,
+                                 (unsigned)g_ark_peek_other,
+                                 (unsigned)ARKCHEMY_GX2_PEEK,
+                                 (unsigned)ARKCHEMY_GX2_PEEK);
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
