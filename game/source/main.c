@@ -5118,6 +5118,35 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_cpy_rej_tile,
                                  (unsigned)g_ark_cpy_rej_other);
 
+                      /* Two surfaces through one render-target slot would
+                       * show up here as alternating addresses, every call a
+                       * rebuild. Reading it that way from kept=1 rebuilt=7
+                       * alone would be a guess; this is the sequence. */
+                      { char sq[320]; unsigned si, sp = 0;
+                        sq[0] = ' ';
+                        for (si = 0; si < (unsigned)g_ark_scbseq_n && sp < sizeof(sq) - 48u; si++) {
+                            int wrote = snprintf(sq + sp, sizeof(sq) - sp,
+                                                 "[0x%x %ux%u %s]",
+                                                 (unsigned)g_ark_scbseq[si][0],
+                                                 (unsigned)g_ark_scbseq[si][1],
+                                                 (unsigned)g_ark_scbseq[si][2],
+                                                 g_ark_scbseq[si][3] ? "kept" : "REBUILT");
+                            if (wrote <= 0) break;
+                            sp += (unsigned)wrote;
+                        }
+                        checkpoint("SETCBSEQ n=%u clamped=%u : %s -- every surface"
+                                   " GX2SetColorBuffer was handed for target 0, in"
+                                   " order. Alternating addresses with REBUILT on"
+                                   " each means the game is driving two colour"
+                                   " buffers through one slot, so each one wipes"
+                                   " the other and the draws in between are gone."
+                                   " clamped counts present calls whose rectangle"
+                                   " had to be cut to fit whichever surface"
+                                   " happened to be bound",
+                                   (unsigned)g_ark_scbseq_n,
+                                   (unsigned)g_ark_cpy_clamped,
+                                   sq[0] ? sq : "<none>"); }
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
