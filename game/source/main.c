@@ -5225,6 +5225,40 @@ int main(int argc, char *argv[]) {
                                    (unsigned)ARKCHEMY_GX2_PEEK,
                                    (unsigned)ARKCHEMY_GX2_PEEK); }
 
+                      /* The numbers the first draws were actually given.
+                       * Each float is printed as its raw word as well as a
+                       * decimal: an all-zero block and a block of NaNs both
+                       * collapse every vertex, and neither is obvious from a
+                       * %f alone. */
+                      for (unsigned d = 0; d < (unsigned)g_ark_drawin_n; d++) {
+                          volatile uint32_t *r = g_ark_drawin[d];
+                          char vb[220]; int vp = 0; vb[0] = ' ';
+                          char mx[360]; int mp = 0; mx[0] = ' ';
+                          for (unsigned k = 0; k < 8u; k++) {
+                              float f; uint32_t w = r[4 + k];
+                              memcpy(&f, &w, sizeof(f));
+                              vp += snprintf(vb + vp, sizeof(vb) - vp, " %08x(%.3f)",
+                                             (unsigned)w, (double)f);
+                          }
+                          for (unsigned k = 0; k < 16u; k++) {
+                              float f; uint32_t w = r[12 + k];
+                              memcpy(&f, &w, sizeof(f));
+                              mp += snprintf(mx + mp, sizeof(mx) - mp, "%s%08x(%.3f)",
+                                             k ? " " : "", (unsigned)w, (double)f);
+                          }
+                          checkpoint("DRAWIN[%u] prim=0x%x count=%u stride=%u"
+                                     " attribs=%u | v0:%s | vsconst[0..15]: %s"
+                                     " -- what this draw was handed. An all-zero"
+                                     " or NaN constant block collapses every"
+                                     " vertex to one point and rasterises"
+                                     " nothing, which is what the surface"
+                                     " readback measured; sane numbers here move"
+                                     " the fault to the translated shader or the"
+                                     " pipeline state instead",
+                                     d, (unsigned)r[0], (unsigned)r[1],
+                                     (unsigned)r[2], (unsigned)r[3], vb, mx);
+                      }
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
