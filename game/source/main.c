@@ -5118,6 +5118,31 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_cpy_rej_tile,
                                  (unsigned)g_ark_cpy_rej_other);
 
+                      /* What the present path is actually handed. setcb only
+                       * ever sees one surface, 854x480 with no memory; the
+                       * copy has been refusing 368 a run and nobody has looked
+                       * at what. It is the only path from the engine to the
+                       * screen, so its surface is the one that decides what
+                       * tiling support is worth writing. */
+                      { char cb[420]; int cp = 0;
+                        for (uint32_t i = 0; i < g_ark_cpy_nseen && i < 4u; i++)
+                            cp += snprintf(cb + cp, sizeof(cb) - cp,
+                                           " [%ux%u mips=%u fmt=0x%x tile=%u pitch=%u addr=0x%x]",
+                                           (unsigned)g_ark_cpy_seen[i][1],
+                                           (unsigned)g_ark_cpy_seen[i][2],
+                                           (unsigned)g_ark_cpy_seen[i][3],
+                                           (unsigned)g_ark_cpy_seen[i][4],
+                                           (unsigned)g_ark_cpy_seen[i][5],
+                                           (unsigned)g_ark_cpy_seen[i][6],
+                                           (unsigned)g_ark_cpy_seen[i][7]);
+                        if (!cp) snprintf(cb, sizeof(cb), " <none>");
+                        checkpoint("COPYSURF %u distinct surfaces handed to the"
+                                   " present path:%s -- a real pitch and address"
+                                   " here is the engine's actual render target,"
+                                   " and its tile value is the one worth"
+                                   " supporting",
+                                   (unsigned)g_ark_cpy_nseen, cb); }
+
                       { char sb[420]; int sp = 0;
                         for (uint32_t i = 0; i < g_ark_scb_nseen && i < 4u; i++)
                             sp += snprintf(sb + sp, sizeof(sb) - sp,
