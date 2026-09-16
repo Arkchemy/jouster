@@ -5257,7 +5257,38 @@ int main(int argc, char *argv[]) {
                                      " pipeline state instead",
                                      d, (unsigned)r[0], (unsigned)r[1],
                                      (unsigned)r[2], (unsigned)r[3], vb, mx);
+                          checkpoint("DRAWIN[%u] colour state: channel_masks=0x%08x"
+                                     " color_write_enable=%u effective=0x%08x"
+                                     " vs=%u ps=%u texdesc=%u -- effective is what"
+                                     " deko3d is given. 0 means every fragment is"
+                                     " shaded and every sample passes and nothing"
+                                     " is written, which is the exact shape of the"
+                                     " GPUCNT reading",
+                                     d, (unsigned)r[28], (unsigned)r[29],
+                                     (unsigned)r[30], (unsigned)r[31],
+                                     (unsigned)r[32], (unsigned)r[33]);
                       }
+
+                      /* Is there anything in the textures being sampled? */
+                      { char tb[300]; int tp = 0; tb[0] = ' ';
+                        for (unsigned i = 0; i < (unsigned)g_ark_texup_n && i < 6u
+                             && tp < (int)sizeof(tb) - 44; i++)
+                            tp += snprintf(tb + tp, sizeof(tb) - tp,
+                                           " [%ux%u %s 0x%08x/0x%08x]",
+                                           (unsigned)g_ark_texup[i][0],
+                                           (unsigned)g_ark_texup[i][1],
+                                           g_ark_texup[i][2] ? "FLAT" : "varies",
+                                           (unsigned)g_ark_texup[i][3],
+                                           (unsigned)g_ark_texup[i][4]);
+                        checkpoint("TEXUP n=%u flat=%u:%s -- textures uploaded for"
+                                   " sampling, and whether each holds more than one"
+                                   " value. The quads carry texture coordinates, so"
+                                   " if what they sample is uniform black then the"
+                                   " composite is faithfully compositing black and"
+                                   " the fault is upstream of it",
+                                   (unsigned)g_ark_texup_n,
+                                   (unsigned)g_ark_texup_flat,
+                                   tb[0] ? tb : " <none>"); }
 
                       /* What the GPU pipeline actually did. Where the first
                        * zero falls is the answer, and unlike PEEK this cannot
