@@ -5288,7 +5288,17 @@ int main(int argc, char *argv[]) {
                                    " the fault is upstream of it",
                                    (unsigned)g_ark_texup_n,
                                    (unsigned)g_ark_texup_flat,
-                                   tb[0] ? tb : " <none>"); }
+                                   tb[0] ? tb : " <none>");
+                        checkpoint("TEXSRC rendertarget=%u guest=%u -- textures"
+                                   " served from the surface cache, meaning the"
+                                   " image the GPU actually rendered, against ones"
+                                   " uploaded from guest memory. A render target"
+                                   " bound as a texture has nothing in guest"
+                                   " memory: the recompiled code does not"
+                                   " rasterise, so uploading it replaces the"
+                                   " rendered frame with zeros",
+                                   (unsigned)g_ark_tex_from_rt,
+                                   (unsigned)g_ark_tex_from_guest); }
 
                       /* What the GPU pipeline actually did. Where the first
                        * zero falls is the answer, and unlike PEEK this cannot
