@@ -5118,6 +5118,28 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_cpy_rej_tile,
                                  (unsigned)g_ark_cpy_rej_other);
 
+                      /* Deferred destruction of replaced GPU memory blocks.
+                       * Every dkCmdBuf* call records; the GPU reads none of
+                       * the memory named until the submit at swap. Freeing a
+                       * block in between is what killed the queue on
+                       * 2026-09-16 -- one page fault at 0x0502280000 and every
+                       * later submit failed, freezing the guest at frame 7380.
+                       * deferred should track drained within one frame's
+                       * worth; leaked>0 means RETIRE_MAX is too small for what
+                       * a frame recycles, which is a sizing fact, not a
+                       * crash. */
+                      checkpoint("RETIRE deferred=%u drained=%u peak=%u leaked=%u"
+                                 " -- GPU memory blocks replaced mid-frame and"
+                                 " held until after the submit they were still"
+                                 " recorded into. A standing deferred-drained"
+                                 " gap no larger than peak is the frame in"
+                                 " flight; anything larger is a leak, and"
+                                 " leaked>0 names the list as too small",
+                                 (unsigned)g_ark_ret_deferred,
+                                 (unsigned)g_ark_ret_drained,
+                                 (unsigned)g_ark_ret_peak,
+                                 (unsigned)g_ark_ret_leaked);
+
                       /* What the present path is actually handed. setcb only
                        * ever sees one surface, 854x480 with no memory; the
                        * copy has been refusing 368 a run and nobody has looked
