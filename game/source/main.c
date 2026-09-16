@@ -5147,6 +5147,25 @@ int main(int argc, char *argv[]) {
                                    (unsigned)g_ark_cpy_clamped,
                                    sq[0] ? sq : "<none>"); }
 
+                      /* One image per surface rather than per render-target
+                       * slot. hit/miss is the cache doing its job: a hit keeps
+                       * that surface's drawn contents across a switch, which
+                       * is what the game's four colour buffers need. evicted>0
+                       * means the cache is smaller than the set it cycles
+                       * through, and each eviction costs that surface its
+                       * pixels. */
+                      checkpoint("SURFPOOL live=%u hit=%u miss=%u evicted=%u"
+                                 " -- distinct colour surfaces holding their own"
+                                 " image. A hit is a switch that preserved what"
+                                 " had been drawn; a miss builds a new image and"
+                                 " uploads guest memory into it. evicted>0 means"
+                                 " ARKCHEMY_GX2_SURFACE_CACHE is smaller than the"
+                                 " number of buffers the game cycles through",
+                                 (unsigned)g_ark_surf_live,
+                                 (unsigned)g_ark_surf_hit,
+                                 (unsigned)g_ark_surf_miss,
+                                 (unsigned)g_ark_surf_evicted);
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
