@@ -5166,6 +5166,28 @@ int main(int argc, char *argv[]) {
                                  (unsigned)g_ark_surf_miss,
                                  (unsigned)g_ark_surf_evicted);
 
+                      /* Which scan targets the present path is handed, and
+                       * how many copies were dropped for not being the TV.
+                       * wut gives GX2_SCAN_TARGET_TV=1, DRC0=4; the raw
+                       * values are printed so that is checked rather than
+                       * assumed. If skipped=0 and two values are listed, the
+                       * gate is matching the wrong one. */
+                      { char st[160]; int stp = 0; st[0] = ' ';
+                        for (unsigned i = 0; i < (unsigned)g_ark_scan_n
+                             && stp < (int)sizeof(st) - 24; i++)
+                            stp += snprintf(st + stp, sizeof(st) - stp, " [%u x%u]",
+                                            (unsigned)g_ark_scan_val[i],
+                                            (unsigned)g_ark_scan_cnt[i]);
+                        checkpoint("SCANTGT%s skipped=%u -- the GX2ScanTarget"
+                                   " values handed to the present path, with"
+                                   " how many copies each took. 1 is the TV and"
+                                   " is the only one presented; 4 is the GamePad,"
+                                   " which on real hardware has its own screen"
+                                   " and here would blit over the composited"
+                                   " frame. skipped counts those dropped",
+                                   st[0] ? st : " <none>",
+                                   (unsigned)g_ark_scan_skipped); }
+
                       /* Deferred destruction of replaced GPU memory blocks.
                        * Every dkCmdBuf* call records; the GPU reads none of
                        * the memory named until the submit at swap. Freeing a
