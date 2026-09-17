@@ -5631,7 +5631,27 @@ int main(int argc, char *argv[]) {
                       if (sso == 0) snprintf(ssbuf, sizeof(ssbuf), "<none>");
                       checkpoint("SETSTATUS total=%u kept=%u %s -- first four plus every status > 2,"
                                  " so a flood of routine 1/2 writes cannot push the error out",
-                                 (unsigned)g_ark_ss_total, (unsigned)g_ark_ss_n, ssbuf); }
+                                 (unsigned)g_ark_ss_total, (unsigned)g_ark_ss_n, ssbuf);
+
+                      char shbuf[4*120]; unsigned sho = 0; shbuf[0] = 0;
+                      for (unsigned i = 0; i < (unsigned)g_ark_sh_n && sho + 120 < sizeof(shbuf); i++) {
+                          sho += (unsigned)snprintf(shbuf + sho, sizeof(shbuf) - sho,
+                                                    " [0x%x:", (unsigned)g_ark_sh_item[i]);
+                          for (unsigned k = 0; k < (unsigned)g_ark_sh_len[i] && sho + 24 < sizeof(shbuf); k++)
+                              sho += (unsigned)snprintf(shbuf + sho, sizeof(shbuf) - sho,
+                                                        " %u@0x%x", (unsigned)g_ark_sh_val[i][k],
+                                                        (unsigned)g_ark_sh_lr[i][k]);
+                          sho += (unsigned)snprintf(shbuf + sho, sizeof(shbuf) - sho, "]");
+                      }
+                      if (sho == 0) snprintf(shbuf, sizeof(shbuf), " <none>");
+                      checkpoint("SSHIST%s -- each work item's status sequence with the"
+                                 " lr that set each one. isFileWorkFinished treats"
+                                 " anything above 2 as finished-with-error, and 1->4 is"
+                                 " a read that genuinely failed, upstream in the archive,"
+                                 " while 1->2->4 is a read that completed and was then"
+                                 " marked something else, which makes it the loader"
+                                 " reading a recycled item and a different fix entirely",
+                                 shbuf); }
 
                     { char isbuf[6*96]; unsigned iso = 0; isbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_igs_n && iso + 96 < sizeof(isbuf); i++)
