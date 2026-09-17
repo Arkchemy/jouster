@@ -62,9 +62,13 @@ jobs:
           cd "$ARK_REPO"
           echo "building ${GITHUB_SHA} in $ARK_REPO"
           git fetch origin --prune
-          # checkout refuses rather than destroys if there is conflicting local
-          # work, and --ff-only refuses rather than merging. A build machine
-          # that quietly threw away an edit would be worse than one that stops.
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git stash push -m "actions-build-${GITHUB_RUN_ID}"
+            echo "ARK_STASHED=1" >> "$GITHUB_ENV"
+            echo "Temporarily stashed local tracked changes in \`git stash\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ARK_STASHED=0" >> "$GITHUB_ENV"
+          fi
           git checkout "${GITHUB_REF_NAME}"
           git merge --ff-only "origin/${GITHUB_REF_NAME}"
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}" || {
@@ -103,4 +107,16 @@ jobs:
           else
             echo "Not delivered -- the console was not in its transfer app. The build is fine; re-run this workflow with the console in Haze/hbmenu." >> "$GITHUB_STEP_SUMMARY"
             exit 1
+          fi
+
+      - name: Restore local tracked changes
+        if: ${{ always() && env.ARK_STASHED == '1' }}
+        run: |
+          set -u
+          cd "$ARK_REPO"
+          if git stash pop --index; then
+            echo "Restored stashed local tracked changes." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Could not auto-restore local tracked changes; left in \`git stash\` for manual recovery." >> "$GITHUB_STEP_SUMMARY"
+            git reset --hard HEAD
           fi
