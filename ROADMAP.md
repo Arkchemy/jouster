@@ -4,15 +4,41 @@ What has to work, roughly in the order it has to work. Percentages are avoided
 deliberately — the useful question is which wall is next, not how far along a
 number says we are.
 
-Current position: the engine boots, loads its boot archive and three more
-behind it, translates the shaders the game binds into deko3d modules, and
-issues real draw calls. The next wall is state and textures, not shaders.
+Current position (2026-09-17): the engine boots, loads its boot archive and
+three more behind it, translates every shader it binds into deko3d modules,
+issues real draw calls, and those draws now reach the screen through a present
+path that is correct end to end. **The next wall is throughput, not graphics
+and not loading.**
 
-One caveat governs everything below: **the rig fails about two runs in five,
-on an unchanged binary.** See
-`test-results/2026-09-14-the-same-build-fails-two-runs-in-five.md`. Nothing
-here should be concluded from a single run, and several things below are
-recorded as done on evidence that predates that discovery.
+The graphics chain was five separate faults stacked on each other, all found
+and fixed on 2026-09-16: a tiling gap that meant colour buffers were never
+allocated, a deferred use-after-free that killed the GPU queue, four surfaces
+sharing one render-target slot, an ignored scan target letting the GamePad copy
+overwrite the TV frame, and render targets bound as textures being overwritten
+with empty guest memory. deko3d's own pipeline counters now report the geometry
+rasterising and passing the depth test.
+
+What is on screen is still black, and that is no longer a graphics question.
+`DRAWSIZE quad=296 max=4` — every draw in a run is a four-vertex full-screen
+composite quad, so no scene geometry is ever submitted. The loader works and
+has loaded bootstrap, legal and global; no level is ever requested. The boot
+sequence is correct and has not got that far, because the game runs at
+**0.28 fps** — 102 game frames in a 366-second run, measured directly.
+
+The caveat that used to govern this file is retired. It read "the rig fails
+about two runs in five, on an unchanged binary", from
+`test-results/2026-09-14-the-same-build-fails-two-runs-in-five.md`. The run
+tally now shows **30 consecutive clean runs**, and the last failure was build
+`Sep_16_2026_20-13-14` — the deferred use-after-free, fixed the same evening.
+Single runs can be trusted again, which is worth stating explicitly because
+several conclusions below were deliberately hedged on the old figure.
+
+One caveat replaces it, and it is smaller: **the log cannot be buffered.**
+Buffering `checkpoint()`'s stream saves 60% of every run and stops the game
+booting, isolated on identical binaries with one setting changed
+(`test-results/2026-09-17-buffering-isolated-two-causes-confirmed.md`). Why is
+unknown. Until it is, a third of every run is instrumentation that cannot be
+removed, and timing figures should be read with that in them.
 
 ## 1. Finish loading the boot archive — done
 
@@ -93,6 +119,60 @@ before the rig was known to fail ~40% of runs on an unchanged binary. The
 workaround stands — `ark_draw_ex` queues the parameters and `main.c` drains
 the queue — because it works, not because the diagnosis behind it is sound.
 Re-running the question properly needs N cycles per build, not one.
+
+## 3b. Throughput — the current wall
+
+0.28 fps. Not a stall: the boot sequence is correct and simply has not had time
+to reach a level. Measured shares of a 366-second run:
+
+```
+log       113,866ms   31%   cannot currently be removed (see above)
+uploads    16,814ms    5%   the per-pixel ppc_load_u8 loops in cafeos_gx2.h
+the rest              64%   the recompiled game
+```
+
+Deleting the log and every upload loop together takes 0.28 fps to about 0.44,
+which does not reach a level. The 64% is the only part big enough to matter.
+
+`GUESTHOT` sampled it once per host frame over a full run
+(`test-results/2026-09-17-the-guest-profile-names-the-lever.md`):
+
+```
+11%  __sti___22_hkTypeInfoRegistry_cpp
+ 9%  Core::igMetaField::reset
+ 6%  Core::igMetaField::resetByValue
+ 6%  Core::igMetaField::construct
+ 5%  Core::igMetaField::commission
+ 2%  Core::igRefMetaField::commission
+ 2%  Core::igScopeLock::~igScopeLock
+ 1%  Core::igScopeLock::igScopeLock
+ 1%  Core::igObject::isOfType
+ 1%  Core::igBidirectionalHeapMemoryPool::contains
+ 1%  Core::igCafeMutex::lock
+ 1%  Core::igMemoryPool::updateStatistics
+```
+
+The metafield system is 28% on its own and every entry is a small,
+frequently-called leaf.
+
+- [ ] **Build at `-O2`.** The Makefile has said `-O0 ... a real, separate
+      optimization pass once this actually boots` since before the first build.
+      It boots. `-O0` is worst precisely where this profile is concentrated:
+      nothing inlines and every local round-trips through the stack. Now
+      `ARK_OPT ?= -O2`, overridable. **Unverified** — the first clean rebuild
+      was still running when this was written, and the risk is real: an
+      optimised build that boots less far is a miscompilation of 217
+      machine-translated units, not a win. `draws` and `modules` must hold at
+      ~300 and 7.
+- [ ] Find out why buffering the log stops the boot. Worth 31% of every run,
+      and the mechanism is likely to be a real runtime bug rather than a
+      logging one.
+- [ ] Replace the per-pixel upload loops. Only 5%, so worth doing after the
+      two above rather than before — this was nearly done first, on the
+      assumption it was the bottleneck, and it was not.
+- [ ] Ask whether the metafield volume is *sane* as well as slow. 28% in object
+      construction may be the engine doing normal work slowly, or it may be
+      looping. Nothing has measured the absolute call count yet.
 
 ## 4. Audio
 

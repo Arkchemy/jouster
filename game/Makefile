@@ -75,7 +75,37 @@ APP_AUTHOR	:=	Arkchemy Contributors
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	-g -Wall -O0 -ffunction-sections \
+# Optimisation level, overridable: `make ARK_OPT=-O0` to go back.
+#
+# -O0 was the deliberate choice for the first build and the comment at the top
+# of this file says why, ending "a real, separate optimization pass once this
+# actually boots." It boots.
+#
+# GUESTHOT, 2026-09-17, sampling the guest once per host frame over a full run:
+#
+#   11%  __sti___22_hkTypeInfoRegistry_cpp     (Havok type registry)
+#    9%  Core::igMetaField::reset
+#    6%  Core::igMetaField::resetByValue
+#    6%  Core::igMetaField::construct
+#    5%  Core::igMetaField::commission
+#    2%  Core::igRefMetaField::commission
+#    2%  Core::igScopeLock::~igScopeLock
+#    1%  Core::igScopeLock::igScopeLock
+#    1%  Core::igObject::isOfType
+#    1%  Core::igCafeMutex::lock
+#    1%  Core::igMemoryPool::updateStatistics
+#
+# 28% of the run is the metafield system alone, and the rest of the list is
+# scope locks, type checks and allocator bookkeeping. Every one of those is a
+# small, frequently-called leaf -- the exact shape -O0 punishes hardest, since
+# nothing inlines and every local round-trips through the stack.
+#
+# The guest runs at 0.28fps and roughly two thirds of that is the recompiled
+# code, so this is the largest single lever available and it has been sitting
+# in this file since the first build.
+ARK_OPT	?=	-O2
+
+CFLAGS	:=	-g -Wall $(ARK_OPT) -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
