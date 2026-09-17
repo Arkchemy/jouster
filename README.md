@@ -164,6 +164,14 @@ that exits early if execution stops making forward progress. Test duration can
 be overridden by writing a number of seconds to
 `sdmc:/switch/Jouster/test-seconds.txt`.
 
+The log is written through a 32KB buffer and flushed every 256 lines. That
+interval can be overridden by writing a line count to
+`sdmc:/switch/Jouster/log-flush-lines.txt`: `1` flushes every line, as the
+harness did before 2026-09-17, and `0` leaves only the explicit flushes from
+the deko3d error sink and the exception handler. The value is recorded in the
+log's first line and in each `run-tally.txt` entry, so a sweep over it can be
+read back afterwards without guessing which run was which.
+
 Those logs are how nearly every bug in this project has been found; dated
 examples live in `test-results/`.
 

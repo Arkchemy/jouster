@@ -342,7 +342,8 @@ int arkchemy_loop_continue(void (*report)(const char *fmt, ...))
 #define ARK_TALLY      "sdmc:/switch/Jouster/run-tally.txt"
 #define ARK_TALLY_OPEN "sdmc:/switch/Jouster/run-open.txt"
 
-void arkchemy_run_tally_open(void (*report)(const char *fmt, ...))
+void arkchemy_run_tally_open(void (*report)(const char *fmt, ...),
+                             unsigned flush_lines)
 {
     char prev[256] = {0};
     FILE *o = fopen(ARK_TALLY_OPEN, "rb");
@@ -363,22 +364,29 @@ void arkchemy_run_tally_open(void (*report)(const char *fmt, ...))
      * only thing it is for. */
     char mine[64];
     ark_stamp_safe(mine, sizeof(mine));
+    /* The flush interval rides along for the same reason the build stamp does.
+     * A sweep of log-flush-lines.txt runs the SAME binary several times, so the
+     * stamp alone cannot tell two of its runs apart, and a tally that cannot
+     * separate them cannot be used to compare them -- which is the whole point
+     * of running the sweep. */
     FILE *n = fopen(ARK_TALLY_OPEN, "wb");
-    if (n) { fprintf(n, "build=%s", mine); fclose(n); }
+    if (n) { fprintf(n, "build=%s flush=%u", mine, flush_lines); fclose(n); }
 }
 
 void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
-                              int frames, unsigned draws, unsigned modules)
+                              int frames, unsigned draws, unsigned modules,
+                              unsigned flush_lines)
 {
     char mine[64];
     ark_stamp_safe(mine, sizeof(mine));
 
     FILE *t = fopen(ARK_TALLY, "a");
     if (t) {
-        fprintf(t, "OK    build=%s frames=%d draws=%u modules=%u\n",
-                mine, frames, draws, modules);
+        fprintf(t, "OK    build=%s flush=%u frames=%d draws=%u modules=%u\n",
+                mine, flush_lines, frames, draws, modules);
         fclose(t);
     }
     remove(ARK_TALLY_OPEN);
-    report("TALLY ok -- frames=%d draws=%u modules=%u", frames, draws, modules);
+    report("TALLY ok -- flush=%u frames=%d draws=%u modules=%u",
+           flush_lines, frames, draws, modules);
 }
