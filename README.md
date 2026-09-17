@@ -154,6 +154,27 @@ Swap `native` for `gx2_test` or `game` to build the others; the image
 already carries libnx and deko3d, so nothing else needs fetching.
 
 
+## Building on a push
+
+`tools/setup-runner.ps1` registers the build machine as a self-hosted GitHub
+Actions runner, after which every push builds the NRO and couriers it to the
+console over USB with nothing typed. Run it once, from a jouster checkout:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\setup-runner.ps1
+```
+
+It builds in the existing working copy, because `game/source/generated_*.c` is
+not in git and only that machine has it, and it refuses rather than resets if
+there is uncommitted work. The NRO is never uploaded as a build artifact:
+artifacts on a public repository are readable by anyone, and a built
+`Jouster.nro` is generated game output, which section 6 of the licence says
+must not be redistributed.
+
+A self-hosted runner executes whatever the workflow says. `build.yml` therefore
+has no `pull_request` trigger, and fork pull-request workflows should be left
+requiring approval under Settings, Actions.
+
 ## Test harness
 
 `game/source/main.c` is not a normal entry point; it is a diagnostic harness.
@@ -163,6 +184,14 @@ memory-allocation events, watched function arguments, and a stall detector
 that exits early if execution stops making forward progress. Test duration can
 be overridden by writing a number of seconds to
 `sdmc:/switch/Jouster/test-seconds.txt`.
+
+The log is written through a 32KB buffer and flushed every 256 lines. That
+interval can be overridden by writing a line count to
+`sdmc:/switch/Jouster/log-flush-lines.txt`: `1` flushes every line, as the
+harness did before 2026-09-17, and `0` leaves only the explicit flushes from
+the deko3d error sink and the exception handler. The value is recorded in the
+log's first line and in each `run-tally.txt` entry, so a sweep over it can be
+read back afterwards without guessing which run was which.
 
 Those logs are how nearly every bug in this project has been found; dated
 examples live in `test-results/`.
