@@ -4275,6 +4275,31 @@ int main(int argc, char *argv[]) {
             svcSleepThread(16666667ULL); /* 60Hz, matching consoleUpdate */
         }
 
+        /* Hand the game thread the CPU, deliberately.
+         *
+         * The game thread is priority 0x30 against this thread's 0x2C, on the
+         * same core, and that is on purpose -- see threadCreate above, where a
+         * tight guest loop that never yields once starved the harness down to
+         * 1.5fps. The consequence is that the game thread only runs when this
+         * one is blocked.
+         *
+         * Until 2026-09-17 what blocked it was checkpoint()'s per-line
+         * fflush: 3.93ms a line, about 1.9 lines a frame, roughly 7.5ms of
+         * blocking SD I/O every frame during which the game thread ran. That
+         * was never the intent and nothing recorded it, but it was real, and
+         * buffering the log removed it. Measured across three builds: guest
+         * calls fell from 3,875,018 to 2,510,759 over a run that was longer in
+         * wall clock, so the guest lost about 35% of its CPU. Two builds
+         * reported draws=0 modules=2 and nothing was wrong with either of them.
+         *
+         * So the yield is explicit now, and sized to what the flush used to
+         * provide. An accidental scheduling property that vanishes when an
+         * unrelated cost is optimised away is not something to leave implicit.
+         *
+         * The better answer is to stop the two threads sharing a core at all,
+         * which is a bigger change and wants its own measurement. */
+        svcSleepThread(8000000ULL); /* 8ms, replacing the flush's accidental yield */
+
         if (frame % 300 == 0) {
             /* Host-side headroom over time. If the graphics abort really is
              * memory starvation, this shrinks toward zero before it fires;
