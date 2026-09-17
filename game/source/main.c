@@ -334,7 +334,29 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_t_loglines = 0;
 
-static char g_log_buf[256 * 1024];
+/* 32KB, not the 256KB this started at.
+ *
+ * The 256KB build (Sep 17 2026 18:15:43) cut the flush cost exactly as
+ * intended -- 109,547ms to 1,243ms -- and the game got dramatically less far:
+ * one presented frame against 103, no archive opened at all, RSALLOC calls=0
+ * where the run before had 15, and 2.68M guest calls against 3.87M. The guest
+ * was advancing steadily the whole time, so it was not blocked; it took a
+ * different path very early and never reached pool allocation.
+ *
+ * The guest arena is PPC_MEM_SIZE of static BSS -- one gigabyte. An NRO
+ * already carrying that is not a place to add a quarter megabyte of BSS
+ * casually, and that is the only thing this change added beyond logic.
+ *
+ * This tests exactly that, one variable: same buffering, same flush interval,
+ * an eighth of the memory. At roughly 350 bytes a line, 32KB fills every ~90
+ * lines, so stdio flushes about 300 times a run instead of 27,854 -- still
+ * around a 90x reduction, and the earlier measurement says the remaining cost
+ * is small.
+ *
+ * If the game comes back, the BSS was the cause and this can be tuned upward
+ * against real numbers. If it does not, buffering itself is implicated and the
+ * 256KB was a red herring. */
+static char g_log_buf[32 * 1024];
 
 /* Force the log out now. For the paths that precede a crash: the deko3d error
  * sink and the unhandled-exception handler. Everything else is batched. */
@@ -3712,8 +3734,8 @@ int main(int argc, char *argv[]) {
      * line across 27,854 lines. It was not a share of the problem, it was the
      * problem, and it was in every measurement this project has ever taken.
      *
-     * 256KB so the largest checkpoint line (8KB) cannot force a flush on its
-     * own and a whole dump block fits comfortably. */
+     * Sized deliberately small: see g_log_buf's own comment for what happened
+     * when it was 256KB. */
     if (g_log) setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
 
     /* Before anything else costs time: if a newer build is published, fetch
