@@ -313,7 +313,29 @@ static volatile bool g_splash_already_shown = false;
  * something every hardware investigation depends on for evidence.
  * Declaring the attribute makes the compiler verify every call site. */
 __attribute__((format(printf, 1, 2)))
+/* How much of the run is spent writing this log.
+ *
+ * TIMING on 2026-09-17 accounted for only 8.8% of the game's 1890ms frame --
+ * copyup 6630ms, texup 8292ms, setcbup 196ms, waitidle 765ms against
+ * 96 x 1890 = 181,440ms total. The per-pixel upload loops are not the
+ * bottleneck, and fixing all four outright would move 0.38 fps to 0.42.
+ *
+ * checkpoint() fflushes every single line and a run writes about 27,500 of
+ * them to an SD card. If that is where the time goes, the frame rate being
+ * measured is substantially the cost of measuring it -- which would make every
+ * timing figure in this project's history suspect, and is worth establishing
+ * before anything is optimised on the strength of them. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ark_t_log = 0, g_ark_t_flush = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_t_loglines = 0;
+
 static void checkpoint(const char *fmt, ...) {
+    uint64_t t_cp0 = arkchemy_gx2_host_ticks();
     // Was 512 -- real, confirmed truncation found 2026-08-20: the main
     // periodic status line has grown one field at a time all session
     // (mem counters, four watch slots, two loopwatch entries) until it
@@ -368,7 +390,13 @@ static void checkpoint(const char *fmt, ...) {
 
     if (!g_log) return;
     fprintf(g_log, "%s\n", buf);
-    fflush(g_log);
+    /* The flush is timed apart from the formatting: formatting is cheap,
+     * an SD write is not, and they have completely different fixes. */
+    { uint64_t tf = arkchemy_gx2_host_ticks();
+      fflush(g_log);
+      g_ark_t_flush += arkchemy_gx2_host_ticks() - tf; }
+    g_ark_t_loglines++;
+    g_ark_t_log += arkchemy_gx2_host_ticks() - t_cp0;
 }
 
 // Real hook into ppc_runtime.h's ppc_unhandled_stub (see its own
@@ -5648,6 +5676,16 @@ int main(int argc, char *argv[]) {
                        * `frame`, all measured, not estimated. */
                       { unsigned long long fr = (unsigned long long)g_ark_t_frame;
                         unsigned nf = (unsigned)g_ark_t_frames;
+                        checkpoint("LOGCOST lines=%u log=%llums flush=%llums"
+                                   " -- time inside checkpoint(), and inside its"
+                                   " per-line fflush alone, against a frame total"
+                                   " of frames x frame_avg below. This log is"
+                                   " written to an SD card one flushed line at a"
+                                   " time; if that dominates, the measured frame"
+                                   " rate is mostly the cost of measuring it",
+                                   (unsigned)g_ark_t_loglines,
+                                   (unsigned long long)(g_ark_t_log / 1000000ull),
+                                   (unsigned long long)(g_ark_t_flush / 1000000ull));
                         checkpoint("TIMING frames=%u frame_avg=%llums | copyup=%llums"
                                    " texup=%llums setcbup=%llums waitidle=%llums"
                                    " -- wall clock, instrumented. frame_avg is the"
