@@ -5274,12 +5274,16 @@ int main(int argc, char *argv[]) {
                         for (unsigned i = 0; i < (unsigned)g_ark_texup_n && i < 6u
                              && tp < (int)sizeof(tb) - 44; i++)
                             tp += snprintf(tb + tp, sizeof(tb) - tp,
-                                           " [%ux%u %s 0x%08x/0x%08x]",
+                                           " [%ux%u pitch=%u mips=%u tile=%u"
+                                           " addr=0x%x %s 0x%08x]",
                                            (unsigned)g_ark_texup[i][0],
                                            (unsigned)g_ark_texup[i][1],
+                                           (unsigned)g_ark_texup[i][6],
+                                           (unsigned)g_ark_texup[i][7],
+                                           (unsigned)g_ark_texup[i][8],
+                                           (unsigned)g_ark_texup[i][5],
                                            g_ark_texup[i][2] ? "FLAT" : "varies",
-                                           (unsigned)g_ark_texup[i][3],
-                                           (unsigned)g_ark_texup[i][4]);
+                                           (unsigned)g_ark_texup[i][3]);
                         checkpoint("TEXUP n=%u flat=%u:%s -- textures uploaded for"
                                    " sampling, and whether each holds more than one"
                                    " value. The quads carry texture coordinates, so"
@@ -5298,7 +5302,39 @@ int main(int argc, char *argv[]) {
                                    " rasterise, so uploading it replaces the"
                                    " rendered frame with zeros",
                                    (unsigned)g_ark_tex_from_rt,
-                                   (unsigned)g_ark_tex_from_guest); }
+                                   (unsigned)g_ark_tex_from_guest);
+                        /* What the cache holds, to compare a miss against. */
+                        { char sb2[300]; int s2 = 0; sb2[0] = ' ';
+                          for (unsigned i = 0; i < ARKCHEMY_GX2_SURFACE_CACHE
+                               && s2 < (int)sizeof(sb2) - 44; i++) {
+                              if (!g_arkchemy_gx2.surf_used_at[i]) continue;
+                              s2 += snprintf(sb2 + s2, sizeof(sb2) - s2,
+                                             " [#%u %ux%u pitch=%u addr=0x%x]", i,
+                                             (unsigned)g_arkchemy_gx2.surf_desc[i][1],
+                                             (unsigned)g_arkchemy_gx2.surf_desc[i][2],
+                                             (unsigned)g_arkchemy_gx2.surf_desc[i][3],
+                                             (unsigned)g_arkchemy_gx2.surf_desc[i][0]);
+                          }
+                          checkpoint("SURFKEYS%s -- what the surface cache holds,"
+                                     " printed next to TEXUP so a texture that"
+                                     " missed can be compared against it field by"
+                                     " field. The lookup key is addr, width,"
+                                     " height, pitch and all four must match",
+                                     sb2[0] ? sb2 : " <none>"); }
+
+                        checkpoint("DRAWSIZE quad=%u small=%u mid=%u big=%u max=%u"
+                                   " -- draws by vertex count. All quad means"
+                                   " every draw in the run is a four-vertex"
+                                   " full-screen strip and no scene geometry was"
+                                   " ever submitted, which makes a black screen a"
+                                   " composite chain running correctly over a"
+                                   " scene that was never drawn rather than a"
+                                   " graphics fault",
+                                   (unsigned)g_ark_dsz_quad,
+                                   (unsigned)g_ark_dsz_small,
+                                   (unsigned)g_ark_dsz_mid,
+                                   (unsigned)g_ark_dsz_big,
+                                   (unsigned)g_ark_dsz_max); }
 
                       /* What the GPU pipeline actually did. Where the first
                        * zero falls is the answer, and unlike PEEK this cannot
