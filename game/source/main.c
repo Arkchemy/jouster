@@ -334,6 +334,14 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_t_loglines = 0;
 
+static char g_log_buf[256 * 1024];
+
+/* Force the log out now. For the paths that precede a crash: the deko3d error
+ * sink and the unhandled-exception handler. Everything else is batched. */
+static void checkpoint_flush(void) {
+    if (g_log) fflush(g_log);
+}
+
 static void checkpoint(const char *fmt, ...) {
     uint64_t t_cp0 = arkchemy_gx2_host_ticks();
     // Was 512 -- real, confirmed truncation found 2026-08-20: the main
@@ -390,10 +398,21 @@ static void checkpoint(const char *fmt, ...) {
 
     if (!g_log) return;
     fprintf(g_log, "%s\n", buf);
-    /* The flush is timed apart from the formatting: formatting is cheap,
-     * an SD write is not, and they have completely different fixes. */
+    /* Flushed in batches, not per line.
+     *
+     * The comment above about surviving an abort is still right, and it is why
+     * checkpoint_flush() exists and is called from the deko3d error sink and
+     * the unhandled-exception handler -- the two paths that actually precede a
+     * crash. What the per-line flush bought beyond those was the last few
+     * hundred lines of a hard kill that runs no handler at all, and it cost
+     * 60% of every run to buy it. The run tally already covers that case: a
+     * failed run cannot file its own report, so the NEXT run records the
+     * failure from run-open.txt.
+     *
+     * 256 lines is about two dump blocks, which bounds what a handler-less
+     * kill can lose. */
     { uint64_t tf = arkchemy_gx2_host_ticks();
-      fflush(g_log);
+      if ((g_ark_t_loglines % 256u) == 255u) fflush(g_log);
       g_ark_t_flush += arkchemy_gx2_host_ticks() - tf; }
     g_ark_t_loglines++;
     g_ark_t_log += arkchemy_gx2_host_ticks() - t_cp0;
@@ -437,6 +456,10 @@ static void gx2_debug_log_sink(const char *context, uint32_t result, const char 
     else
         checkpoint("[DKDEBUG] deko3d raised DkResult_%s (%u) in '%s': %s",
                    name, (unsigned)result, context, message);
+    /* deko3d's RaiseError is [[noreturn]]: the non-zero call above is the last
+     * thing that happens before the process dies. These lines are the whole
+     * reason the log was unbuffered, so they flush explicitly. */
+    checkpoint_flush();
 }
 
 /* Real hook into cafeos_coreinit_fs.h's own FSOpenFile logging -- see
@@ -3684,6 +3707,14 @@ int main(int argc, char *argv[]) {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/Jouster", 0777);
     g_log = fopen("sdmc:/switch/Jouster/game-results.log", "w");
+    /* Buffer it. Measured on 2026-09-17, the per-line fflush this replaces
+     * cost 109,547ms of a 183,752ms run -- 60% of the entire run, at 3.93ms a
+     * line across 27,854 lines. It was not a share of the problem, it was the
+     * problem, and it was in every measurement this project has ever taken.
+     *
+     * 256KB so the largest checkpoint line (8KB) cannot force a flush on its
+     * own and a whole dump block fits comfortably. */
+    if (g_log) setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
 
     /* Before anything else costs time: if a newer build is published, fetch
      * it, replace this NRO and hand straight over to it. Returning from main
