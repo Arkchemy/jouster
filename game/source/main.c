@@ -356,7 +356,31 @@ volatile uint32_t g_ark_t_loglines = 0;
  * If the game comes back, the BSS was the cause and this can be tuned upward
  * against real numbers. If it does not, buffering itself is implicated and the
  * 256KB was a red herring. */
-static char g_log_buf[32 * 1024];
+/* Heap, not BSS.
+ *
+ * This was a 32KB static array, and before that 256KB, and the difference
+ * between the last build that booted and the first that did not is now known
+ * to be in this file: checking out main.c and self_update.c at bf8f23b against
+ * an unchanged conquertron booted normally -- 14,400 frames, 287 draws, 7
+ * modules -- while HEAD does not.
+ *
+ * Logging behaviour is already ruled out on both counts: a run with the flush
+ * cadence restored (54 seconds of SD writes paid back) stayed broken, and so
+ * did a run with setvbuf skipped entirely and the stream unbuffered. What
+ * neither of those removed is the array itself, because a static declaration
+ * reserves its BSS whether or not anything ever calls setvbuf on it.
+ *
+ * PPC_MEM_SIZE is one gigabyte and the guest arena is a static array of
+ * exactly that, so this NRO's BSS is a gigabyte before anything else is in it.
+ * 32KB against that is 0.003%, which is why it was dismissed twice -- but it
+ * was dismissed on evidence that never tested it: 256KB and 32KB behaving
+ * identically rules out size-dependence between two non-zero values and says
+ * nothing about the array existing.
+ *
+ * Heap-allocating it adds one pointer to BSS instead of 32KB, and only when a
+ * buffered stream is actually wanted. */
+#define ARKCHEMY_LOG_BUF_SIZE (32u * 1024u)
+static char *g_log_buf;
 
 /* How many lines go into that buffer before it is pushed to the card, read
  * once at startup from sdmc:/switch/Jouster/log-flush-lines.txt. 0 means never
@@ -3790,15 +3814,19 @@ int main(int argc, char *argv[]) {
      *
      * So interval 1 is now genuinely the old behaviour: no setvbuf, no static
      * buffer in play, a flush on every line. */
-    if (g_log && g_log_flush_lines != 1u)
-        setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
+    if (g_log && g_log_flush_lines != 1u) {
+        g_log_buf = (char *)malloc(ARKCHEMY_LOG_BUF_SIZE);
+        if (g_log_buf) setvbuf(g_log, g_log_buf, _IOFBF, ARKCHEMY_LOG_BUF_SIZE);
+    }
 
     /* First line of every log, so a run can never be read without knowing
      * which setting produced it. */
     checkpoint("log flush interval: %u line(s)%s%s -- edit sdmc:/switch/Jouster/log-flush-lines.txt to change",
                g_log_flush_lines,
                g_log_flush_lines == 0u ? " (explicit flushes only)" : "",
-               g_log_flush_lines == 1u ? ", stream UNBUFFERED" : ", stream buffered 32KB");
+               g_log_flush_lines == 1u ? ", stream UNBUFFERED"
+                                       : (g_log_buf ? ", stream buffered 32KB on the heap"
+                                                    : ", stream UNBUFFERED (malloc failed)"));
 
     /* Before anything else costs time: if a newer build is published, fetch
      * it, replace this NRO and hand straight over to it. Returning from main
