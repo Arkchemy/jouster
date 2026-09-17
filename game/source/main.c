@@ -4245,7 +4245,18 @@ int main(int argc, char *argv[]) {
     int last_progress_frame = 0;
 
     int frame = 0;
-    while (appletMainLoop() && arkchemy_gx2_host_ticks() < g_test_deadline_ns) {
+    /* BISECT 2026-09-17: frame-bounded again, as the last good build had it.
+     *
+     * The regression is in this file -- bf8f23b's main.c and self_update.c
+     * boot, HEAD does not -- and everything about the logging has now been
+     * ruled out by a run that addressed it directly: cadence (54 seconds paid
+     * back, still broken), buffered stream (setvbuf skipped, still broken) and
+     * the BSS array (heap-allocated, still broken).
+     *
+     * That leaves the two harness changes and the merged PR's config read.
+     * This removes both harness changes at once -- the wall-clock bound here
+     * and the 8ms yield below -- which splits the remaining space in half. */
+    while (appletMainLoop() && frame < GAME_TEST_AUTO_EXIT_FRAMES) {
         g_current_frame = frame;
 
         if (g_ppc_fn_call_count != last_progress_calls) {
@@ -4388,7 +4399,10 @@ int main(int argc, char *argv[]) {
          *
          * The better answer is to stop the two threads sharing a core at all,
          * which is a bigger change and wants its own measurement. */
-        svcSleepThread(8000000ULL); /* 8ms, replacing the flush's accidental yield */
+        /* BISECT 2026-09-17: disabled with the wall-clock bound above. It
+         * measurably did nothing for the guest -- 2,514,226 calls against
+         * 2,510,759 without it -- so removing it costs no known benefit. */
+        /* svcSleepThread(8000000ULL); */
 
         if (frame % 300 == 0) {
             /* Host-side headroom over time. If the graphics abort really is
