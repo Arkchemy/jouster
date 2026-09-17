@@ -102,6 +102,13 @@ ok "built $(wc -c < "$NRO") bytes -- stamp ${stamp:-unknown}"
 # ftp-courier.sh for when the Switch has wifi and you would rather not plug
 # it in.
 case "${ARK_DELIVER:-mtp}" in
+none)
+    # For callers that want the NRO and nothing else -- CI, chiefly, where the
+    # console may not be plugged in and a build that compiled cleanly should
+    # not be reported as a failure because of it. Delivery is then a separate
+    # step that is allowed to fail on its own.
+    say "built, delivery skipped (ARK_DELIVER=none)"
+    ;;
 ftp)
     if [ ! -f tools/switch-address.txt ]; then
         say "built, not delivered"
