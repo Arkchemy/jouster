@@ -400,7 +400,23 @@ static char *g_log_buf;
  * across the whole sweep, and the only thing that moves between runs is when
  * the bytes leave. Set it to 1 and the boot either comes back or it does not,
  * and that answers which of the two it was in a single run. */
-static unsigned g_log_flush_lines = 256u;
+/* 1 -- unbuffered, flushed every line.
+ *
+ * 256 would save 60% of every run and it cannot be the default, because
+ * buffering the stream stops the game booting. Isolated on 2026-09-17 with the
+ * same binary and one text file changed:
+ *
+ *   79d8ac6c flush=256  frames=14400 draws=0   modules=2
+ *   79d8ac6c flush=1    frames=14400 draws=284 modules=7
+ *   79d8ac6c flush=1    frames=14400 draws=345 modules=7
+ *
+ * Why a buffered stdio stream affects the recompiled game is not known and is
+ * worth finding out -- the guest thread calls checkpoint() too, so the
+ * per-line fflush is a blocking syscall on that thread as well as the
+ * harness's, and a main-thread sleep did not substitute for it. Until then the
+ * setting stays where the game runs, and the card file is how the experiment
+ * gets repeated. */
+static unsigned g_log_flush_lines = 1u;
 
 /* Force the log out now. For the paths that precede a crash: the deko3d error
  * sink and the unhandled-exception handler. Everything else is batched. */
