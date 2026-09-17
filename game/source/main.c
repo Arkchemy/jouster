@@ -5644,6 +5644,26 @@ int main(int argc, char *argv[]) {
                           sho += (unsigned)snprintf(shbuf + sho, sizeof(shbuf) - sho, "]");
                       }
                       if (sho == 0) snprintf(shbuf, sizeof(shbuf), " <none>");
+                      /* Where the game's frame time actually goes. Shares of
+                       * `frame`, all measured, not estimated. */
+                      { unsigned long long fr = (unsigned long long)g_ark_t_frame;
+                        unsigned nf = (unsigned)g_ark_t_frames;
+                        checkpoint("TIMING frames=%u frame_avg=%llums | copyup=%llums"
+                                   " texup=%llums setcbup=%llums waitidle=%llums"
+                                   " -- wall clock, instrumented. frame_avg is the"
+                                   " game's own frame time, measured present to"
+                                   " present; the rest are totals across the run and"
+                                   " are shares of it. VPADRead is called once per"
+                                   " presented frame, so this rate is the game's"
+                                   " rate, and the boot sequence is not stalled, it"
+                                   " is running at a fraction of speed",
+                                   nf,
+                                   nf ? (fr / nf) / 1000000ull : 0ull,
+                                   (unsigned long long)(g_ark_t_copyup / 1000000ull),
+                                   (unsigned long long)(g_ark_t_texup / 1000000ull),
+                                   (unsigned long long)(g_ark_t_setcbup / 1000000ull),
+                                   (unsigned long long)(g_ark_t_waitidle / 1000000ull)); }
+
                       checkpoint("INPUT vpadreads=%u nosample=%u held_any=%u a_seen=%u"
                                  " kpadreads=%u -- whether the game reads the pad at"
                                  " all. reads=0 means it never asks, so a title or"
