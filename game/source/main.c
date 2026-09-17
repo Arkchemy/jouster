@@ -3774,13 +3774,31 @@ int main(int argc, char *argv[]) {
      *
      * Sized deliberately small: see g_log_buf's own comment for what happened
      * when it was 256KB, and for why the interval above is a file. */
-    if (g_log) setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
+    /* Interval 1 means unbuffered as well as flushed-per-line.
+     *
+     * Without this, setting the interval to 1 restores the flush CADENCE but
+     * leaves the stream fully buffered against a 32KB static array, so the run
+     * on 2026-09-17 that was meant to reproduce pre-18:15:43 behaviour did not:
+     * the buffer was present in both halves and only the fflush calls moved.
+     * It came back flush=54,068ms -- the cost restored -- and still draws=0
+     * modules=2, which exonerated the cadence and nothing else.
+     *
+     * The earlier note saying the BSS hypothesis was dead was wrong for the
+     * same reason. It rested on 256KB and 32KB behaving identically, which
+     * rules out size-dependence between those two and says nothing about the
+     * buffer existing at all. That is what this makes testable.
+     *
+     * So interval 1 is now genuinely the old behaviour: no setvbuf, no static
+     * buffer in play, a flush on every line. */
+    if (g_log && g_log_flush_lines != 1u)
+        setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
 
     /* First line of every log, so a run can never be read without knowing
      * which setting produced it. */
-    checkpoint("log flush interval: %u line(s)%s -- edit sdmc:/switch/Jouster/log-flush-lines.txt to change",
+    checkpoint("log flush interval: %u line(s)%s%s -- edit sdmc:/switch/Jouster/log-flush-lines.txt to change",
                g_log_flush_lines,
-               g_log_flush_lines == 0u ? " (explicit flushes only)" : "");
+               g_log_flush_lines == 0u ? " (explicit flushes only)" : "",
+               g_log_flush_lines == 1u ? ", stream UNBUFFERED" : ", stream buffered 32KB");
 
     /* Before anything else costs time: if a newer build is published, fetch
      * it, replace this NRO and hand straight over to it. Returning from main
