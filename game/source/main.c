@@ -382,6 +382,49 @@ volatile uint32_t g_ark_t_loglines = 0;
 #define ARKCHEMY_LOG_BUF_SIZE (32u * 1024u)
 static char *g_log_buf;
 
+/* GUESTHOT: a sampling profiler for the recompiled code.
+ *
+ * Measured 2026-09-17 on a run that worked: 102 game frames in 366 seconds,
+ * frame_avg 1801ms. Of that, the log accounts for 114s (31%) and the per-pixel
+ * upload loops 17s (5%). Roughly two thirds of every frame is unexplained, and
+ * the only thing left in it is the recompiled game itself.
+ *
+ * Every attempt to guess at that has been wrong, so this samples instead. The
+ * main loop reads g_ppc_current_pc once per host frame -- about 14,000 samples
+ * a run, taken from a thread the guest does not synchronise with, which is
+ * exactly what a sampling profiler wants. The table is small and scanned
+ * linearly because 64 compares at 39fps is free.
+ *
+ * g_ppc_current_pc is set on function entry, so a hit names the function the
+ * guest was last inside, not an instruction. That is the right granularity for
+ * "where is the time going" and the wrong one for "which line" -- worth stating
+ * so the numbers are not read as more precise than they are. */
+#define ARK_HOT_SLOTS 64u
+static uint32_t g_hot_pc[ARK_HOT_SLOTS];
+static uint32_t g_hot_n[ARK_HOT_SLOTS];
+static uint32_t g_hot_used;
+static uint32_t g_hot_samples;
+static uint32_t g_hot_missed;
+
+static void ark_hot_sample(uint32_t pc)
+{
+    uint32_t i;
+    g_hot_samples++;
+    for (i = 0; i < g_hot_used; i++) {
+        if (g_hot_pc[i] == pc) { g_hot_n[i]++; return; }
+    }
+    if (g_hot_used < ARK_HOT_SLOTS) {
+        g_hot_pc[g_hot_used] = pc;
+        g_hot_n[g_hot_used] = 1u;
+        g_hot_used++;
+        return;
+    }
+    /* Full. Counted rather than silently dropped, so a flat profile spread
+     * over more than 64 functions is visible as such instead of looking like
+     * a clean top-12. */
+    g_hot_missed++;
+}
+
 /* How many lines go into that buffer before it is pushed to the card, read
  * once at startup from sdmc:/switch/Jouster/log-flush-lines.txt. 0 means never
  * flush on a line boundary and leaves only the explicit flushes.
@@ -4273,6 +4316,7 @@ int main(int argc, char *argv[]) {
      * This removes both harness changes at once -- the wall-clock bound here
      * and the 8ms yield below -- which splits the remaining space in half. */
     while (appletMainLoop() && frame < GAME_TEST_AUTO_EXIT_FRAMES) {
+        ark_hot_sample(g_ppc_current_pc);
         g_current_frame = frame;
 
         if (g_ppc_fn_call_count != last_progress_calls) {
@@ -5934,6 +5978,35 @@ int main(int argc, char *argv[]) {
                                    (unsigned long long)(g_ark_t_texup / 1000000ull),
                                    (unsigned long long)(g_ark_t_setcbup / 1000000ull),
                                    (unsigned long long)(g_ark_t_waitidle / 1000000ull)); }
+
+                      /* Where the guest's own time goes, by sample count. */
+                      { char hb[420]; int hp = 0; hb[0] = ' ';
+                        unsigned order[ARK_HOT_SLOTS]; unsigned hn = g_hot_used;
+                        for (unsigned i = 0; i < hn; i++) order[i] = i;
+                        for (unsigned i = 1; i < hn; i++) {
+                            unsigned k = order[i], j = i;
+                            while (j && g_hot_n[order[j-1]] < g_hot_n[k]) { order[j] = order[j-1]; j--; }
+                            order[j] = k;
+                        }
+                        for (unsigned i = 0; i < hn && i < 12u && hp < (int)sizeof(hb) - 26; i++) {
+                            unsigned k = order[i];
+                            hp += snprintf(hb + hp, sizeof(hb) - hp, " [0x%x %u%%]",
+                                           (unsigned)g_hot_pc[k],
+                                           g_hot_samples ? (unsigned)((g_hot_n[k] * 100ull) / g_hot_samples) : 0u);
+                        }
+                        checkpoint("GUESTHOT samples=%u distinct=%u overflow=%u:%s"
+                                   " -- the guest function each sample caught it"
+                                   " inside, hottest first, sampled once per host"
+                                   " frame from a thread it does not synchronise"
+                                   " with. g_ppc_current_pc is set on function"
+                                   " entry, so these name functions rather than"
+                                   " instructions. overflow>0 means the profile is"
+                                   " spread over more than %u functions and this is"
+                                   " not the whole picture",
+                                   (unsigned)g_hot_samples, (unsigned)g_hot_used,
+                                   (unsigned)g_hot_missed,
+                                   hb[0] ? hb : " <none>",
+                                   (unsigned)ARK_HOT_SLOTS); }
 
                       checkpoint("INPUT vpadreads=%u nosample=%u held_any=%u a_seen=%u"
                                  " kpadreads=%u -- whether the game reads the pad at"
