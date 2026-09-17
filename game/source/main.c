@@ -4084,7 +4084,27 @@ int main(int argc, char *argv[]) {
             fclose(cfg);
         }
     }
+    /* A frame budget derived from seconds by assuming 60fps, which this loop
+     * has never actually run at.
+     *
+     * Kept because the dumps, the spinner and the stall timeout are all
+     * expressed in frames, but it is no longer what ends the run -- see
+     * g_test_deadline_ns below. Measured on 2026-09-17, 14,400 frames took
+     * 181 seconds, so "240 seconds" has meant about 181 for as long as this
+     * has existed, and the number moved the moment anything changed the
+     * loop's speed. */
     const int GAME_TEST_AUTO_EXIT_FRAMES = test_seconds * 60;
+    /* What actually ends the run: elapsed wall clock.
+     *
+     * The per-line log flush was 60% of every run, and removing it made the
+     * loop so much faster that the same 14,400 frames elapsed in a fraction of
+     * the time -- so the guest thread got a fraction of the wall clock to boot
+     * in, and two builds in a row reported draws=0 modules=2 while doing
+     * nothing wrong. A frame-count budget silently rewards a slow host loop
+     * and punishes a fast one, which is exactly backwards, and makes every run
+     * before and after an optimisation incomparable. */
+    const uint64_t g_test_deadline_ns = arkchemy_gx2_host_ticks()
+                                        + (uint64_t)test_seconds * 1000000000ull;
     checkpoint("test duration: %d second(s) (%d frames) -- edit sdmc:/switch/Jouster/test-seconds.txt to change",
                test_seconds, GAME_TEST_AUTO_EXIT_FRAMES);
 
@@ -4135,7 +4155,7 @@ int main(int argc, char *argv[]) {
     int last_progress_frame = 0;
 
     int frame = 0;
-    while (appletMainLoop() && frame < GAME_TEST_AUTO_EXIT_FRAMES) {
+    while (appletMainLoop() && arkchemy_gx2_host_ticks() < g_test_deadline_ns) {
         g_current_frame = frame;
 
         if (g_ppc_fn_call_count != last_progress_calls) {
@@ -5728,7 +5748,22 @@ int main(int argc, char *argv[]) {
                       /* Where the game's frame time actually goes. Shares of
                        * `frame`, all measured, not estimated. */
                       { unsigned long long fr = (unsigned long long)g_ark_t_frame;
+                        unsigned long long elapsed_ms =
+                            (arkchemy_gx2_host_ticks()
+                             - (g_test_deadline_ns
+                                - (uint64_t)test_seconds * 1000000000ull))
+                            / 1000000ull;
                         unsigned nf = (unsigned)g_ark_t_frames;
+                        checkpoint("RUNRATE hostframes=%u elapsed=%llums hostfps=%llu"
+                                   " -- the host loop's own rate. The run used to"
+                                   " end after test_seconds*60 frames, assuming"
+                                   " this was 60, and it never was: 14,400 frames"
+                                   " took 181s, so every run was shorter than it"
+                                   " claimed and got shorter still whenever the"
+                                   " loop sped up. The run now ends on elapsed"
+                                   " time, so builds are comparable",
+                                   (unsigned)frame, elapsed_ms,
+                                   elapsed_ms ? ((unsigned long long)frame * 1000ull) / elapsed_ms : 0ull);
                         checkpoint("LOGCOST lines=%u log=%llums flush=%llums"
                                    " -- time inside checkpoint(), and inside its"
                                    " per-line fflush alone, against a frame total"
