@@ -21,17 +21,48 @@ warn() { printf '\033[33m!!  %s\033[0m\n' "$1"; }
 
 [ -n "${1:-}" ] && printf '%s\n' "$1" > tools/switch-address.txt
 
-DKP="${DEVKITPRO:-/c/devkitPro}"
-
 # ---------------------------------------------------------------- 1. toolchain
-if [ -x "$DKP/devkitA64/bin/aarch64-none-elf-gcc.exe" ]; then
+# $DEVKITPRO is tested, not trusted. devkitPro's Windows installer sets it to
+# /opt/devkitpro as a user environment variable, which is correct inside its
+# own msys2 and meaningless in Git Bash, where that path sits under the Git
+# installation and does not exist. This script used to take the value on faith
+# and stop with "devkitA64 still missing" on a machine whose toolchain was
+# complete and working -- setup-windows.ps1, which hardcodes C:\devkitPro, had
+# just finished confirming every library and tool in the same run. Found
+# 2026-09-17, on the first build after a fresh Git Bash.
+#
+# So try each candidate and keep the first one that actually holds a compiler.
+# A Windows-style path is converted first, since -x cannot read one.
+dkp_has_gcc() {
+    [ -n "$1" ] && [ -x "$1/devkitA64/bin/aarch64-none-elf-gcc.exe" ]
+}
+dkp_unix() {
+    case "$1" in
+        [A-Za-z]:[\\/]*) cygpath -u "$1" 2>/dev/null || printf '%s\n' "$1" ;;
+        *)                 printf '%s\n' "$1" ;;
+    esac
+}
+dkp_find() {
+    for cand in "${DEVKITPRO:-}" /c/devkitPro /c/devkitpro; do
+        [ -n "$cand" ] || continue
+        cand="$(dkp_unix "$cand")"
+        if dkp_has_gcc "$cand"; then printf '%s\n' "$cand"; return 0; fi
+    done
+    return 1
+}
+
+DKP="$(dkp_find || true)"
+if [ -n "$DKP" ]; then
     ok "devkitPro already installed at $DKP"
 else
     say "installing devkitPro -- tick 'Switch Development' in the installer"
     powershell -ExecutionPolicy Bypass -File "$(cygpath -w "$ROOT/tools/setup-windows.ps1")"
-    [ -x "$DKP/devkitA64/bin/aarch64-none-elf-gcc.exe" ] || {
+    DKP="$(dkp_find || true)"
+    [ -n "$DKP" ] || {
         warn "devkitA64 still missing -- stopping here rather than failing at the link step"
+        warn "looked in: ${DEVKITPRO:-(DEVKITPRO unset)}, /c/devkitPro, /c/devkitpro"
         exit 1; }
+    ok "devkitPro installed at $DKP"
 fi
 
 export DEVKITPRO="$DKP"
