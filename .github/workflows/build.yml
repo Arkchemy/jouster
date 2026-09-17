@@ -1,0 +1,106 @@
+# Builds Jouster on the self-hosted Windows runner and, if the console is
+# plugged in, couriers it over.
+#
+# Why self-hosted rather than a GitHub runner: game/source/generated_*.c is the
+# recompiled output of a real, legally-dumped tfbGame_cafe.rpx. It is
+# deliberately not in git (see LICENSE and .gitignore), it is ~308MB, and it
+# cannot be uploaded anywhere. Only a machine that already holds the dump can
+# build this, so the build goes to that machine.
+#
+# For the same reason the NRO is not uploaded as an artifact. Artifacts on a
+# public repository are downloadable by anyone who can read it, and a built
+# Jouster.nro IS generated game output -- exactly what LICENSE section 6 says
+# must not be redistributed. The build stays on the machine that made it and
+# reaches the console over USB. What this workflow publishes is the fact that
+# it compiled, and the build stamp.
+#
+# There is no pull_request trigger, on purpose. This repository is public and a
+# self-hosted runner executes whatever the workflow says; a fork-PR trigger
+# would let anyone run code on the owner's PC. Keep "Fork pull request
+# workflows from outside collaborators" set to require approval in
+# Settings -> Actions, and do not add pull_request here.
+name: build
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'test-results/**'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      deliver:
+        description: 'Courier the NRO to the console over MTP'
+        type: boolean
+        default: true
+
+concurrency:
+  # One build at a time. They share a working tree and a build directory, so
+  # two at once would interleave object files and produce an NRO belonging to
+  # neither commit.
+  group: jouster-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, windows, arkchemy]
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The existing working checkout on the build machine, which is where the
+      # generated sources and the incremental build directory live. Set as a
+      # repository variable by tools/setup-runner.ps1; the default is only a
+      # fallback for a hand-configured runner.
+      ARK_REPO: ${{ vars.ARK_REPO || 'C:/Users/necro/Documents/Github/Arkchemy/jouster' }}
+
+    steps:
+      - name: Point the working checkout at this commit
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          echo "building ${GITHUB_SHA} in $ARK_REPO"
+          git fetch origin --prune
+          # checkout refuses rather than destroys if there is conflicting local
+          # work, and --ff-only refuses rather than merging. A build machine
+          # that quietly threw away an edit would be worse than one that stops.
+          git checkout "${GITHUB_REF_NAME}"
+          git merge --ff-only "origin/${GITHUB_REF_NAME}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}" || {
+            echo "HEAD is not the pushed commit -- something else moved this checkout" >&2
+            git log --oneline -3 >&2
+            exit 1; }
+
+      - name: Build
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          ARK_DELIVER=none ./tools/windows-all.sh
+
+      - name: Record what was built
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          nro="game/Jouster.nro"
+          stamp="$(grep -a -o 'ARKCHEMY_BUILD [A-Za-z0-9 :]*' "$nro" | head -1 | sed 's/ARKCHEMY_BUILD //')"
+          {
+            echo "### Jouster \`${stamp:-unknown}\`"
+            echo ""
+            echo "\`$(wc -c < "$nro")\` bytes from \`$(git rev-parse --short HEAD)\`, at \`$nro\` on the build machine."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deliver over MTP
+        # Best effort: the console is not always plugged in, and a build that
+        # compiled is still a build. The summary says whether it landed.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deliver }}
+        continue-on-error: true
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          if powershell -ExecutionPolicy Bypass -File "$(cygpath -w tools/mtp-courier.ps1)" both; then
+            echo "Delivered to the console." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Not delivered -- the console was not in its transfer app. The build is fine; re-run this workflow with the console in Haze/hbmenu." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
