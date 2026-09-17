@@ -5635,8 +5635,8 @@ int main(int argc, char *argv[]) {
                         char gc[240]; int gp = 0; gc[0] = ' ';
                         for (unsigned i = 0; i < ARKCHEMY_GX2_NCOUNTERS
                              && gp < (int)sizeof(gc) - 32; i++)
-                            gp += snprintf(gc + gp, sizeof(gc) - gp, " %s=%u",
-                                           cn[i], (unsigned)g_ark_gpucnt[i]);
+                            gp += snprintf(gc + gp, sizeof(gc) - gp, " %s=%llu",
+                                           cn[i], (unsigned long long)g_ark_gpucnt[i]);
                         checkpoint("GPUCNT frames=%u%s -- running GPU pipeline"
                                    " totals. vertices 0: the draw never reached"
                                    " the GPU. vsinv 0: vertices fetched, vertex"
