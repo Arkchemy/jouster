@@ -5656,7 +5656,8 @@ int main(int argc, char *argv[]) {
                     { char isbuf[6*96]; unsigned iso = 0; isbuf[0] = 0;
                       for (unsigned i = 0; i < (unsigned)g_ark_igs_n && iso + 96 < sizeof(isbuf); i++)
                           iso += (unsigned)snprintf(isbuf + iso, sizeof(isbuf) - iso,
-                                                    "[%s(%u) ret=0x%x iters=%u] ",
+                                                    "[stream%u %s(%u) ret=0x%x iters=%u] ",
+                                                    (unsigned)g_ark_igs_stream[i],
                                                     ark_igz_state_name(g_ark_igs_state[i]),
                                                     (unsigned)g_ark_igs_state[i],
                                                     (unsigned)g_ark_igs_ret[i],
