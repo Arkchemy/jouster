@@ -358,6 +358,26 @@ volatile uint32_t g_ark_t_loglines = 0;
  * 256KB was a red herring. */
 static char g_log_buf[32 * 1024];
 
+/* How many lines go into that buffer before it is pushed to the card, read
+ * once at startup from sdmc:/switch/Jouster/log-flush-lines.txt. 0 means never
+ * flush on a line boundary and leaves only the explicit flushes.
+ *
+ * It is a file rather than a constant because of what it has to separate.
+ * Every build since Sep 17 2026 18:15:43 carries both this buffer in BSS and
+ * batched flushing, and the boot regression that arrived with it -- draws=0,
+ * modules=2, one presented frame against 103 -- has now survived shrinking the
+ * buffer 256KB to 32KB and handing the game thread an explicit 8ms a frame.
+ * Those two runs cleared buffer size and scheduling. Neither cleared batching
+ * itself, because no build has ever had this buffer present and flushed per
+ * line at the same time, so "the memory" and "the timing" have never been
+ * apart.
+ *
+ * With the interval on the card they are: one binary, byte-identical BSS
+ * across the whole sweep, and the only thing that moves between runs is when
+ * the bytes leave. Set it to 1 and the boot either comes back or it does not,
+ * and that answers which of the two it was in a single run. */
+static unsigned g_log_flush_lines = 256u;
+
 /* Force the log out now. For the paths that precede a crash: the deko3d error
  * sink and the unhandled-exception handler. Everything else is batched. */
 static void checkpoint_flush(void) {
@@ -434,7 +454,9 @@ static void checkpoint(const char *fmt, ...) {
      * 256 lines is about two dump blocks, which bounds what a handler-less
      * kill can lose. */
     { uint64_t tf = arkchemy_gx2_host_ticks();
-      if ((g_ark_t_loglines % 256u) == 255u) fflush(g_log);
+      if (g_log_flush_lines &&
+          (g_ark_t_loglines % g_log_flush_lines) == g_log_flush_lines - 1u)
+          fflush(g_log);
       g_ark_t_flush += arkchemy_gx2_host_ticks() - tf; }
     g_ark_t_loglines++;
     g_ark_t_log += arkchemy_gx2_host_ticks() - t_cp0;
@@ -3671,9 +3693,11 @@ extern const char ark_build_marker[];
 void arkchemy_upload_log(void (*report)(const char *fmt, ...));
 int arkchemy_self_update(void (*report)(const char *fmt, ...));
 int arkchemy_loop_continue(void (*report)(const char *fmt, ...));
-void arkchemy_run_tally_open(void (*report)(const char *fmt, ...));
+void arkchemy_run_tally_open(void (*report)(const char *fmt, ...),
+                             unsigned flush_lines);
 void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
-                              int frames, unsigned draws, unsigned modules);
+                              int frames, unsigned draws, unsigned modules,
+                              unsigned flush_lines);
 
 static void upload_report(const char *fmt, ...)
 {
@@ -3729,14 +3753,34 @@ int main(int argc, char *argv[]) {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/Jouster", 0777);
     g_log = fopen("sdmc:/switch/Jouster/game-results.log", "w");
+
+    /* The flush interval, read before the first checkpoint() so that one
+     * interval covers the whole run, the tally line included. Missing or
+     * unparseable leaves the 256 default, so a card without the file behaves
+     * exactly as this build did before it existed. */
+    {
+        FILE *cfg = fopen("sdmc:/switch/Jouster/log-flush-lines.txt", "r");
+        if (cfg) {
+            unsigned parsed = 0;
+            if (fscanf(cfg, "%u", &parsed) == 1) g_log_flush_lines = parsed;
+            fclose(cfg);
+        }
+    }
+
     /* Buffer it. Measured on 2026-09-17, the per-line fflush this replaces
      * cost 109,547ms of a 183,752ms run -- 60% of the entire run, at 3.93ms a
      * line across 27,854 lines. It was not a share of the problem, it was the
      * problem, and it was in every measurement this project has ever taken.
      *
      * Sized deliberately small: see g_log_buf's own comment for what happened
-     * when it was 256KB. */
+     * when it was 256KB, and for why the interval above is a file. */
     if (g_log) setvbuf(g_log, g_log_buf, _IOFBF, sizeof(g_log_buf));
+
+    /* First line of every log, so a run can never be read without knowing
+     * which setting produced it. */
+    checkpoint("log flush interval: %u line(s)%s -- edit sdmc:/switch/Jouster/log-flush-lines.txt to change",
+               g_log_flush_lines,
+               g_log_flush_lines == 0u ? " (explicit flushes only)" : "");
 
     /* Before anything else costs time: if a newer build is published, fetch
      * it, replace this NRO and hand straight over to it. Returning from main
@@ -3751,7 +3795,7 @@ int main(int argc, char *argv[]) {
     /* Deliberately after the self-update handover: a run that chain-loads a
      * different build is not a run of this one, and counting it would put a
      * FAIL against a build that was never given a chance to fail. */
-    arkchemy_run_tally_open(checkpoint);
+    arkchemy_run_tally_open(checkpoint, g_log_flush_lines);
 
     ppc_set_unhandled_log(unhandled_log_sink);
     /* Before GX2Init, which is where the device (and its cbDebug) is created.
@@ -6844,7 +6888,8 @@ int main(int argc, char *argv[]) {
      * on a good run is worse than no tally. */
     arkchemy_run_tally_close(checkpoint, frame,
                              (unsigned)g_ark_draw_done,
-                             (unsigned)g_ark_shdmod_n);
+                             (unsigned)g_ark_shdmod_n,
+                             g_log_flush_lines);
 
     // Real, deliberate choice: don't threadWaitForExit/threadClose here
     // if the game thread never finished -- it may be legitimately stuck
