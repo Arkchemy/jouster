@@ -5644,6 +5644,20 @@ int main(int argc, char *argv[]) {
                           sho += (unsigned)snprintf(shbuf + sho, sizeof(shbuf) - sho, "]");
                       }
                       if (sho == 0) snprintf(shbuf, sizeof(shbuf), " <none>");
+                      checkpoint("INPUT vpadreads=%u nosample=%u held_any=%u a_seen=%u"
+                                 " kpadreads=%u -- whether the game reads the pad at"
+                                 " all. reads=0 means it never asks, so a title or"
+                                 " legal screen is not what it is waiting on and the"
+                                 " synthetic A press main.c injects is irrelevant."
+                                 " reads high with a_seen>0 means it is handed the"
+                                 " press every three seconds and does not act on it,"
+                                 " which is a different problem entirely",
+                                 (unsigned)g_ark_in_reads,
+                                 (unsigned)g_ark_in_nosample,
+                                 (unsigned)g_ark_in_held_any,
+                                 (unsigned)g_ark_in_a_seen,
+                                 (unsigned)g_ark_in_kpad);
+
                       checkpoint("SSHIST%s -- each work item's status sequence with the"
                                  " lr that set each one. isFileWorkFinished treats"
                                  " anything above 2 as finished-with-error, and 1->4 is"
