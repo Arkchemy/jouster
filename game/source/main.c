@@ -501,6 +501,8 @@ static void ark_hot_sample(uint32_t pc)
  * setting stays where the game runs, and the card file is how the experiment
  * gets repeated. */
 static unsigned g_log_flush_lines = 1u;
+/* 0 = leave newlib's own buffering alone, which is what boots. */
+static unsigned g_log_buf_bytes = 0u;
 
 /* Force the log out now. For the paths that precede a crash: the deko3d error
  * sink and the unhandled-exception handler. Everything else is batched. */
@@ -3923,19 +3925,39 @@ int main(int argc, char *argv[]) {
      *
      * So interval 1 is now genuinely the old behaviour: no setvbuf, no static
      * buffer in play, a flush on every line. */
-    if (g_log && g_log_flush_lines != 1u) {
-        g_log_buf = (char *)malloc(ARKCHEMY_LOG_BUF_SIZE);
-        if (g_log_buf) setvbuf(g_log, g_log_buf, _IOFBF, ARKCHEMY_LOG_BUF_SIZE);
+    /* Buffer size from the card, independent of the flush interval.
+     *
+     * 0 means do not call setvbuf at all. That is the configuration the game
+     * boots under, and it was labelled "UNBUFFERED" here for three days, which
+     * is wrong: skipping setvbuf leaves newlib's OWN default buffering, about
+     * a kilobyte, allocated by stdio on first write. The stream has never been
+     * unbuffered in any run.
+     *
+     * So the comparison that matters was never buffered against unbuffered. It
+     * is newlib's ~1KB against the 32KB set here, and every conclusion drawn
+     * from the word "unbuffered" was drawn from a mislabel of my own making.
+     *
+     * Size is a dial now so it can be swept from the card on one binary. */
+    {
+        FILE *bcfg = fopen("sdmc:/switch/Jouster/log-buf-bytes.txt", "r");
+        if (bcfg) {
+            unsigned parsed = 0;
+            if (fscanf(bcfg, "%u", &parsed) == 1) g_log_buf_bytes = parsed;
+            fclose(bcfg);
+        }
+    }
+    if (g_log && g_log_buf_bytes >= 64u) {
+        g_log_buf = (char *)malloc(g_log_buf_bytes);
+        if (g_log_buf) setvbuf(g_log, g_log_buf, _IOFBF, g_log_buf_bytes);
     }
 
     /* First line of every log, so a run can never be read without knowing
      * which setting produced it. */
-    checkpoint("log flush interval: %u line(s)%s%s -- edit sdmc:/switch/Jouster/log-flush-lines.txt to change",
+    checkpoint("log flush interval: %u line(s), buffer %u bytes%s -- edit"
+               " log-flush-lines.txt and log-buf-bytes.txt to change",
                g_log_flush_lines,
-               g_log_flush_lines == 0u ? " (explicit flushes only)" : "",
-               g_log_flush_lines == 1u ? ", stream UNBUFFERED"
-                                       : (g_log_buf ? ", stream buffered 32KB on the heap"
-                                                    : ", stream UNBUFFERED (malloc failed)"));
+               g_log_buf ? g_log_buf_bytes : 0u,
+               g_log_buf ? ", setvbuf buffer" : ", newlib default buffer (no setvbuf)");
 
     /* Before anything else costs time: if a newer build is published, fetch
      * it, replace this NRO and hand straight over to it. Returning from main
