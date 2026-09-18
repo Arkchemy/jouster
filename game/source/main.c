@@ -5667,10 +5667,11 @@ int main(int argc, char *argv[]) {
                       checkpoint("RETIRE deferred=%u drained=%u peak=%u leaked=%u"
                                  " -- GPU memory blocks replaced mid-frame and"
                                  " held until after the submit they were still"
-                                 " recorded into. A standing deferred-drained"
-                                 " gap no larger than peak is the frame in"
-                                 " flight; anything larger is a leak, and"
-                                 " leaked>0 names the list as too small",
+                                 " recorded into. The list is per command slot"
+                                 " now, so up to SLOTS buckets are in flight and"
+                                 " a standing deferred-drained gap is healthy up"
+                                 " to SLOTS x peak, not peak. leaked>0 names the"
+                                 " list as too small",
                                  (unsigned)g_ark_ret_deferred,
                                  (unsigned)g_ark_ret_drained,
                                  (unsigned)g_ark_ret_peak,
