@@ -500,9 +500,12 @@ static void ark_hot_sample(uint32_t pc)
  * harness's, and a main-thread sleep did not substitute for it. Until then the
  * setting stays where the game runs, and the card file is how the experiment
  * gets repeated. */
-static unsigned g_log_flush_lines = 1u;
-/* 0 = leave newlib's own buffering alone, which is what boots. */
-static unsigned g_log_buf_bytes = 0u;
+static unsigned g_log_flush_lines = 256u;
+/* 32KB flushed every 256 lines: 4,429ms against 138,775ms for the per-line
+ * path, with draws per frame unchanged at 2.04. This is the configuration that
+ * would not boot yesterday and does today, for reasons nobody established, so
+ * both dials stay overridable from the card. */
+static unsigned g_log_buf_bytes = 32768u;
 
 /* Force the log out now. For the paths that precede a crash: the deko3d error
  * sink and the unhandled-exception handler. Everything else is batched. */
@@ -4376,18 +4379,20 @@ int main(int argc, char *argv[]) {
     int last_progress_frame = 0;
 
     int frame = 0;
-    /* BISECT 2026-09-17: frame-bounded again, as the last good build had it.
+    /* Wall clock again, as it was before the bisection.
      *
-     * The regression is in this file -- bf8f23b's main.c and self_update.c
-     * boot, HEAD does not -- and everything about the logging has now been
-     * ruled out by a run that addressed it directly: cadence (54 seconds paid
-     * back, still broken), buffered stream (setvbuf skipped, still broken) and
-     * the BSS array (heap-allocated, still broken).
+     * Switched to a frame count on 2026-09-17 so the buffering bisection could
+     * match the last known-good build exactly, and then left that way. The
+     * buffered run today shows why it has to go back: the log cost fell from
+     * 138,775ms to 4,429ms and the guest got LESS done -- 3,969 frames against
+     * 6,318 -- because 14,400 host frames now elapse in 266s instead of 394s.
+     * frame_avg was unchanged at 56ms, so the game did not slow down; it was
+     * handed a third less wall clock.
      *
-     * That leaves the two harness changes and the merged PR's config read.
-     * This removes both harness changes at once -- the wall-clock bound here
-     * and the 8ms yield below -- which splits the remaining space in half. */
-    while (appletMainLoop() && frame < GAME_TEST_AUTO_EXIT_FRAMES) {
+     * A frame-count budget turns every optimisation into a shorter run rather
+     * than more progress, which is backwards, and this is the second time it
+     * has caught exactly that. */
+    while (appletMainLoop() && arkchemy_gx2_host_ticks() < g_test_deadline_ns) {
         ark_hot_sample(g_ppc_current_pc);
         g_current_frame = frame;
 
