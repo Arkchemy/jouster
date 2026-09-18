@@ -334,6 +334,33 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_t_loglines = 0;
 
+/* Which thread pays for the log.
+ *
+ * Buffering checkpoint()'s stream stops the game booting. Isolated on
+ * identical binaries with one card setting changed, and unexplained after
+ * three days -- cadence, BSS, run length and main-thread scheduling each ruled
+ * out by a measurement that addressed it. It is 39% of every run.
+ *
+ * The one lead never tested: the GUEST thread calls checkpoint() too, so the
+ * per-line fflush is a blocking syscall on that thread as well as the
+ * harness's. If nearly every call turns out to be the main thread, that lead
+ * dies and filesystem contention becomes the leading explanation -- the game
+ * reads its archives off the same SD card the log is being written to.
+ *
+ * Counted rather than reasoned about, because four reasoned answers have been
+ * wrong already. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_log_main = 0, g_ark_log_guest = 0;
+/* Set once at the top of game_thread_func. Comparing TLS pointers identifies
+ * the caller without a thread-local, which this toolchain is awkward about. */
+static void *g_game_tls = NULL;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ark_log_t_main = 0, g_ark_log_t_guest = 0;
+
 /* 32KB, not the 256KB this started at.
  *
  * The 256KB build (Sep 17 2026 18:15:43) cut the flush cost exactly as
@@ -399,7 +426,21 @@ static char *g_log_buf;
  * guest was last inside, not an instruction. That is the right granularity for
  * "where is the time going" and the wrong one for "which line" -- worth stating
  * so the numbers are not read as more precise than they are. */
-#define ARK_HOT_SLOTS 64u
+/* 512, not 64.
+ *
+ * At -O0 the profile was concentrated -- the metafield system alone was 28%
+ * across five entries -- and 64 slots held it comfortably with 34% overflow.
+ * At -O2 those small leaves inlined into their callers and the time
+ * redistributed, and the same table came back
+ *
+ *   samples=14341 distinct=64 overflow=11554
+ *
+ * 81% past the end, two functions above 0% and the rest rounding to nothing.
+ * That is not a flat profile being reported, it is a table too small to report
+ * one, and the two are easy to confuse. 512 is cheap -- a linear scan of 512
+ * u32 pairs once per host frame at 36fps is nothing -- and the overflow count
+ * stays so the next reader can tell which they are looking at. */
+#define ARK_HOT_SLOTS 512u
 static uint32_t g_hot_pc[ARK_HOT_SLOTS];
 static uint32_t g_hot_n[ARK_HOT_SLOTS];
 static uint32_t g_hot_used;
@@ -542,7 +583,15 @@ static void checkpoint(const char *fmt, ...) {
           fflush(g_log);
       g_ark_t_flush += arkchemy_gx2_host_ticks() - tf; }
     g_ark_t_loglines++;
-    g_ark_t_log += arkchemy_gx2_host_ticks() - t_cp0;
+    { uint64_t spent = arkchemy_gx2_host_ticks() - t_cp0;
+      g_ark_t_log += spent;
+      /* The game thread is the one created in main(); everything else that
+       * logs is the harness. */
+      if (g_game_tls != NULL && armGetTls() == g_game_tls) {
+          g_ark_log_guest++; g_ark_log_t_guest += spent;
+      } else {
+          g_ark_log_main++;  g_ark_log_t_main  += spent;
+      } }
 }
 
 // Real hook into ppc_runtime.h's ppc_unhandled_stub (see its own
@@ -2488,6 +2537,7 @@ static PpcSharedMemory g_shared;
 // recompiled game entry point (see recomp's own --entry-alias). Runs
 // on its own real thread (see this file's own top comment for why).
 static void game_thread_func(void *arg) {
+    g_game_tls = armGetTls(); /* see g_ark_log_guest */
     (void)arg;
     g_game_thread_started = true;
 
@@ -5954,7 +6004,21 @@ int main(int argc, char *argv[]) {
                                    " time, so builds are comparable",
                                    (unsigned)frame, elapsed_ms,
                                    elapsed_ms ? ((unsigned long long)frame * 1000ull) / elapsed_ms : 0ull);
-                        checkpoint("LOGCOST lines=%u log=%llums flush=%llums"
+                        checkpoint("LOGTHREAD main=%u (%llums) guest=%u (%llums)"
+                                 " -- which thread pays for the log. The guest"
+                                 " thread calls checkpoint() too, so the"
+                                 " per-line fflush blocks it as well as the"
+                                 " harness. If guest is near zero, the"
+                                 " buffering phenomenon is not about blocking"
+                                 " that thread and filesystem contention with"
+                                 " the game's own archive reads becomes the"
+                                 " leading explanation",
+                                 (unsigned)g_ark_log_main,
+                                 (unsigned long long)(g_ark_log_t_main / 1000000ull),
+                                 (unsigned)g_ark_log_guest,
+                                 (unsigned long long)(g_ark_log_t_guest / 1000000ull));
+
+                      checkpoint("LOGCOST lines=%u log=%llums flush=%llums"
                                    " -- time inside checkpoint(), and inside its"
                                    " per-line fflush alone, against a frame total"
                                    " of frames x frame_avg below. This log is"
@@ -5989,7 +6053,7 @@ int main(int argc, char *argv[]) {
                             while (j && g_hot_n[order[j-1]] < g_hot_n[k]) { order[j] = order[j-1]; j--; }
                             order[j] = k;
                         }
-                        for (unsigned i = 0; i < hn && i < 12u && hp < (int)sizeof(hb) - 26; i++) {
+                        for (unsigned i = 0; i < hn && i < 16u && hp < (int)sizeof(hb) - 26; i++) {
                             unsigned k = order[i];
                             hp += snprintf(hb + hp, sizeof(hb) - hp, " [0x%x %u%%]",
                                            (unsigned)g_hot_pc[k],
@@ -6003,7 +6067,11 @@ int main(int argc, char *argv[]) {
                                    " entry, so these name functions rather than"
                                    " instructions. overflow>0 means the profile is"
                                    " spread over more than %u functions and this is"
-                                   " not the whole picture",
+                                   " not the whole picture. covered is the share"
+                                 " the listed entries account for -- a low"
+                                 " number with overflow=0 is a genuinely flat"
+                                 " profile, which needs different work than a"
+                                 " concentrated one",
                                    (unsigned)g_hot_samples, (unsigned)g_hot_used,
                                    (unsigned)g_hot_missed,
                                    hb[0] ? hb : " <none>",
