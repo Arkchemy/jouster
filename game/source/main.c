@@ -6884,7 +6884,129 @@ int main(int argc, char *argv[]) {
                                                                      " [%u blk=0x%x state=%u]", i,
                                                                      (unsigned)g_ark_blkaddr[i],
                                                                      (unsigned)g_ark_blkstate[i]);
-                                                  { char bw[720]; int bwp = 0; bw[0] = ' ';
+                                                  /* SD reads on the reads' own clock, with duration. */
+                                                { char ft[460]; int fp = 0; ft[0] = ' ';
+                                                  uint32_t base = g_ark_burst_n ? g_ark_burst[0] : 0u;
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_fst_n && i < 16u
+                                                       && fp < (int)sizeof(ft) - 34; i++) {
+                                                      unsigned st = g_ark_fst[i][0], en = g_ark_fst[i][1];
+                                                      unsigned idx = 0;
+                                                      for (unsigned k = 0; k < (unsigned)g_ark_burst_n && k < 256u; k++)
+                                                          if (g_ark_burst[k] <= st) idx = k; else break;
+                                                      fp += snprintf(ft + fp, sizeof(ft) - (size_t)fp,
+                                                                     " [%u @%ums for%ums after#%u]", i,
+                                                                     (st - base) / 1000u,
+                                                                     (en > st) ? (en - st) / 1000u : 0u, idx);
+                                                  }
+                                                  checkpoint("FSTIME n=%u:%s -- each SD read placed on the"
+                                                             " same clock as the block reads, with how"
+                                                             " long it took. BURST found clusters of reads"
+                                                             " split by stalls of 25 to 274ms, and RELTIME"
+                                                             " ruled out block releases as the cause. A"
+                                                             " quarter second is an ordinary time to pull"
+                                                             " 128KB off a card, and there are 7-8 of"
+                                                             " these a run against 4-6 stalls. A read"
+                                                             " whose duration fills a gap makes the"
+                                                             " clusters normal buffering rather than a"
+                                                             " defect, and makes the run-to-run spread"
+                                                             " card latency. A gap with no read inside it"
+                                                             " is a real stall and still needs explaining",
+                                                             (unsigned)g_ark_fst_n,
+                                                             ft[0] ? ft : " <none>"); }
+                                                /* Releases placed on the reads' own clock: each one
+                                                 * is shown as the read index it lands nearest. */
+                                                { char rt[420]; int rp = 0; rt[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_reltime_n && i < 16u
+                                                       && rp < (int)sizeof(rt) - 30; i++) {
+                                                      unsigned t = g_ark_reltime[i];
+                                                      unsigned idx = 0;
+                                                      for (unsigned k = 0; k < (unsigned)g_ark_burst_n && k < 256u; k++)
+                                                          if (g_ark_burst[k] <= t) idx = k; else break;
+                                                      rp += snprintf(rt + rp, sizeof(rt) - (size_t)rp,
+                                                                     " [%u after#%u +%ums]", i, idx,
+                                                                     g_ark_burst_n ? (t - g_ark_burst[0]) / 1000u : 0u);
+                                                  }
+                                                  checkpoint("RELTIME n=%u:%s -- when each block release"
+                                                             " happened, on the same clock as the reads."
+                                                             " BURST found the load runs in clusters"
+                                                             " separated by stalls of 24 to 333ms, six of"
+                                                             " them over 20ms, against RELGATE's"
+                                                             " released=6. If each release lands at the"
+                                                             " end of a stall -- an after#N matching a"
+                                                             " gap index -- then progress is gated by how"
+                                                             " many blocks get handed back, and the fix"
+                                                             " is to make single-block tasks release too."
+                                                             " If they land mid-cluster or nowhere near"
+                                                             " the gaps, the stalls have another cause"
+                                                             " and that reading is wrong",
+                                                             (unsigned)g_ark_reltime_n,
+                                                             rt[0] ? rt : " <none>"); }
+                                                /* Gaps between block reads, in ms, so the shape of
+                                                 * the burst is visible rather than its total. */
+                                                { char bu[620]; int bp = 0; bu[0] = ' ';
+                                                  unsigned n = (unsigned)g_ark_burst_n;
+                                                  unsigned big = 0, bigat = 0;
+                                                  for (unsigned i = 1; i < n && i < 256u; i++) {
+                                                      unsigned d = g_ark_burst[i] - g_ark_burst[i-1];
+                                                      if (d > big) { big = d; bigat = i; }
+                                                  }
+                                                  for (unsigned i = 1; i < n && i < 256u
+                                                       && bp < (int)sizeof(bu) - 16; i++) {
+                                                      unsigned d = (g_ark_burst[i] - g_ark_burst[i-1]) / 1000u;
+                                                      if (d) bp += snprintf(bu + bp, sizeof(bu) - (size_t)bp,
+                                                                            " %u:%ums", i, d);
+                                                  }
+                                                  checkpoint("BURST n=%u span=%ums maxgap=%ums at#%u"
+                                                             " gaps>1ms:%s -- every block read timed to the"
+                                                             " microsecond. LOADCURVE put all archive"
+                                                             " traffic inside one five second window and"
+                                                             " the run-to-run spread is the size of that"
+                                                             " burst, not a scatter of late events. Reads"
+                                                             " evenly spaced then simply stopping means"
+                                                             " something cuts the burst off, and when it"
+                                                             " stops is the thing to explain. Visible"
+                                                             " clusters with gaps means the batches of"
+                                                             " 16, 32 and 64 are real events. A long tail"
+                                                             " of widening gaps means it grinds down"
+                                                             " rather than being stopped",
+                                                             n,
+                                                             n > 1 ? (g_ark_burst[n-1]-g_ark_burst[0])/1000u : 0u,
+                                                             big/1000u, bigat,
+                                                             bu[0] ? bu : " <none>"); }
+                                                /* Walk the block array once, here, instead of
+                                                 * hooking the walk and paying per block. The
+                                                 * per-block hook cost 484,000 calls a run and
+                                                 * suppressed the very progress it measured. */
+                                                { char bl[560]; int blp = 0; bl[0] = ' ';
+                                                  uint32_t lst = g_ark_blklist;
+                                                  uint32_t cnt = lst ? ppc_load_u32(&g_ctx, lst + 0x08u) : 0u;
+                                                  uint32_t arr = lst ? ppc_load_u32(&g_ctx, lst + 0x14u) : 0u;
+                                                  unsigned st0=0, st2=0, other=0;
+                                                  for (unsigned i = 0; i < cnt && i < 16u && arr; i++) {
+                                                      uint32_t b = ppc_load_u32(&g_ctx, arr + i*4u);
+                                                      uint32_t stt = b ? ppc_load_u32(&g_ctx, b + 0x14u) : 0xffu;
+                                                      if (stt==0u) st0++; else if (stt==2u) st2++; else other++;
+                                                      if (blp < (int)sizeof(bl) - 40)
+                                                          blp += snprintf(bl + blp, sizeof(bl) - (size_t)blp,
+                                                                          " [%u blk=%08x st=%u age=%u]", i,
+                                                                          (unsigned)b, (unsigned)stt,
+                                                                          (unsigned)(b ? ppc_load_u32(&g_ctx, b + 0x18u) : 0u));
+                                                  }
+                                                  checkpoint("POOLEXIT list=0x%x n=%u free=%u cached=%u inuse=%u:%s"
+                                                             " -- the block array read once at exit rather"
+                                                             " than hooked per block, because that hook cost"
+                                                             " 484,000 calls a run and suppressed the"
+                                                             " progress it was measuring. free counts state"
+                                                             " 0 and cached state 2; allocate takes either,"
+                                                             " so free+cached is what the pool can still"
+                                                             " hand out. Both zero at the stall means"
+                                                             " exhaustion again, one layer further in."
+                                                             " Nonzero means blocks were available and"
+                                                             " something else stopped the load, which is a"
+                                                             " different bug entirely",
+                                                             (unsigned)lst, (unsigned)cnt, st0, st2, other,
+                                                             bl[0] ? bl : " <none>"); }
+                                                { char bw[720]; int bwp = 0; bw[0] = ' ';
                                                     for (unsigned i = 0; i < (unsigned)g_ark_blkn && i < 8u
                                                          && bwp < (int)sizeof(bw) - 86; i++) {
                                                         uint32_t b = g_ark_blkaddr[i];
