@@ -35,8 +35,10 @@
 #include <switch.h>
 
 #include "ppc_runtime.h"
+#include "ark_blockprobe.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
+#include "cafeos_coreinit_sync.h"
 #include "cafeos_gx2.h"
 #include "cafeos_gx2_names.h"
 #include "cafeos_vpad.h"
@@ -4392,9 +4394,33 @@ int main(int argc, char *argv[]) {
      * A frame-count budget turns every optimisation into a shorter run rather
      * than more progress, which is backwards, and this is the second time it
      * has caught exactly that. */
+    /* LOADCURVE: archive progress against the wall clock.
+     *
+     * Two runs stopped at exactly 684,652 bytes with different pump counts,
+     * which reads as a hard stop; a third reached 1,077,868, which reads as a
+     * rate. Those cannot both be right and a single end-of-run total cannot
+     * separate them -- it reports where the clock happened to cut the run,
+     * not whether anything was still moving. Sampling the same totals every
+     * few seconds turns one run into a curve: a straight line is a slow load
+     * and the engine is fine, a flat tail is a genuine stall and the value it
+     * flattens at says where. Costs one comparison per frame. */
     while (appletMainLoop() && arkchemy_gx2_host_ticks() < g_test_deadline_ns) {
         ark_hot_sample(g_ppc_current_pc);
         g_current_frame = frame;
+
+        if (g_lc_n < ARK_LOADCURVE_SLOTS) {
+            uint64_t lc_now = arkchemy_gx2_host_ticks();
+            if (lc_now >= g_lc_next_ns) {
+                g_lc[g_lc_n][0] = (uint32_t)(lc_now / 1000000000ull);
+                g_lc[g_lc_n][1] = (uint32_t)g_arkchemy_fs_async_read_bytes;
+                g_lc[g_lc_n][2] = (uint32_t)g_arkchemy_fs_async_read_calls;
+                g_lc[g_lc_n][3] = (uint32_t)g_ark_ap[3];  /* startBlockRead */
+                g_lc[g_lc_n][4] = (uint32_t)g_ark_ap[4];  /* decompressBatch */
+                g_lc[g_lc_n][5] = (uint32_t)g_ark_ap[0];  /* updateArchiveSystem */
+                g_lc_n++;
+                g_lc_next_ns = lc_now + ARK_LOADCURVE_PERIOD_NS;
+            }
+        }
 
         if (g_ppc_fn_call_count != last_progress_calls) {
             last_progress_calls = g_ppc_fn_call_count;
@@ -5286,34 +5312,69 @@ int main(int argc, char *argv[]) {
                      * _file, _buffer, then _offset as a big-endian 64-bit at
                      * +0x10 -- whose low word is the +0x14 this probe already
                      * reads as the offset -- and _size at +0x18. */
-                    char awbuf[520]; int ao = 0;
+                    char awbuf[900]; int ao = 0;
                     for (unsigned i = 0; i < g_ark_aw_n && i < 8u; i++) {
                         uint32_t fwi = g_ark_aw[i][0];
-                        char path[48]; path[0] = 0;
-                        if (fwi) {
-                            uint32_t pp = ppc_load_u32(&g_ctx, fwi + 4u);
-                            if (pp) {
-                                unsigned k = 0;
-                                for (; k < sizeof(path) - 1u; k++) {
-                                    uint8_t c = ppc_load_u8(&g_ctx, pp + k);
-                                    if (!c) break;
-                                    path[k] = (c >= 32 && c < 127) ? (char)c : '?';
-                                }
-                                path[k] = 0;
-                            }
+                        char path[48]; unsigned k;
+                        /* Captured at the call by ark_aw_note, not chased
+                         * here -- the work item is reused across all 531
+                         * calls, so a report-time read describes the last
+                         * one at best. */
+                        for (k = 0; k < sizeof(path) - 1u; k++) {
+                            char c = g_ark_aw_path[i][k];
+                            if (!c) break;
+                            path[k] = c;
                         }
+                        path[k] = 0;
                         ao += snprintf(awbuf + ao, sizeof(awbuf) - (size_t)ao,
-                                       "[%u fwi=0x%x off=0x%x size=0x%x \"%s\"] ", i,
+                                       "[%u fwi=0x%x off=0x%x size=0x%x"
+                                       " _path=0x%x \"%s\"%s] ", i,
                                        (unsigned)fwi, (unsigned)g_ark_aw[i][1],
                                        (unsigned)g_ark_aw[i][2],
-                                       path[0] ? path : "<no path>");
+                                       (unsigned)g_ark_aw_pp[i],
+                                       path,
+                                       (!fwi) ? " NULLITEM"
+                                       : (!g_ark_aw_pp[i]) ? " NULLPATH"
+                                       : (!path[0]) ? " EMPTYSTR" : "");
                     }
                     if (ao == 0) snprintf(awbuf, sizeof(awbuf), "<none>");
                     checkpoint("ADDWORK CALLS n=%u %s -- size comes from"
                                " igArchive::Open, which sets it from the archive's"
                                " file-table entry for that path. A size of zero means"
                                " that lookup returned zero, so the path is the thing"
-                               " worth knowing", (unsigned)g_ark_aw_n, awbuf);
+                               " worth knowing. The path is captured when addWork is"
+                               " called, because the work item is reused and a"
+                               " report-time read describes the last call rather than"
+                               " the one that stalled. NULLPATH and EMPTYSTR are"
+                               " different findings and used to print the same"
+                               " way; if both appear with a plausible-looking"
+                               " AWHDR word elsewhere in the item then _path is"
+                               " not at +0x04 and this probe is reading the"
+                               " wrong field",
+                               (unsigned)g_ark_aw_n, awbuf);
+                    { char hb[620]; int hp = 0; hb[0] = ' ';
+                      for (unsigned i = 0; i < g_ark_aw_n && i < 8u
+                           && hp < (int)sizeof(hb) - 76; i++)
+                          hp += snprintf(hb + hp, sizeof(hb) - (size_t)hp,
+                                         " [%u %08x %08x %08x %08x %08x %08x"
+                                         " %08x %08x]", i,
+                                         (unsigned)g_ark_aw_hdr[i][0],
+                                         (unsigned)g_ark_aw_hdr[i][1],
+                                         (unsigned)g_ark_aw_hdr[i][2],
+                                         (unsigned)g_ark_aw_hdr[i][3],
+                                         (unsigned)g_ark_aw_hdr[i][4],
+                                         (unsigned)g_ark_aw_hdr[i][5],
+                                         (unsigned)g_ark_aw_hdr[i][6],
+                                         (unsigned)g_ark_aw_hdr[i][7]);
+                      checkpoint("AWHDR%s -- the first eight words of each"
+                                 " igFileWorkItem, as they were at the call."
+                                 " Word 1 is what this probe treats as _path"
+                                 " and word 5 as _offset; word 6 is _size."
+                                 " A guest pointer looks like 0x0nnnnnnn or"
+                                 " 0x2nnnnnnn here, so if word 1 is zero and"
+                                 " some other word carries one, the field"
+                                 " layout is wrong rather than the data",
+                                 hb[0] ? hb : " <none>"); }
                     { char gtbuf[32*22]; unsigned gto = 0; gtbuf[0] = 0;
                       unsigned gtn = (unsigned)g_ark_gt_n;
                       unsigned first = gtn > ARKCHEMY_PCSAMPLE_SLOTS ? gtn - ARKCHEMY_PCSAMPLE_SLOTS : 0;
@@ -5688,6 +5749,76 @@ int main(int argc, char *argv[]) {
                                      " field. The lookup key is addr, width,"
                                      " height, pitch and all four must match",
                                      sb2[0] ? sb2 : " <none>"); }
+
+                        /* Who is supposed to fill the surfaces the composite
+                         * samples? SURFKEYS says they are never rendered into,
+                         * so a copy or a resolve must be writing them -- or
+                         * nothing is. */
+                        { char cb[420]; int cp = 0; cb[0] = ' ';
+                          for (unsigned i = 0; i < (unsigned)g_ark_cpsrf_n && i < 8u
+                               && cp < (int)sizeof(cb) - 76; i++)
+                              cp += snprintf(cb + cp, sizeof(cb) - cp,
+                                             " [0x%x %ux%u p=%u %s -> 0x%x %ux%u"
+                                             " p=%u %s x%u flat=%u]",
+                                             (unsigned)g_ark_cpsrf[i][0],
+                                             (unsigned)g_ark_cpsrf[i][1],
+                                             (unsigned)g_ark_cpsrf[i][2],
+                                             (unsigned)g_ark_cpsrf[i][3],
+                                             g_ark_cpsrf[i][10]
+                                                 ? "RT" : "guest",
+                                             (unsigned)g_ark_cpsrf[i][4],
+                                             (unsigned)g_ark_cpsrf[i][5],
+                                             (unsigned)g_ark_cpsrf[i][6],
+                                             (unsigned)g_ark_cpsrf[i][7],
+                                             g_ark_cpsrf[i][11]
+                                                 ? "RT" : "guest",
+                                             (unsigned)g_ark_cpsrf[i][8],
+                                             (unsigned)g_ark_cpsrf[i][9]);
+                          checkpoint("COPYSRF calls=%u copied=%u rejected:"
+                                     " level=%u dim=%u tile=%u fmt=%u zero=%u"
+                                     " :%s -- every GX2CopySurface, source then"
+                                     " destination. This shim copies guest bytes"
+                                     " only, so a source marked RT is a live"
+                                     " render target whose pixels are in its"
+                                     " deko3d image and never in guest memory:"
+                                     " the copy then faithfully moves zeros, and"
+                                     " flat equal to the call count confirms"
+                                     " every one of them did. calls=0 means"
+                                     " the engine fills"
+                                     " those surfaces some other way and this"
+                                     " is not the path to fix",
+                                     (unsigned)g_ark_cpsrf_calls,
+                                     (unsigned)g_ark_cpsrf_copied,
+                                     (unsigned)g_ark_cpsrf_rej_level,
+                                     (unsigned)g_ark_cpsrf_rej_dim,
+                                     (unsigned)g_ark_cpsrf_rej_tile,
+                                     (unsigned)g_ark_cpsrf_rej_fmt,
+                                     (unsigned)g_ark_cpsrf_rej_zero,
+                                     cb[0] ? cb : " <none>"); }
+
+                        { char rb[220]; int rp = 0; rb[0] = ' ';
+                          for (unsigned i = 0; i < (unsigned)g_ark_rslv_n && i < 4u
+                               && rp < (int)sizeof(rb) - 50; i++)
+                              rp += snprintf(rb + rp, sizeof(rb) - rp,
+                                             " [0x%x %ux%u -> 0x%x %ux%u x%u]",
+                                             (unsigned)g_ark_rslv[i][0],
+                                             (unsigned)g_ark_rslv[i][1],
+                                             (unsigned)g_ark_rslv[i][2],
+                                             (unsigned)g_ark_rslv[i][3],
+                                             (unsigned)g_ark_rslv[i][4],
+                                             (unsigned)g_ark_rslv[i][5],
+                                             (unsigned)g_ark_rslv[i][6]);
+                          checkpoint("RSLV calls=%u:%s -- GX2ResolveAAColorBuffer,"
+                                     " which this runtime implements as a no-op"
+                                     " because it cannot create a multisampled"
+                                     " surface to resolve. That argument covers"
+                                     " the AA part and not the copy part: a"
+                                     " nonzero count whose destination matches a"
+                                     " sampled texture address names the no-op,"
+                                     " not GX2CopySurface, as what leaves that"
+                                     " texture black",
+                                     (unsigned)g_ark_rslv_calls,
+                                     rb[0] ? rb : " <none>"); }
 
                         checkpoint("DRAWSIZE quad=%u small=%u mid=%u big=%u max=%u"
                                    " -- draws by vertex count. All quad means"
@@ -6745,6 +6876,528 @@ int main(int argc, char *argv[]) {
                                                            (unsigned)g_ark_ap[10], (unsigned)g_ark_ap[6],
                                                            (unsigned)g_ark_ap[11], (unsigned)g_ark_ap[12],
                                                            (unsigned)g_ark_ap[13]);
+                                                { char bs[260]; int bp = 0; bs[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_blkn && i < 8u; i++)
+                                                      bp += snprintf(bs + bp, sizeof(bs) - (size_t)bp,
+                                                                     " [%u blk=0x%x state=%u]", i,
+                                                                     (unsigned)g_ark_blkaddr[i],
+                                                                     (unsigned)g_ark_blkstate[i]);
+                                                  { char bw[720]; int bwp = 0; bw[0] = ' ';
+                                                    for (unsigned i = 0; i < (unsigned)g_ark_blkn && i < 8u
+                                                         && bwp < (int)sizeof(bw) - 86; i++) {
+                                                        uint32_t b = g_ark_blkaddr[i];
+                                                        if (!b) continue;
+                                                        bwp += snprintf(bw + bwp, sizeof(bw) - (size_t)bwp,
+                                                            " [%u a=%08x c=%08x p10=%08x st=%u p18=%08x p1c=%08x p20=%08x]",
+                                                            i,
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x08u),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x0cu),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x10u),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x14u),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x18u),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x1cu),
+                                                            (unsigned)ppc_load_u32(&g_ctx, b + 0x20u));
+                                                    }
+                                                    { char tl[560]; int tlp = 0; tl[0] = ' ';
+                                                      for (unsigned i = 0; i < (unsigned)g_ark_tl_n && i < 12u
+                                                           && tlp < (int)sizeof(tl) - 44; i++)
+                                                          tlp += snprintf(tl + tlp, sizeof(tl) - (size_t)tlp,
+                                                                          " [t=%08x b=%08x/%08x]",
+                                                                          (unsigned)g_ark_tl[i][0],
+                                                                          (unsigned)g_ark_tl[i][1],
+                                                                          (unsigned)g_ark_tl[i][2]);
+                                                      checkpoint("TASKLINK n=%u calls=%u nulltask=%u:%s"
+                                                                 " -- task and block recorded where"
+                                                                 " startNewTasks pairs them, at"
+                                                                 " instantiateFromPool's return, with no"
+                                                                 " offsets guessed. Three attempts to find"
+                                                                 " this by address arithmetic were wrong:"
+                                                                 " block+0x0c was a shared index table,"
+                                                                 " 0x08298fbc was plain data with"
+                                                                 " vt=0x3000, and the 0xD8 task gap held"
+                                                                 " for one block of six by coincidence."
+                                                                 " Match b= against BLKOWN's block"
+                                                                 " addresses to name the holders."
+                                                                 " nulltask>0 means a block was allocated"
+                                                                 " for a task that was never created, and"
+                                                                 " nothing could ever release it",
+                                                                 (unsigned)g_ark_tl_n,
+                                                                 (unsigned)g_ark_tl_calls,
+                                                                 (unsigned)g_ark_tl_nulltask,
+                                                                 tl[0] ? tl : " <none>"); }
+                                                    { char tb2[720]; int tp2 = 0; tb2[0] = ' ';
+                                                      for (unsigned i = 0; i < (unsigned)g_ark_blkn && i < 8u
+                                                           && tp2 < (int)sizeof(tb2) - 80; i++) {
+                                                          uint32_t b = g_ark_blkaddr[i];
+                                                          uint32_t buf, tk;
+                                                          if (!b) continue;
+                                                          buf = ppc_load_u32(&g_ctx, b + 0x20u);
+                                                          if (!buf) continue;
+                                                          tk = buf - 0xD8u;
+                                                          tp2 += snprintf(tb2 + tp2, sizeof(tb2) - (size_t)tp2,
+                                                              " [%u t=%08x st=%u f=%08x par=%08x p14=%u p18=%u p1c=%08x]",
+                                                              i, (unsigned)tk,
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x08u),
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x0cu),
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x10u),
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x14u),
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x18u),
+                                                              (unsigned)ppc_load_u32(&g_ctx, tk + 0x1cu));
+                                                      }
+                                                      checkpoint("BLKTASK%s -- the igArchiveBlockTask"
+                                                                 " behind each held block. startNewTasks"
+                                                                 " builds these via instantiateFromPool"
+                                                                 " and issues the read with startBlockRead,"
+                                                                 " and each task sits 0xD8 below its own"
+                                                                 " block buffer -- ARCHQ's task 0xf7d05a8"
+                                                                 " against block buffer 0x0f7d0680 is the"
+                                                                 " pair that fixes that offset, so a t="
+                                                                 " here that does not match ARCHQ means the"
+                                                                 " assumption is wrong and the rest of this"
+                                                                 " line should be ignored. st is the field"
+                                                                 " ARCHQ calls _state, which read 10 while"
+                                                                 " stuck. Six tasks all in the same state"
+                                                                 " is one systemic stall; a spread means"
+                                                                 " they are stuck at different points",
+                                                                 tb2[0] ? tb2 : " <none>"); }
+                                                    { uint32_t ow = g_ark_blkaddr[0]
+                                                          ? ppc_load_u32(&g_ctx, g_ark_blkaddr[0] + 0x0cu) : 0u;
+                                                      char ob[560]; int obp = 0; ob[0] = ' ';
+                                                      for (unsigned w = 0; w < 16u && ow
+                                                           && obp < (int)sizeof(ob) - 14; w++)
+                                                          obp += snprintf(ob + obp, sizeof(ob) - (size_t)obp,
+                                                                          " %08x",
+                                                                          (unsigned)ppc_load_u32(&g_ctx, ow + w * 4u));
+                                                      checkpoint("BLKOWNER obj=0x%x vt=0x%x words[0..15]:%s"
+                                                                 " -- all six stuck blocks name this one"
+                                                                 " object at their +0x0c, so a single owner"
+                                                                 " holds the whole six-block pool. Its"
+                                                                 " block indices are consecutive, 0x10"
+                                                                 " through 0x14 with 0x14 twice, and"
+                                                                 " 684652 bytes divided by a 32KB block is"
+                                                                 " 20.9 -- it read through block 20 and"
+                                                                 " stopped. A vtable here identifies the"
+                                                                 " class; a status or count field that"
+                                                                 " never reaches zero is what keeps the"
+                                                                 " blocks held",
+                                                                 (unsigned)ow,
+                                                                 (unsigned)(ow ? ppc_load_u32(&g_ctx, ow) : 0u),
+                                                                 ob[0] ? ob : " <none>"); }
+                                                    checkpoint("BLKOWN%s -- each stuck block's own fields."
+                                                               " startNewTasks at 0x2168e38 allocates a"
+                                                               " block and immediately writes the archive"
+                                                               " to +0x08, an owner to +0x0c, something to"
+                                                               " +0x10 and state 1 to +0x14. All six blocks"
+                                                               " end in state 1 with the pool reporting"
+                                                               " zero free for 75,638 consecutive calls, so"
+                                                               " these are the objects holding the pipeline"
+                                                               " shut. c= is the owner to chase: if all six"
+                                                               " name the same object, one task is holding"
+                                                               " the whole pool; if they differ, six tasks"
+                                                               " are each stuck separately, which is a"
+                                                               " different bug",
+                                                               bw[0] ? bw : " <none>"); }
+                                                  checkpoint("BLKSTATE n=%u:%s -- the raw _state of"
+                                                             " every block at exit, unbucketed."
+                                                             " ARCHBLK's other=N lumps every"
+                                                             " non-available state into one label,"
+                                                             " which is the same shape of mistake as"
+                                                             " reading allocEarly as a failure path."
+                                                             " allocate takes a block only in state 0"
+                                                             " or 2, so whatever value dominates here"
+                                                             " is what nothing is clearing",
+                                                             (unsigned)g_ark_blkn,
+                                                             bs[0] ? bs : " <none>"); }
+                                                checkpoint("AVAILHIST ret[0..8]=%u,%u,%u,%u,%u,%u,%u,%u,%u"
+                                                           " zero=%u max=%u lastnz=%u/%u -- how many blocks"
+                                                           " getNumAvailableBlocks found, per call. The old"
+                                                           " avail(last=N) was assigned at function exit so"
+                                                           " it described the final call only; this says how"
+                                                           " the pool behaved over the whole run. lastnz is"
+                                                           " the call index of the last non-zero return"
+                                                           " against the call total, so it dates the death:"
+                                                           " a cliff and a slow decay are different bugs",
+                                                           (unsigned)g_ark_avh[0], (unsigned)g_ark_avh[1],
+                                                           (unsigned)g_ark_avh[2], (unsigned)g_ark_avh[3],
+                                                           (unsigned)g_ark_avh[4], (unsigned)g_ark_avh[5],
+                                                           (unsigned)g_ark_avh[6], (unsigned)g_ark_avh[7],
+                                                           (unsigned)g_ark_avh[8],
+                                                           (unsigned)g_ark_avh_zero,
+                                                           (unsigned)g_ark_avh_maxret,
+                                                           (unsigned)g_ark_avh_lastnz,
+                                                           (unsigned)g_ark_ap[7]);
+                                                { char lb[760]; int lp = 0; lb[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_lc_n
+                                                       && i < ARK_LOADCURVE_SLOTS
+                                                       && lp < (int)sizeof(lb) - 58; i++)
+                                                      lp += snprintf(lb + lp, sizeof(lb) - (size_t)lp,
+                                                                     " %us:%u/%u/%u/%u/%u",
+                                                                     (unsigned)g_lc[i][0],
+                                                                     (unsigned)g_lc[i][1],
+                                                                     (unsigned)g_lc[i][2],
+                                                                     (unsigned)g_lc[i][3],
+                                                                     (unsigned)g_lc[i][4],
+                                                                     (unsigned)g_lc[i][5]);
+                                                  checkpoint("LOADCURVE n=%u"
+                                                             " (secs:bytes/areads/blockreads/decomp/pumps):%s"
+                                                             " -- archive progress every 5s. A single"
+                                                             " end-of-run total says where the clock cut"
+                                                             " the run, not whether anything was still"
+                                                             " moving: two runs ended at exactly 684652"
+                                                             " bytes and a third at 1077868, which cannot"
+                                                             " both be a hard stop. Rising bytes to the"
+                                                             " last sample is a slow load and the slope"
+                                                             " gives the time a full 16.9MB archive needs;"
+                                                             " a flat tail is a real stall and the value"
+                                                             " it flattens at is where it died. pumps"
+                                                             " rising while bytes do not separates a pump"
+                                                             " that stopped from one that runs and"
+                                                             " declines to act",
+                                                             (unsigned)g_lc_n,
+                                                             lb[0] ? lb : " <none>"); }
+                                                checkpoint("RELGATE reached=%u skipped=%u released=%u"
+                                                           " lasttask=0x%x skip_withA=%u lastA=0x%x aSt1=%u aSt2=%u aOther=%u relfix=%u/%u"
+                                                           " -- the branch at 0x21682a8 in"
+                                                           " updateTasks. Only a non-null task->_block"
+                                                           " (+0x1c) reaches the copy, ageBlocks and the"
+                                                           " store of state 2 at 0x21682d0, which is the"
+                                                           " only per-block release in the streaming path"
+                                                           " -- the manager's own deallocate is per-archive"
+                                                           " and global.arc is still open. skipped tracking"
+                                                           " the frame count while released stays near the"
+                                                           " 92 state-2 sightings names this instruction as"
+                                                           " the leak; all three near zero means the gate is"
+                                                           " further up and this is not it",
+                                                           (unsigned)g_ark_rel_reached,
+                                                           (unsigned)g_ark_rel_skipped,
+                                                           (unsigned)g_ark_rel_released,
+                                                           (unsigned)g_ark_rel_lasttask,
+                                                           (unsigned)g_ark_rel_skip_witha,
+                                                           (unsigned)g_ark_rel_lasta,
+                                                           (unsigned)g_ark_rel_a_st1,
+                                                           (unsigned)g_ark_rel_a_st2,
+                                                           (unsigned)g_ark_rel_a_other,
+                                                           (unsigned)g_ark_relfix_applied,
+                                                           (unsigned)g_ark_relfix_enabled);
+                                                checkpoint("ARCPUMP pumps=%u enabled=%u -- the archive"
+                                                           " pump added 2026-09-20, driven from"
+                                                           " OSWaitEvent's cooperative wait slices."
+                                                           " arkchemy_fs_pump_completions only delivers"
+                                                           " reads already queued, and the queue was"
+                                                           " empty: the read this thread waits for was"
+                                                           " never issued, and only"
+                                                           " igArchive::updateArchiveSystem issues it,"
+                                                           " which cannot be reached because the waiter"
+                                                           " holds the semaphore its caller needs."
+                                                           " pumps rising with bytes read rising past"
+                                                           " 684652 means the deadlock is broken; pumps"
+                                                           " rising with bytes flat means the pump runs"
+                                                           " and the work still is not started, which is"
+                                                           " a different fault one level further in",
+                                                           (unsigned)g_arkchemy_archive_pumps,
+                                                           (unsigned)g_arkchemy_archive_pump_enabled);
+                                                { char sg[300]; int sgp = 0; sg[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_sig_n && i < 8u; i++)
+                                                      sgp += snprintf(sg + sgp, sizeof(sg) - (size_t)sgp,
+                                                                      " [0x%x raise=%u wait=%u lower=%u]",
+                                                                      (unsigned)g_ark_sig[i][0],
+                                                                      (unsigned)g_ark_sig[i][1],
+                                                                      (unsigned)g_ark_sig[i][2],
+                                                                      (unsigned)g_ark_sig[i][3]);
+                                                  checkpoint("SIGBAL n=%u:%s -- raise against wait per"
+                                                             " igCafeSignal. The parked thread is in"
+                                                             " wait() on SPINWAIT2's inner object, and"
+                                                             " OSSignalEvent latches -- it sets signaled"
+                                                             " when nobody is waiting -- so a raise that"
+                                                             " arrives early is not lost and the obvious"
+                                                             " race is already ruled out. wait>0 with"
+                                                             " raise=0 on that object means the completion"
+                                                             " path never signals it and the fix belongs"
+                                                             " there; raise>0 sends the search back to the"
+                                                             " event shim",
+                                                             (unsigned)g_ark_sig_n,
+                                                             sg[0] ? sg : " <none>"); }
+                                                { uint32_t evaddr = g_ark_sw_inner ? g_ark_sw_inner + 0x10u : 0u;
+                                                  int found = -1;
+                                                  for (int k = 0; k < ARKCHEMY_SYNC_TABLE_SIZE; k++)
+                                                      if (g_arkchemy_events[k].active
+                                                          && g_arkchemy_events[k].guest_addr == evaddr) { found = k; break; }
+                                                  checkpoint("EVSTATE ev=0x%x slot=%d signaled=%d mode=%d"
+                                                             " waiting=%d epoch=%llu | sev=%u wev=%u"
+                                                             " parked=%u slices=%u evwake=%u/%u"
+                                                             " -- our own event table"
+                                                             " entry for the signal the game thread is"
+                                                             " asleep on. IDSITE proved the work item's"
+                                                             " status is already 2, written by"
+                                                             " readFromBuffer, so the condition the waiter"
+                                                             " wants is satisfied and it is still parked:"
+                                                             " a missed wakeup in this shim, not a skipped"
+                                                             " item. signaled=1 with waiting>0 means the"
+                                                             " wake is sitting there unconsumed and the"
+                                                             " slice loop is not seeing it; signaled=0"
+                                                             " with waiting>0 means the raise was absorbed"
+                                                             " while the flag was already set, which is"
+                                                             " the binary-event coalescing case and needs"
+                                                             " the epoch bumped on every signal rather"
+                                                             " than only on the first",
+                                                             (unsigned)evaddr, found,
+                                                             found >= 0 ? g_arkchemy_events[found].signaled : -1,
+                                                             found >= 0 ? g_arkchemy_events[found].mode : -1,
+                                                             found >= 0 ? g_arkchemy_events[found].waiting_count : -1,
+                                                             found >= 0 ? (unsigned long long)g_arkchemy_events[found].epoch : 0ull,
+                                                             (unsigned)g_ark_sev_enter, (unsigned)g_ark_wev_enter,
+                                                             (unsigned)g_ark_wev_parked, (unsigned)g_ark_wev_slices,
+                                                             (unsigned)g_ark_evwake_fired,
+                                                             (unsigned)g_ark_evwake_slices); }
+                                                { char ids[520]; int isp = 0; ids[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_idsite_n && i < 32u
+                                                       && isp < (int)sizeof(ids) - 28; i++)
+                                                      isp += snprintf(ids + isp, sizeof(ids) - (size_t)isp,
+                                                                      " [%x x%u =%u]",
+                                                                      (unsigned)g_ark_idsite[i][0],
+                                                                      (unsigned)g_ark_idsite[i][1],
+                                                                      (unsigned)g_ark_idsite[i][2]);
+                                                  checkpoint("IDSITE n=%u:%s -- which of the 29 status"
+                                                             " writers at item+0x23 in the physical device"
+                                                             " ever fire, by instruction address."
+                                                             " complete()'s write at 2176b34 reported zero"
+                                                             " calls while the function itself ran 108"
+                                                             " times, so it is entered and never reaches"
+                                                             " that store. Whichever address here has a"
+                                                             " nonzero count is the real writer, and the"
+                                                             " value it writes is what the spin loop at"
+                                                             " 0x21755e8 is testing against 1",
+                                                             (unsigned)g_ark_idsite_n,
+                                                             ids[0] ? ids : " <none>"); }
+                                                { char id[520]; int idp = 0; id[0] = ' ';
+                                                  unsigned waited = 0u;
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_id_n && i < 16u
+                                                       && idp < (int)sizeof(id) - 30; i++) {
+                                                      if (g_ark_id[i][0] == g_ark_sw_item) waited = 1u;
+                                                      idp += snprintf(id + idp, sizeof(id) - (size_t)idp,
+                                                                      " [%08x=%u]",
+                                                                      (unsigned)g_ark_id[i][0],
+                                                                      (unsigned)g_ark_id[i][1]);
+                                                  }
+                                                  checkpoint("ITEMDONE n=%u calls=%u over=%u waited=0x%x"
+                                                             " seen=%u:%s -- every work item"
+                                                             " igPhysicalStorageDevice::complete finishes,"
+                                                             " with the status it wrote at 0x2176b34, and"
+                                                             " whether the item the spin loop is parked on"
+                                                             " is among them. complete runs over a hundred"
+                                                             " times a run and returns every time, so the"
+                                                             " write is not missing -- the question is"
+                                                             " whether it ever lands on THIS item."
+                                                             " seen=0 means the device loop skips it and"
+                                                             " the fault is in how that list is walked;"
+                                                             " seen=1 means the status is written and the"
+                                                             " waiter is missing it, which is a signal"
+                                                             " problem instead",
+                                                             (unsigned)g_ark_id_n,
+                                                             (unsigned)g_ark_id_calls,
+                                                             (unsigned)g_ark_id_over,
+                                                             (unsigned)g_ark_sw_item, waited,
+                                                             id[0] ? id : " <none>"); }
+                                                checkpoint("SPINWAIT2 enter=%u iters=%llu target=0x%x"
+                                                           " inner=0x%x item=0x%x status=%u -- the"
+                                                           " innermost loop, in"
+                                                           " igPhysicalStorageDevice::update(item,"
+                                                           " kBlocking): it polls this->+0x50 slot 0xb4"
+                                                           " until the item's status byte at +0x23 stops"
+                                                           " being 1. Everything else follows from this"
+                                                           " not exiting -- the caller never returns, the"
+                                                           " igScopeLock destructor never runs, the file"
+                                                           " context semaphore is never freed, and the"
+                                                           " archive stalls at 684652 bytes. A huge iters"
+                                                           " with status still 1 means the poll runs and"
+                                                           " never advances the item, which points at the"
+                                                           " FS shim given asyncq shows 7 issued, 7 done,"
+                                                           " 0 pending. A small iters means the thread is"
+                                                           " parked inside the poll instead",
+                                                           (unsigned)g_ark_sw_enter,
+                                                           (unsigned long long)g_ark_sw_iters,
+                                                           (unsigned)g_ark_sw_target,
+                                                           (unsigned)g_ark_sw_inner,
+                                                           (unsigned)g_ark_sw_item,
+                                                           (unsigned)g_ark_sw_status);
+                                                { char pd[420]; int pdp = 0; pd[0] = ' ';
+                                                  static const char *pdn[9] = {
+                                                      "vt@2176fd8", "start", "readFromBuffer",
+                                                      "readCoalesced", "writeWithBuffer",
+                                                      "writeCoalesced", "vt@21770b4",
+                                                      "complete", "listRemove" };
+                                                  for (unsigned i = 0; i < 9u
+                                                       && pdp < (int)sizeof(pd) - 46; i++) {
+                                                      if (!g_ark_pdev[i][0] && !g_ark_pdev[i][1]) continue;
+                                                      pdp += snprintf(pd + pdp, sizeof(pd) - (size_t)pdp,
+                                                                      " [%u %s in=%u out=%u%s]", i, pdn[i],
+                                                                      (unsigned)g_ark_pdev[i][0],
+                                                                      (unsigned)g_ark_pdev[i][1],
+                                                                      (g_ark_pdev[i][0] != g_ark_pdev[i][1])
+                                                                          ? " STUCK" : "");
+                                                  }
+                                                  checkpoint("PDEV%s tgt0=0x%x tgt6=0x%x -- enter and exit"
+                                                             " per call site inside"
+                                                             " igPhysicalStorageDevice::update, the"
+                                                             " function that never returns and so never"
+                                                             " lets blockUntilComplete run the igScopeLock"
+                                                             " destructor that would free the file context"
+                                                             " semaphore. Its item loop is bounded, so the"
+                                                             " park is inside one of these calls and the"
+                                                             " one marked STUCK is it. Every site balanced"
+                                                             " would put the park in the loop's own"
+                                                             " control flow instead, which is a different"
+                                                             " answer rather than a silence",
+                                                             pd[0] ? pd : " <none>",
+                                                             (unsigned)g_ark_pd_tgt0,
+                                                             (unsigned)g_ark_pd_tgt6); }
+                                                checkpoint("BLOCKWAIT2 enter=%u exit=%u target=0x%x"
+                                                           " dev=0x%x vt=0x%x ret=0x%x -- the device call"
+                                                           " igFileContext::blockUntilComplete waits in,"
+                                                           " vtable slot 0x13c. The igScopeLock destructor"
+                                                           " runs unconditionally two instructions later,"
+                                                           " so the lock is only held open because this"
+                                                           " call has not returned. enter one above exit"
+                                                           " means a thread is parked inside it and target"
+                                                           " is the function to fix: on hardware it has to"
+                                                           " drive the device itself, because the pump it"
+                                                           " would otherwise wait for is locked out by its"
+                                                           " own caller. enter==exit means the stall is"
+                                                           " not here and the held lock came from"
+                                                           " elsewhere",
+                                                           (unsigned)g_ark_bw_enter,
+                                                           (unsigned)g_ark_bw_exit,
+                                                           (unsigned)g_ark_bw_target,
+                                                           (unsigned)g_ark_bw_dev,
+                                                           (unsigned)g_ark_bw_vt,
+                                                           (unsigned)g_ark_bw_ret);
+                                                { char si[220]; int sip = 0; si[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_si_n && i < 8u; i++)
+                                                      sip += snprintf(si + sip, sizeof(si) - (size_t)sip,
+                                                                      " [0x%x count=%u]",
+                                                                      (unsigned)g_ark_si[i][0],
+                                                                      (unsigned)g_ark_si[i][1]);
+                                                  checkpoint("SEMINIT n=%u:%s -- the resource count each"
+                                                             " igCafeSemaphore was activated with, straight"
+                                                             " from this->+0x10 as activate() passes it to"
+                                                             " OSInitSemaphore. For FCTXGATE's object a"
+                                                             " count above 1 means update can run while"
+                                                             " blockUntilComplete waits and the contention"
+                                                             " we measured is not what the engine intended;"
+                                                             " a count of 1 means the engine really does"
+                                                             " serialise them and the difference from"
+                                                             " hardware is in what the waiter does inside"
+                                                             " the lock, not in the lock itself",
+                                                             (unsigned)g_ark_si_n,
+                                                             si[0] ? si : " <none>"); }
+                                                { char sl[420]; int slp = 0; sl[0] = ' ';
+                                                  for (unsigned i = 0; i < 16u
+                                                       && slp < (int)sizeof(sl) - 54; i++) {
+                                                      if (!g_ark_sl[i][0]) continue;
+                                                      slp += snprintf(sl + slp, sizeof(sl) - (size_t)slp,
+                                                                      " [this=0x%x sem=0x%x by=0x%x @call%u]",
+                                                                      (unsigned)g_ark_sl[i][0],
+                                                                      (unsigned)g_ark_sl[i][1],
+                                                                      (unsigned)g_ark_sl[i][2],
+                                                                      (unsigned)g_ark_sl[i][3]);
+                                                  }
+                                                  checkpoint("SCOPELOCK live=%u peak=%u ctor=%u dtor=%u"
+                                                             " over=%u orphan=%u held:%s -- igScopeLock"
+                                                             " objects still alive at exit. The counts"
+                                                             " said 2212 constructions against 2211"
+                                                             " destructions on the file context's"
+                                                             " semaphore, which is a thread sitting inside"
+                                                             " a critical section rather than a forgotten"
+                                                             " release: the holder waits for data only"
+                                                             " igFileContext::update can fetch, and update"
+                                                             " cannot run while the lock is held. An entry"
+                                                             " whose sem matches FCTXGATE's obj names the"
+                                                             " holder, and `by` is the return address of"
+                                                             " whoever built it. live=0 means the deficit"
+                                                             " is elsewhere and this reading was wrong",
+                                                             (unsigned)g_ark_sl_live,
+                                                             (unsigned)g_ark_sl_peak,
+                                                             (unsigned)g_ark_sl_ctor,
+                                                             (unsigned)g_ark_sl_dtor,
+                                                             (unsigned)g_ark_sl_over,
+                                                             (unsigned)g_ark_sl_orphan,
+                                                             sl[0] ? sl : " <none>"); }
+                                                { char ss[560]; int sp = 0; ss[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_semsite_n
+                                                       && i < 16u && sp < (int)sizeof(ss) - 42; i++)
+                                                      sp += snprintf(ss + sp, sizeof(ss) - (size_t)sp,
+                                                                     " [0x%x %s lr=0x%x x%u]",
+                                                                     (unsigned)g_ark_semsite[i][0],
+                                                                     g_ark_semsite[i][2] ? "rel" : "obt",
+                                                                     (unsigned)g_ark_semsite[i][1],
+                                                                     (unsigned)g_ark_semsite[i][3]);
+                                                  checkpoint("SEMSITE n=%u over=%u:%s -- every (semaphore,"
+                                                             " call site, kind) triple. The previous single"
+                                                             " global rel_lr named a graphics function"
+                                                             " releasing a graphics semaphore and said"
+                                                             " nothing about the file context's, which one"
+                                                             " global lr across six objects never could."
+                                                             " On 0x4503598 the successful acquires exceed"
+                                                             " the releases by exactly one, so the holder"
+                                                             " is the obt site here whose count is one"
+                                                             " above its matching rel site",
+                                                             (unsigned)g_ark_semsite_n,
+                                                             (unsigned)g_ark_semsite_over,
+                                                             ss[0] ? ss : " <none>"); }
+                                                { char sb3[300]; int s3 = 0; sb3[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_sem_n && i < 6u; i++)
+                                                      s3 += snprintf(sb3 + s3, sizeof(sb3) - (size_t)s3,
+                                                                     " [0x%x obt=%u rel=%u]",
+                                                                     (unsigned)g_ark_sem[i][0],
+                                                                     (unsigned)g_ark_sem[i][1],
+                                                                     (unsigned)g_ark_sem[i][2]);
+                                                  checkpoint("SEMBAL n=%u%s obt_lr=0x%x rel_lr=0x%x"
+                                                             " -- obtainResource against releaseResource"
+                                                             " per igCafeSemaphore. The one matching"
+                                                             " FCTXGATE's obj is the file context's, and"
+                                                             " its gate fails once the count hits zero."
+                                                             " The shim is a plain counting semaphore with"
+                                                             " the documented prev-count return, and a"
+                                                             " missing release would have failed on the"
+                                                             " second tick rather than the 2043rd, so the"
+                                                             " question is who takes it and does not give"
+                                                             " it back. rel tracking obt means the balance"
+                                                             " is fine and a third party drained it; rel"
+                                                             " stopping while obt continues names the"
+                                                             " caller that stopped",
+                                                             (unsigned)g_ark_sem_n,
+                                                             sb3[0] ? sb3 : " <none>",
+                                                             (unsigned)g_ark_sem_obt_lr,
+                                                             (unsigned)g_ark_sem_rel_lr); }
+                                                checkpoint("FCTXGATE calls=%u gated=%u ran=%u"
+                                                           " lastran=%u lastgate=%u | obj=0x%x vt=0x%x"
+                                                           " ret=0x%x devs=%u devmin=%u"
+                                                           " target=0x%x slotword=0x%x -- the branch at"
+                                                           " 0x216e674 in igFileContext::update. It calls"
+                                                           " vtable slot 0xcc on this->+0x10 and returns"
+                                                           " early on a non-zero result, skipping the whole"
+                                                           " device loop that reaches igArchive::update"
+                                                           " through slot 0x184. Measured over 900s,"
+                                                           " igFileContext::update hit 17259 while"
+                                                           " igArchive::update froze at 4647 and every byte"
+                                                           " of archive traffic arrived in one burst at"
+                                                           " t=40-45s. gated climbing while ran stays put"
+                                                           " names this branch; lastran is the call index"
+                                                           " it stopped at. Both climbing means the gate is"
+                                                           " fine and the loop runs but finds nothing,"
+                                                           " which devmin=0 would confirm",
+                                                           (unsigned)g_ark_fx_calls,
+                                                           (unsigned)g_ark_fx_gated,
+                                                           (unsigned)g_ark_fx_ran,
+                                                           (unsigned)g_ark_fx_lastran_call,
+                                                           (unsigned)g_ark_fx_lastgate_call,
+                                                           (unsigned)g_ark_fx_obj,
+                                                           (unsigned)g_ark_fx_vt,
+                                                           (unsigned)g_ark_fx_ret,
+                                                           (unsigned)g_ark_fx_devs,
+                                                           (unsigned)g_ark_fx_devmin,
+                                                           (unsigned)g_ark_fx_target,
+                                                           (unsigned)g_ark_fx_slotword);
                                                 checkpoint("ARCHDRIVE igFileContext::update=%u"
                                                            " igArchive::update=%u updateArchiveSystem=%u"
                                                            " -- the chain that should pump the archive every"
