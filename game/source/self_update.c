@@ -387,7 +387,8 @@ void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
                               int frames, unsigned draws, unsigned modules,
                               unsigned flush_lines, unsigned bytes,
                               unsigned reads, unsigned tasks, unsigned pumps,
-                              unsigned t1st)
+                              unsigned t1st, unsigned free0,
+                              unsigned burstms, unsigned fsms, unsigned gaps)
 {
     char mine[64];
     ark_stamp_safe(mine, sizeof(mine));
@@ -395,14 +396,18 @@ void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
     FILE *t = fopen(ARK_TALLY, "a");
     if (t) {
         fprintf(t, "OK    build=%s flush=%u frames=%d draws=%u modules=%u"
-                   " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u\n",
+                   " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u free0=%u"
+                   " burst=%ums fs=%ums gaps=%u\n",
                 mine, flush_lines, frames, draws, modules,
-                bytes, reads, tasks, pumps, t1st);
+                bytes, reads, tasks, pumps, t1st, free0,
+                burstms, fsms, gaps);
         fclose(t);
     }
     remove(ARK_TALLY_OPEN);
     report("TALLY ok -- flush=%u frames=%d draws=%u modules=%u"
-           " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u",
+           " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u free0=%u"
+           " burst=%ums fs=%ums gaps=%u",
            flush_lines, frames, draws, modules,
-           bytes, reads, tasks, pumps, t1st);
+           bytes, reads, tasks, pumps, t1st, free0,
+           burstms, fsms, gaps);
 }

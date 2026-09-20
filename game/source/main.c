@@ -36,6 +36,7 @@
 
 #include "ppc_runtime.h"
 #include "ark_blockprobe.h"
+#include "ark_fstime.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
 #include "cafeos_coreinit_sync.h"
@@ -3839,7 +3840,8 @@ void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
                               int frames, unsigned draws, unsigned modules,
                               unsigned flush_lines, unsigned bytes,
                               unsigned reads, unsigned tasks, unsigned pumps,
-                              unsigned t1st);
+                              unsigned t1st, unsigned free0,
+                              unsigned burstms, unsigned fsms, unsigned gaps);
 
 static void upload_report(const char *fmt, ...)
 {
@@ -4406,10 +4408,33 @@ int main(int argc, char *argv[]) {
      * few seconds turns one run into a curve: a straight line is a slow load
      * and the engine is fine, a flat tail is a genuine stall and the value it
      * flattens at says where. Costs one comparison per frame. */
+    static uint32_t g_lp_seen = 0, g_lp_zero_after = 0, g_lp_val = 0;
+    static unsigned long long g_lp_first_ns = 0, g_lp_last_ns = 0;
+    unsigned long long g_run_start_ns = arkchemy_gx2_host_ticks();
     while (appletMainLoop() && arkchemy_gx2_host_ticks() < g_test_deadline_ns) {
         ark_hot_sample(g_ppc_current_pc);
         g_current_frame = frame;
 
+        /* The archive task list, sampled every frame rather than every five
+         * seconds. The burst is 837ms long, so a 5s sampler reads zero almost
+         * every time and "never set" was an artefact of looking too rarely.
+         * ~57 reads a second, one guest load each: cheap.
+         *
+         * 421316 is &.bss+306388, taken from the generated C rather than
+         * the PowerPC in the comment above it. conquertron folds lis+lwzu
+         * into a resolved address and relocates the guest's globals into
+         * its own .bss, so the original 0x10130cd4 is empty memory -- which
+         * is what the first three runs of this probe were reading. */
+        { uint32_t lp = ppc_load_u32(&g_ctx, 421316u);
+          if (lp) {
+              g_lp_seen++;
+              if (!g_lp_first_ns) g_lp_first_ns = arkchemy_gx2_host_ticks();
+              g_lp_last_ns = arkchemy_gx2_host_ticks();
+              g_lp_val = lp;
+          } else if (g_lp_seen) {
+              g_lp_zero_after++;
+          }
+        }
         if (g_lc_n < ARK_LOADCURVE_SLOTS) {
             uint64_t lc_now = arkchemy_gx2_host_ticks();
             if (lc_now >= g_lc_next_ns) {
@@ -4418,7 +4443,13 @@ int main(int argc, char *argv[]) {
                 g_lc[g_lc_n][2] = (uint32_t)g_arkchemy_fs_async_read_calls;
                 g_lc[g_lc_n][3] = (uint32_t)g_ark_ap[3];  /* startBlockRead */
                 g_lc[g_lc_n][4] = (uint32_t)g_ark_ap[4];  /* decompressBatch */
-                g_lc[g_lc_n][5] = (uint32_t)g_ark_ap[0];  /* updateArchiveSystem */
+                g_lc[g_lc_n][5] = (uint32_t)ppc_load_u32(&g_ctx, 421316u);
+                /* ^ the archive task list. TASKLIST read it as 0 at exit, and
+                 * updateTasks skips its whole loop when it is -- which is why
+                 * the pump can run 76,000 times and process nothing. Sampling
+                 * it says whether it was ever set, and if so when it was
+                 * cleared. Replaces the pump count here, which is already on
+                 * the tally line. */
                 g_lc_n++;
                 g_lc_next_ns = lc_now + ARK_LOADCURVE_PERIOD_NS;
             }
@@ -6884,7 +6915,428 @@ int main(int argc, char *argv[]) {
                                                                      " [%u blk=0x%x state=%u]", i,
                                                                      (unsigned)g_ark_blkaddr[i],
                                                                      (unsigned)g_ark_blkstate[i]);
-                                                  /* SD reads on the reads' own clock, with duration. */
+                                                  checkpoint("SUBMIT calls=%u target=0x%x lastRet=0x%x"
+                                                           " before[0..4]=%u,%u,%u,%u,%u"
+                                                           " after[0..4]=%u,%u,%u,%u,%u -- the device"
+                                                           " call startBlockRead makes at 0x216878c,"
+                                                           " and the item's status either side of it."
+                                                           " SSRING showed the run ending in a retry"
+                                                           " loop: six read items reset to 0 over and"
+                                                           " over, never reaching the 2 that 0x2167d44"
+                                                           " needs before a chunk is processed and its"
+                                                           " block freed. Only about ten of a hundred"
+                                                           " calls become FS reads, so most should be"
+                                                           " served from the buffer already in memory"
+                                                           " and finish synchronously. after[2] high"
+                                                           " means that works and the stuck six are a"
+                                                           " subset; after[0] high means the submission"
+                                                           " returns having completed nothing and the"
+                                                           " completion never comes, which puts the gap"
+                                                           " in whatever target names",
+                                                           (unsigned)g_ark_sub_calls,
+                                                           (unsigned)g_ark_sub_target,
+                                                           (unsigned)g_ark_sub_ret,
+                                                           (unsigned)g_ark_sub_before[0], (unsigned)g_ark_sub_before[1],
+                                                           (unsigned)g_ark_sub_before[2], (unsigned)g_ark_sub_before[3],
+                                                           (unsigned)g_ark_sub_before[4],
+                                                           (unsigned)g_ark_sub_after[0], (unsigned)g_ark_sub_after[1],
+                                                           (unsigned)g_ark_sub_after[2], (unsigned)g_ark_sub_after[3],
+                                                           (unsigned)g_ark_sub_after[4]);
+                                                { char sr[620]; int rp2 = 0; sr[0] = ' ';
+                                                  unsigned tot = (unsigned)g_ark_ssr_n;
+                                                  unsigned cnt = tot < 24u ? tot : 24u;
+                                                  unsigned st = tot < 24u ? 0u : tot % 24u;
+                                                  for (unsigned k = 0; k < cnt
+                                                       && rp2 < (int)sizeof(sr) - 32; k++) {
+                                                      unsigned i = (st + k) % 24u;
+                                                      rp2 += snprintf(sr + rp2, sizeof(sr) - (size_t)rp2,
+                                                                      " %x=%u@%x",
+                                                                      (unsigned)g_ark_ssr_item[i],
+                                                                      (unsigned)g_ark_ssr_val[i],
+                                                                      (unsigned)g_ark_ssr_lr[i]);
+                                                  }
+                                                  checkpoint("SSRING total=%u last%u:%s -- every setStatus"
+                                                             " call in order, unfiltered, most recent"
+                                                             " last. The existing SETSTATUS list keeps"
+                                                             " only the first four and then values above"
+                                                             " two, on the assumption those are errors --"
+                                                             " but igCafeStorageDevice::exists sets 4"
+                                                             " unconditionally on entry before doing any"
+                                                             " work, so 4 is a transient marker and the"
+                                                             " filter was discarding every routine"
+                                                             " transition. A task's _readWorkItem sits at"
+                                                             " 0 and never reaches 2, and this shows what"
+                                                             " the status does in between and which code"
+                                                             " address moves it",
+                                                             tot, cnt, sr[0] ? sr : " <none>"); }
+                                                { char lk[620]; int lp2 = 0; lk[0] = ' ';
+                                                  unsigned namedzero = 0;
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_lk_n && i < 16u
+                                                       && lp2 < (int)sizeof(lk) - 70; i++) {
+                                                      char pth[56]; unsigned k;
+                                                      for (k = 0; k < 55u; k++) {
+                                                          char c = g_ark_lk_path[i][k];
+                                                          if (!c) break;
+                                                          pth[k] = c;
+                                                      }
+                                                      pth[k] = 0;
+                                                      if (pth[0] && !g_ark_lk_sz[i]) namedzero++;
+                                                      lp2 += snprintf(lk + lp2, sizeof(lk) - (size_t)lp2,
+                                                                      " [%u sz=%x bp=%x \"%s\"]", i,
+                                                                      (unsigned)g_ark_lk_sz[i],
+                                                                      (unsigned)g_ark_lk_ret[i],
+                                                                      pth[0] ? pth : "-");
+                                                  }
+                                                  checkpoint("LOOKUP n=%u namedZero=%u:%s -- what"
+                                                             " igArchive::getFileList was asked to"
+                                                             " resolve, recorded at the lookup itself so"
+                                                             " a pooled work item cannot be read after"
+                                                             " it has been reused for something else."
+                                                             " Two named files were seen coming back with"
+                                                             " size zero, ENGLISH.pa and level.bld inside"
+                                                             " bootstrap.bld, and a level file resolving"
+                                                             " to nothing would stop a level loading."
+                                                             " namedZero=0 means every named file"
+                                                             " resolves and those zeros were slots caught"
+                                                             " mid-reuse; namedZero>0 names the files the"
+                                                             " archive table has no entry for",
+                                                             (unsigned)g_ark_lk_n, namedzero,
+                                                             lk[0] ? lk : " <none>"); }
+                                                checkpoint("POOLSIZE orig=%u used=%u override=%u blocks=%u"
+                                                           " -- the archive block count, which"
+                                                           " igArchive doubles and hands to"
+                                                           " activate(count, 32768, 128). FREESEQ showed"
+                                                           " the pool sitting at zero for most of the run"
+                                                           " and refilling once per 128KB fetch, which is"
+                                                           " normal, then ending 4,3,2,1,0 with no"
+                                                           " refill: issuing the next fetch needs a free"
+                                                           " block while every block is held by a task"
+                                                           " waiting for the data that fetch would"
+                                                           " deliver. Six blocks is too few for the"
+                                                           " pattern. If more blocks gets past 684,652"
+                                                           " the diagnosis is confirmed; if it stalls at"
+                                                           " the same place with sixteen, sizing is not"
+                                                           " the cause and this is the wrong tree",
+                                                           (unsigned)g_ark_poolsize_orig,
+                                                           (unsigned)g_ark_poolsize_used,
+                                                           (unsigned)g_ark_poolsize_override,
+                                                           (unsigned)(g_ark_poolsize_used * 2u));
+                                                { char fs2[540]; int fq = 0; fs2[0] = ' ';
+                                                  unsigned n2 = (unsigned)g_ark_freeseq_n;
+                                                  unsigned first0 = 0xffffu;
+                                                  for (unsigned i = 0; i < n2 && i < 200u; i++)
+                                                      if (!g_ark_freeseq[i]) { first0 = i; break; }
+                                                  /* print the tail, where it collapses */
+                                                  { unsigned from = (n2 > 40u) ? n2 - 40u : 0u;
+                                                    for (unsigned i = from; i < n2 && i < 200u
+                                                         && fq < (int)sizeof(fs2) - 6; i++)
+                                                        fq += snprintf(fs2 + fq, sizeof(fs2) - (size_t)fq,
+                                                                       "%u", (unsigned)g_ark_freeseq[i]); }
+                                                  checkpoint("FREESEQ n=%u first0=%d tail40:%s -- free"
+                                                             " blocks at every block read, one digit"
+                                                             " each, last forty shown. CYCLES found four"
+                                                             " free at the start of the final cycle and"
+                                                             " no decline before it, while POOLEXIT finds"
+                                                             " zero at the end, so the pool collapses"
+                                                             " inside the last cycle rather than draining."
+                                                             " first0 is the read index where it first"
+                                                             " hits zero: if that is near the end and the"
+                                                             " digits fall off a cliff, something consumes"
+                                                             " the pool in a burst and the reads stop"
+                                                             " because of it. If zero is reached early and"
+                                                             " recovered from repeatedly, running dry is"
+                                                             " normal and the last one differs for another"
+                                                             " reason",
+                                                             n2, (int)(first0 == 0xffffu ? -1 : (int)first0),
+                                                             fs2[0] ? fs2 : " <none>"); }
+                                                { char cy[400]; int cq = 0; cy[0] = ' ';
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_cyc_n && i < 16u
+                                                       && cq < (int)sizeof(cy) - 20; i++)
+                                                      cq += snprintf(cy + cq, sizeof(cy) - (size_t)cq,
+                                                                     " [#%u free=%u]",
+                                                                     (unsigned)g_ark_cyc[i][0],
+                                                                     (unsigned)g_ark_cyc[i][1]);
+                                                  checkpoint("CYCLES n=%u:%s -- free blocks at the start of"
+                                                             " each cycle. reads = 1 + 16 x gaps holds"
+                                                             " exactly across every run, so the pipeline"
+                                                             " has no jitter and the only variable is how"
+                                                             " many cycles happen before the deadlock."
+                                                             " A free count that declines to zero names"
+                                                             " exhaustion as what ends it and says how"
+                                                             " many cycles that takes; a count still"
+                                                             " healthy at the final cycle means something"
+                                                             " else ends the run and the empty pool seen"
+                                                             " at exit is a consequence rather than the"
+                                                             " cause",
+                                                             (unsigned)g_ark_cyc_n,
+                                                             cy[0] ? cy : " <none>"); }
+                                                /* _bytesProcessed against _size for every work item
+                                                 * addWork recorded. Offsets from SSA's own
+                                                 * metaobjects.xml, not guessed: _size 0x18,
+                                                 * _bytesProcessed 0x1c, _status 0x23, _path 0x24. */
+                                                { char bpp[520]; int bq = 0; bpp[0] = ' ';
+                                                  unsigned anyprog = 0;
+                                                  for (unsigned i = 0; i < (unsigned)g_ark_aw_n && i < 8u
+                                                       && bq < (int)sizeof(bpp) - 46; i++) {
+                                                      uint32_t f = g_ark_aw[i][0];
+                                                      uint32_t bp2, sz2;
+                                                      if (!f) continue;
+                                                      sz2 = ppc_load_u32(&g_ctx, f + 0x18u);
+                                                      bp2 = ppc_load_u32(&g_ctx, f + 0x1cu);
+                                                      if (bp2) anyprog++;
+                                                      bq += snprintf(bpp + bq, sizeof(bpp) - (size_t)bq,
+                                                                     " [%u sz=%x bp=%x st=%u]", i,
+                                                                     (unsigned)sz2, (unsigned)bp2,
+                                                                     (unsigned)ppc_load_u8(&g_ctx, f + 0x23u));
+                                                  }
+                                                  checkpoint("BYTESPROC anyNonZero=%u:%s -- _bytesProcessed"
+                                                             " against _size for each recorded work item,"
+                                                             " at the offsets SSA's own reflection data"
+                                                             " gives rather than ones inferred from"
+                                                             " disassembly. The stuck request is 686,100"
+                                                             " bytes with _bytesProcessed reading zero on"
+                                                             " a run that moved 684KB into its buffer, so"
+                                                             " the data arrives and nothing records that"
+                                                             " it did. anyNonZero=0 means the field is"
+                                                             " never written for any item and the writes"
+                                                             " are missing from the port; anyNonZero>0"
+                                                             " means it works generally and only this"
+                                                             " request is stuck, which is a narrower and"
+                                                             " different fault",
+                                                             anyprog, bpp[0] ? bpp : " <none>"); }
+                                                checkpoint("TAILFIX enabled=%u fired=%u blocked=%u"
+                                                           " -- startNewTasks refuses to begin unless"
+                                                           " two blocks are free, which is right for a"
+                                                           " chunk that can span a boundary and wrong"
+                                                           " for the last one, whose size has already"
+                                                           " been clamped to under a block. The stuck"
+                                                           " request is 686,100 bytes and transfers all"
+                                                           " but about two kilobytes; its tasks hold all"
+                                                           " six blocks and only release when it"
+                                                           " completes, so the tail needs a block only"
+                                                           " the tail can free. fired>0 means the"
+                                                           " relaxation ran; blocked>0 means even one"
+                                                           " block was not free and the pool is empty"
+                                                           " beyond rescuing from here",
+                                                           (unsigned)g_ark_tailfix_enabled,
+                                                           (unsigned)g_ark_tailfix_fired,
+                                                           (unsigned)g_ark_tailfix_blocked);
+                                                /* The one work item every stuck task is parked on.
+                                                 * Fields per AWHDR, which fixed this layout from the
+                                                 * bytes: +0x08 archive, +0x0c buffer, +0x14 offset,
+                                                 * +0x18 size, +0x23 status. */
+                                                { uint32_t lo3 = ppc_load_u32(&g_ctx, 421316u);
+                                                  uint32_t la3 = lo3 ? ppc_load_u32(&g_ctx, lo3 + 0x14u) : 0u;
+                                                  uint32_t t0 = la3 ? ppc_load_u32(&g_ctx, la3) : 0u;
+                                                  uint32_t a0 = t0 ? ppc_load_u32(&g_ctx, t0 + 0x08u) : 0u;
+                                                  uint32_t it0 = a0 ? ppc_load_u32(&g_ctx, a0 + 0x08u) : 0u;
+                                                  char w[560]; int wq = 0; w[0] = ' ';
+                                                  for (unsigned k = 0; k < 24u && it0; k++)
+                                                      wq += snprintf(w + wq, sizeof(w) - (size_t)wq, " %08x",
+                                                                     (unsigned)ppc_load_u32(&g_ctx, it0 + k*4u));
+                                                  checkpoint("STUCKITEM it=0x%x sta=%u off=%x sz=%x"
+                                                             " buf=%08x arc=%08x p1c=%x p28=%08x words:%s -- the single"
+                                                             " work item every stuck task is parked on."
+                                                             " All five share one parent and this one"
+                                                             " item, and while its status stays 1 the"
+                                                             " walk skips all of them at 0x2167c88, so"
+                                                             " none reach the release at 0x2167cb0 that"
+                                                             " frees their blocks. That is the whole"
+                                                             " stall in one object. A real off and sz"
+                                                             " with asyncq showing nothing pending means"
+                                                             " the read finished and the status was"
+                                                             " never written back, which is ours to fix."
+                                                             " sz=0 means the archive lookup never sized"
+                                                             " it and the read was never issuable",
+                                                             (unsigned)it0,
+                                                             (unsigned)(it0 ? ppc_load_u8(&g_ctx, it0 + 0x23u) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x14u) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x18u) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x0cu) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x08u) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x1cu) : 0u),
+                                                             (unsigned)(it0 ? ppc_load_u32(&g_ctx, it0 + 0x28u) : 0u),
+                                                             w[0] ? w : " <none>"); }
+                                                /* The exact chain the task walk tests, read at exit:
+                                                 * task->+0x08 -> +0x08 -> status at +0x23. STUCKWI
+                                                 * read task->+0x10 and got 0, but that is not the
+                                                 * field 0x2167c70 dereferences. */
+                                                { char sk[600]; int kp = 0; sk[0] = ' ';
+                                                  uint32_t lo2 = ppc_load_u32(&g_ctx, 421316u);
+                                                  uint32_t lc2 = lo2 ? ppc_load_u32(&g_ctx, lo2 + 0x08u) : 0u;
+                                                  uint32_t la2 = lo2 ? ppc_load_u32(&g_ctx, lo2 + 0x14u) : 0u;
+                                                  unsigned st1 = 0;
+                                                  for (unsigned i = 0; i < lc2 && i < 16u && la2
+                                                       && kp < (int)sizeof(sk) - 58; i++) {
+                                                      uint32_t t = ppc_load_u32(&g_ctx, la2 + i*4u);
+                                                      uint32_t a = t ? ppc_load_u32(&g_ctx, t + 0x08u) : 0u;
+                                                      uint32_t it = a ? ppc_load_u32(&g_ctx, a + 0x08u) : 0u;
+                                                      unsigned stt = it ? (unsigned)ppc_load_u8(&g_ctx, it + 0x23u) : 0xffu;
+                                                      if (stt == 1u) st1++;
+                                                      kp += snprintf(sk + kp, sizeof(sk) - (size_t)kp,
+                                                                     " [%u t=%08x a=%08x it=%08x sta=%u bA=%08x bB=%08x]", i,
+                                                                     (unsigned)t, (unsigned)a, (unsigned)it, stt,
+                                                                     (unsigned)(t ? ppc_load_u32(&g_ctx, t + 0x18u) : 0u),
+                                                                     (unsigned)(t ? ppc_load_u32(&g_ctx, t + 0x1cu) : 0u));
+                                                  }
+                                                  checkpoint("SKIPTEST n=%u status1=%u:%s -- the exact"
+                                                             " chain the task walk tests at 0x2167c70:"
+                                                             " task+0x08, then +0x08, then the status"
+                                                             " byte at +0x23. A task whose status reads 1"
+                                                             " is skipped at 0x2167c88 and never reaches"
+                                                             " the release at 0x2167cb0, which is the"
+                                                             " path that frees BOTH blockA and blockB to"
+                                                             " state 0 -- the one the engine actually"
+                                                             " uses, and not the blockB-only cache write"
+                                                             " that RELGATE and RELFIX were built around."
+                                                             " status1 equal to the list count means every"
+                                                             " queued task is parked on an item that never"
+                                                             " left flight, and that item is the bug."
+                                                             " sta=255 means the chain is null and the"
+                                                             " task is skipped for the other reason",
+                                                             (unsigned)lc2, st1,
+                                                             sk[0] ? sk : " <none>"); }
+                                                checkpoint("LISTLIFE seen=%u zeroAfter=%u val=0x%x"
+                                                           " first=%ums last=%ums alive=%ums -- the"
+                                                           " archive task list pointer sampled every"
+                                                           " frame. TASKLIST read it as 0 at exit and a"
+                                                           " five second sampler read 0 throughout, but"
+                                                           " updateTasks processed 60 to 107 tasks and"
+                                                           " its loop is skipped entirely when that"
+                                                           " pointer is zero -- so it must be non-zero"
+                                                           " for part of the run and the sampler was too"
+                                                           " slow to catch it. seen=0 would mean it"
+                                                           " really is never set and the tasks are"
+                                                           " reached some other way, which would make"
+                                                           " the whole reading wrong. seen>0 with"
+                                                           " zeroAfter>0 dates the teardown, and that"
+                                                           " is the write to find",
+                                                           (unsigned)g_lp_seen, (unsigned)g_lp_zero_after,
+                                                           (unsigned)g_lp_val,
+                                                           (unsigned)(g_lp_first_ns ? (g_lp_first_ns - g_run_start_ns)/1000000ull : 0ull),
+                                                           (unsigned)(g_lp_last_ns ? (g_lp_last_ns - g_run_start_ns)/1000000ull : 0ull),
+                                                           (unsigned)((g_lp_last_ns > g_lp_first_ns) ? (g_lp_last_ns - g_lp_first_ns)/1000000ull : 0ull));
+                                                /* The list updateTasks actually walks, read at exit.
+                                                 * From 0x2167c24: a global at 0x10130cd4 holds the
+                                                 * list object, count at +0x08, array at +0x14, and
+                                                 * it is iterated backwards from count-1. */
+                                                { char tls[600]; int tp3 = 0; tls[0] = ' ';
+                                                  uint32_t lo = ppc_load_u32(&g_ctx, 421316u);
+                                                  uint32_t lc = lo ? ppc_load_u32(&g_ctx, lo + 0x08u) : 0u;
+                                                  uint32_t la = lo ? ppc_load_u32(&g_ctx, lo + 0x14u) : 0u;
+                                                  unsigned found = 0, blocked = 0;
+                                                  uint32_t bl = g_ark_blklist;
+                                                  uint32_t bc = bl ? ppc_load_u32(&g_ctx, bl + 0x08u) : 0u;
+                                                  uint32_t ba = bl ? ppc_load_u32(&g_ctx, bl + 0x14u) : 0u;
+                                                  for (unsigned i = 0; i < lc && i < 32u && la
+                                                       && tp3 < (int)sizeof(tls) - 14; i++)
+                                                      tp3 += snprintf(tls + tp3, sizeof(tls) - (size_t)tp3,
+                                                                      " %08x",
+                                                                      (unsigned)ppc_load_u32(&g_ctx, la + i*4u));
+                                                  /* is each block's owning task still listed? */
+                                                  for (unsigned i = 0; i < bc && i < 8u && ba; i++) {
+                                                      uint32_t b = ppc_load_u32(&g_ctx, ba + i*4u), t = 0;
+                                                      if (!b) continue;
+                                                      for (unsigned k = (unsigned)g_ark_tl_n; k-- > 0; )
+                                                          if (g_ark_tl[k][1] == b || g_ark_tl[k][2] == b) { t = g_ark_tl[k][0]; break; }
+                                                      if (!t) continue;
+                                                      blocked++;
+                                                      for (unsigned j = 0; j < lc && j < 64u && la; j++)
+                                                          if (ppc_load_u32(&g_ctx, la + j*4u) == t) { found++; break; }
+                                                  }
+                                                  checkpoint("TASKLIST obj=0x%x count=%u holders=%u listed=%u"
+                                                             " entries:%s -- the list updateTasks walks,"
+                                                             " read at exit, and whether the tasks holding"
+                                                             " blocks are still in it. Their work items"
+                                                             " all read status 0, so nothing is in flight"
+                                                             " and nothing is being waited on -- the reads"
+                                                             " finished. Five tasks past the sixty that"
+                                                             " complete hold five blocks the release gate"
+                                                             " cannot reach. listed=0 means they were"
+                                                             " taken out of this list while still holding"
+                                                             " a block, and removal is the bug. listed"
+                                                             " equal to holders means they are still"
+                                                             " queued and something stops the walk"
+                                                             " reaching them instead",
+                                                             (unsigned)lo, (unsigned)lc, blocked, found,
+                                                             tls[0] ? tls : " <none>"); }
+                                                /* The work item behind each stuck task, read at exit.
+                                                 * AWHDR fixed this layout from the bytes: +0x08 is
+                                                 * the archive, +0x0c the destination buffer, +0x14
+                                                 * the offset and +0x18 the size. The status byte the
+                                                 * blocking wait spins on is +0x23. */
+                                                { char wi[620]; int wp = 0; wi[0] = ' ';
+                                                  uint32_t lst2 = g_ark_blklist;
+                                                  uint32_t cnt2 = lst2 ? ppc_load_u32(&g_ctx, lst2 + 0x08u) : 0u;
+                                                  uint32_t arr2 = lst2 ? ppc_load_u32(&g_ctx, lst2 + 0x14u) : 0u;
+                                                  for (unsigned i = 0; i < cnt2 && i < 8u && arr2
+                                                       && wp < (int)sizeof(wi) - 58; i++) {
+                                                      uint32_t b = ppc_load_u32(&g_ctx, arr2 + i*4u), t = 0, it;
+                                                      if (!b) continue;
+                                                      for (unsigned k = (unsigned)g_ark_tl_n; k-- > 0; )
+                                                          if (g_ark_tl[k][1] == b || g_ark_tl[k][2] == b) { t = g_ark_tl[k][0]; break; }
+                                                      if (!t) continue;
+                                                      it = ppc_load_u32(&g_ctx, t + 0x10u);
+                                                      if (!it) continue;
+                                                      wp += snprintf(wi + wp, sizeof(wi) - (size_t)wp,
+                                                                     " [%u it=%08x sta=%u off=%x sz=%x buf=%08x]", i,
+                                                                     (unsigned)it,
+                                                                     (unsigned)ppc_load_u8(&g_ctx, it + 0x23u),
+                                                                     (unsigned)ppc_load_u32(&g_ctx, it + 0x14u),
+                                                                     (unsigned)ppc_load_u32(&g_ctx, it + 0x18u),
+                                                                     (unsigned)ppc_load_u32(&g_ctx, it + 0x0cu));
+                                                  }
+                                                  checkpoint("STUCKWI%s -- the work item behind each task"
+                                                             " that is holding a block and never reached"
+                                                             " the release gate. Five tasks are created"
+                                                             " past the sixty that complete, and those"
+                                                             " five hold the five blockA blocks the gate"
+                                                             " cannot free, so whatever these items are"
+                                                             " waiting on is the stall. sta is the status"
+                                                             " byte the blocking read spins on: 1 means"
+                                                             " in flight and still waiting, anything else"
+                                                             " means it finished and nothing noticed."
+                                                             " sz=0 would mean the read was never sized"
+                                                             " and the archive lookup is the fault"
+                                                             " instead",
+                                                             wi[0] ? wi : " <none>"); }
+                                                /* Each stuck block traced to the task that last
+                                                 * took it, and that task's state read with ARCHQ's
+                                                 * verified offsets rather than guessed ones. */
+                                                { char hd[620]; int hp = 0; hd[0] = ' ';
+                                                  uint32_t lst = g_ark_blklist;
+                                                  uint32_t cnt = lst ? ppc_load_u32(&g_ctx, lst + 0x08u) : 0u;
+                                                  uint32_t arr = lst ? ppc_load_u32(&g_ctx, lst + 0x14u) : 0u;
+                                                  for (unsigned i = 0; i < cnt && i < 8u && arr
+                                                       && hp < (int)sizeof(hd) - 60; i++) {
+                                                      uint32_t b = ppc_load_u32(&g_ctx, arr + i*4u);
+                                                      uint32_t owner = 0, slot = 0;
+                                                      if (!b) continue;
+                                                      for (unsigned k = (unsigned)g_ark_tl_n; k-- > 0; ) {
+                                                          if (g_ark_tl[k][1] == b) { owner = g_ark_tl[k][0]; slot = 1; break; }
+                                                          if (g_ark_tl[k][2] == b) { owner = g_ark_tl[k][0]; slot = 2; break; }
+                                                      }
+                                                      hp += snprintf(hd + hp, sizeof(hd) - (size_t)hp,
+                                                                     " [%u blk=%08x t=%08x as%u st=%u f=%08x]", i,
+                                                                     (unsigned)b, (unsigned)owner, slot,
+                                                                     (unsigned)(owner ? ppc_load_u32(&g_ctx, owner + 0x0cu) : 0u),
+                                                                     (unsigned)(owner ? ppc_load_u32(&g_ctx, owner + 0x10u) : 0u));
+                                                  }
+                                                  checkpoint("HOLDERS%s -- the six blocks that are always"
+                                                             " held at the stall, each traced back through"
+                                                             " TASKLINK to the task that last took it."
+                                                             " as1 means it sits in that task's +0x18 slot"
+                                                             " and as2 its +0x1c. st is ARCHQ's _state at"
+                                                             " +0x0c, which read 10 on the one stuck task"
+                                                             " ever examined. Six tasks in the same state"
+                                                             " is one systemic thing to fix; a spread"
+                                                             " means they are stuck at different points."
+                                                             " t=0 means no recorded task ever took that"
+                                                             " block, which would mean it was never handed"
+                                                             " out and the pool is short for another"
+                                                             " reason entirely",
+                                                             hd[0] ? hd : " <none>"); }
+                                                /* SD reads on the reads' own clock, with duration. */
                                                 { char ft[460]; int fp = 0; ft[0] = ' ';
                                                   uint32_t base = g_ark_burst_n ? g_ark_burst[0] : 0u;
                                                   for (unsigned i = 0; i < (unsigned)g_ark_fst_n && i < 16u
@@ -7908,6 +8360,19 @@ int main(int argc, char *argv[]) {
      * ever queued -- so the first successful run recorded "draws=0" in the
      * tally while DRAWPATH in the same log said 517. A tally that reads zero
      * on a good run is worse than no tally. */
+    /* Burst shape on the tally, so runs can be compared without reading logs.
+     * free0 came back 4 on every run while reads went 65 to 113, so the
+     * starting position is not the cause and the variance is inside the
+     * burst. SD reads measured 23 to 119ms against an 837ms burst, which is a
+     * large enough share to matter. */
+    { unsigned lc_burst = 0u, lc_fs = 0u, lc_gaps = 0u;
+      if (g_ark_burst_n > 1u)
+          lc_burst = (g_ark_burst[g_ark_burst_n-1] - g_ark_burst[0]) / 1000u;
+      for (unsigned i = 1; i < (unsigned)g_ark_burst_n && i < 256u; i++)
+          if (g_ark_burst[i] - g_ark_burst[i-1] > 20000u) lc_gaps++;
+      for (unsigned i = 0; i < (unsigned)g_ark_fst_n && i < 16u; i++)
+          if (g_ark_fst[i][1] > g_ark_fst[i][0])
+              lc_fs += (g_ark_fst[i][1] - g_ark_fst[i][0]) / 1000u;
     { unsigned lc_t1st = 0u;
       for (unsigned i = 0; i < (unsigned)g_lc_n && i < ARK_LOADCURVE_SLOTS; i++)
           if (g_lc[i][1]) { lc_t1st = (unsigned)(g_lc[i][0] - g_lc[0][0]); break; }
@@ -7919,7 +8384,10 @@ int main(int argc, char *argv[]) {
                                (unsigned)g_ark_ap[3],
                                (unsigned)g_ark_rel_reached,
                                (unsigned)g_arkchemy_archive_pumps,
-                               lc_t1st); }
+                               lc_t1st,
+                               (unsigned)g_ark_free_at_start,
+                               lc_burst, lc_fs, lc_gaps); }
+    }
 
     // Real, deliberate choice: don't threadWaitForExit/threadClose here
     // if the game thread never finished -- it may be legitimately stuck
