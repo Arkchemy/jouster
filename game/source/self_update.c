@@ -373,20 +373,36 @@ void arkchemy_run_tally_open(void (*report)(const char *fmt, ...),
     if (n) { fprintf(n, "build=%s flush=%u", mine, flush_lines); fclose(n); }
 }
 
+/* The loading figures ride along on the tally line because the byte count
+ * varies between runs of an identical build -- 684,652 on some, 815,724 on
+ * others -- and two samples read out of full logs could not tell a fix from
+ * luck. One line per run makes the loop harness a sampler, so a distribution
+ * costs nothing but letting it run.
+ *
+ * t1st is the elapsed second at which archive traffic first appeared, to
+ * five second resolution. If the short runs are the ones that started late,
+ * the variance lives in how long boot takes to reach loading. If they all
+ * start together and diverge after, it is in the loading path itself. */
 void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
                               int frames, unsigned draws, unsigned modules,
-                              unsigned flush_lines)
+                              unsigned flush_lines, unsigned bytes,
+                              unsigned reads, unsigned tasks, unsigned pumps,
+                              unsigned t1st)
 {
     char mine[64];
     ark_stamp_safe(mine, sizeof(mine));
 
     FILE *t = fopen(ARK_TALLY, "a");
     if (t) {
-        fprintf(t, "OK    build=%s flush=%u frames=%d draws=%u modules=%u\n",
-                mine, flush_lines, frames, draws, modules);
+        fprintf(t, "OK    build=%s flush=%u frames=%d draws=%u modules=%u"
+                   " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u\n",
+                mine, flush_lines, frames, draws, modules,
+                bytes, reads, tasks, pumps, t1st);
         fclose(t);
     }
     remove(ARK_TALLY_OPEN);
-    report("TALLY ok -- flush=%u frames=%d draws=%u modules=%u",
-           flush_lines, frames, draws, modules);
+    report("TALLY ok -- flush=%u frames=%d draws=%u modules=%u"
+           " bytes=%u reads=%u tasks=%u pumps=%u t1st=%u",
+           flush_lines, frames, draws, modules,
+           bytes, reads, tasks, pumps, t1st);
 }

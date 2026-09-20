@@ -3837,7 +3837,9 @@ void arkchemy_run_tally_open(void (*report)(const char *fmt, ...),
                              unsigned flush_lines);
 void arkchemy_run_tally_close(void (*report)(const char *fmt, ...),
                               int frames, unsigned draws, unsigned modules,
-                              unsigned flush_lines);
+                              unsigned flush_lines, unsigned bytes,
+                              unsigned reads, unsigned tasks, unsigned pumps,
+                              unsigned t1st);
 
 static void upload_report(const char *fmt, ...)
 {
@@ -7784,10 +7786,18 @@ int main(int argc, char *argv[]) {
      * ever queued -- so the first successful run recorded "draws=0" in the
      * tally while DRAWPATH in the same log said 517. A tally that reads zero
      * on a good run is worse than no tally. */
-    arkchemy_run_tally_close(checkpoint, frame,
-                             (unsigned)g_ark_draw_done,
-                             (unsigned)g_ark_shdmod_n,
-                             g_log_flush_lines);
+    { unsigned lc_t1st = 0u;
+      for (unsigned i = 0; i < (unsigned)g_lc_n && i < ARK_LOADCURVE_SLOTS; i++)
+          if (g_lc[i][1]) { lc_t1st = (unsigned)(g_lc[i][0] - g_lc[0][0]); break; }
+      arkchemy_run_tally_close(checkpoint, frame,
+                               (unsigned)g_ark_draw_done,
+                               (unsigned)g_ark_shdmod_n,
+                               g_log_flush_lines,
+                               (unsigned)g_arkchemy_fs_async_read_bytes,
+                               (unsigned)g_ark_ap[3],
+                               (unsigned)g_ark_rel_reached,
+                               (unsigned)g_arkchemy_archive_pumps,
+                               lc_t1st); }
 
     // Real, deliberate choice: don't threadWaitForExit/threadClose here
     // if the game thread never finished -- it may be legitimately stuck
