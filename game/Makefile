@@ -105,10 +105,17 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 # in this file since the first build.
 ARK_OPT	?=	-O2
 
+# ARK_MEMCHECK=1 builds with conquertron's PPC_MEM_CHECK: every guest memory
+# access is checked for running past the end of guest memory or touching the
+# NULL page, and the offending sites are counted by (function, lr) and printed
+# as the MEMCHK checkpoint line. Off by default; it costs a compare per access.
+#   make ARK_MEMCHECK=1
+ARK_MEMCHECK	?=	0
+
 CFLAGS	:=	-g -Wall $(ARK_OPT) -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DPPC_MEM_CHECK=$(ARK_MEMCHECK)
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 

@@ -6532,8 +6532,13 @@ int main(int argc, char *argv[]) {
                                                 }
                                                 {
                                                     char nb2[420]; int no = 0;
+                                                    /* stop before the buffer fills: snprintf returns
+                                                     * the length it WOULD have written, so once no
+                                                     * passes sizeof(nb2) the next size argument wraps
+                                                     * to a huge size_t and the write runs off the end.
+                                                     * Twelve sites need ~600 bytes of these 420. */
                                                     for (unsigned i = 0; i < g_ppc_nullsite_n
-                                                             && i < 12u; i++)
+                                                             && i < 12u && no < (int)sizeof(nb2) - 1; i++)
                                                         no += snprintf(nb2 + no, sizeof(nb2) - (size_t)no,
                                                                        "[pc=0x%x lr=0x%x n=%u addr=0x%x] ",
                                                                        (unsigned)g_ppc_nullsite[i][0],
@@ -6543,6 +6548,29 @@ int main(int argc, char *argv[]) {
                                                     if (no == 0) snprintf(nb2, sizeof(nb2), "<none>");
                                                     checkpoint("NULLSITES distinct=%u %s",
                                                                (unsigned)g_ppc_nullsite_n, nb2);
+                                                }
+                                                {
+                                                    /* PPC_MEM_CHECK (make ARK_MEMCHECK=1): guest
+                                                     * accesses past the end of guest memory, or in
+                                                     * the NULL page, by (function, lr). All zero in
+                                                     * a build without it. kind = reason<<8 | store<<4
+                                                     * | size; reason 1 past end, 2 NULL page. */
+                                                    char mb[480]; int mo = 0;
+                                                    for (unsigned i = 0; i < g_ppc_memchk_site_n
+                                                             && i < 12u && mo < (int)sizeof(mb) - 1; i++)
+                                                        mo += snprintf(mb + mo, sizeof(mb) - (size_t)mo,
+                                                                       "[pc=0x%x lr=0x%x addr=0x%x kind=0x%x n=%u] ",
+                                                                       (unsigned)g_ppc_memchk_site[i][0],
+                                                                       (unsigned)g_ppc_memchk_site[i][1],
+                                                                       (unsigned)g_ppc_memchk_site[i][2],
+                                                                       (unsigned)g_ppc_memchk_site[i][3],
+                                                                       (unsigned)g_ppc_memchk_site[i][4]);
+                                                    if (mo == 0) snprintf(mb, sizeof(mb), "<none>");
+                                                    checkpoint("MEMCHK on=%d pastEnd=%u null=%u sites=%u %s",
+                                                               PPC_MEM_CHECK,
+                                                               (unsigned)g_ppc_memchk_past_end,
+                                                               (unsigned)g_ppc_memchk_null,
+                                                               (unsigned)g_ppc_memchk_site_n, mb);
                                                 }
                                                 for (int d = 0; d < 2; d++) {
                                                     uint32_t base = d ? g_arkchemy_cfg_dump2
