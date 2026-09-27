@@ -11,7 +11,7 @@
  * that through a bitstream decoder instruction by instruction is work the
  * recomp model says we should not have to do.
  *
- * tools/shim_bink.py renames the recompiled definitions to
+ * tools/native-overrides.py renames the recompiled definitions to
  * ppc_Bink*__recompiled and leaves every call site alone, so these functions
  * take the original names.
  *
