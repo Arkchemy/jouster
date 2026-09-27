@@ -213,4 +213,7 @@ with open(decl_path, "w") as f:
 print(f"functions: {func_count}, chunks: {chunk_idx}, init_globals sub-funcs: {len(extra_decls)}")
 PYEOF
 
+echo "renaming recompiled functions that native code replaces..."
+python3 "$GAME_ROOT/../tools/native-overrides.py" "$GAME_ROOT"
+
 echo "done."
