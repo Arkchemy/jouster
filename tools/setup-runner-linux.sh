@@ -49,13 +49,26 @@ if [ ! -x "$DIR/run.sh" ]; then
 fi
 
 if [ ! -f "$DIR/.runner" ]; then
-    page="https://github.com/$REPO/settings/actions/runners/new?arch=x64&os=linux"
     say "registering it with $REPO"
-    printf 'A page is opening: %s\n' "$page"
-    printf 'Copy the token from its "./config.sh --url ... --token XXXX" line and paste it here.\n'
-    (xdg-open "$page" >/dev/null 2>&1 &) || true
-    printf 'token: '
-    read -r token
+    token="${ARK_RUNNER_TOKEN:-}"
+    # With the GitHub CLI logged in as a repository admin, no copying at all.
+    if [ -z "$token" ] && command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+        token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token 2>/dev/null || true)"
+        [ -n "$token" ] && ok "got a registration token from gh"
+    fi
+    if [ -z "$token" ]; then
+        # The settings page answers 404, not "forbidden", to anyone who is not
+        # an admin of the repository -- including when the browser is logged
+        # in as a different account.
+        page="https://github.com/$REPO/settings/actions/runners/new?arch=x64&os=linux"
+        printf 'Open (logged in as the account that owns %s): %s\n' "${REPO%%/*}" "$page"
+        printf 'It is Settings -> Actions -> Runners -> New self-hosted runner on the repository.\n'
+        printf 'A 404 there means that browser is not logged in as a repository admin.\n'
+        printf 'Or: gh auth login, then run this script again and it fetches the token itself.\n'
+        (xdg-open "$page" >/dev/null 2>&1 &) || true
+        printf 'Paste the token from the "./config.sh --url ... --token XXXX" line: '
+        read -r token
+    fi
     [ -n "$token" ] || die "no token"
     (cd "$DIR" && ./config.sh --unattended --replace --url "https://github.com/$REPO" --token "$token" \
         --name "$(hostname)-linux" --labels arkchemy,linux --work _work)
