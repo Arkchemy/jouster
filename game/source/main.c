@@ -6549,6 +6549,7 @@ int main(int argc, char *argv[]) {
                                                     checkpoint("NULLSITES distinct=%u %s",
                                                                (unsigned)g_ppc_nullsite_n, nb2);
                                                 }
+#ifdef PPC_MEMCHK_PAST_END   /* only in conquertron from 23f7fdb on: builds against an older checkout skip the line */
                                                 {
                                                     /* PPC_MEM_CHECK (make ARK_MEMCHECK=1): guest
                                                      * accesses past the end of guest memory, or in
@@ -6572,6 +6573,7 @@ int main(int argc, char *argv[]) {
                                                                (unsigned)g_ppc_memchk_null,
                                                                (unsigned)g_ppc_memchk_site_n, mb);
                                                 }
+#endif
                                                 for (int d = 0; d < 2; d++) {
                                                     uint32_t base = d ? g_arkchemy_cfg_dump2
                                                                       : g_arkchemy_cfg_dump1;
