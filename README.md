@@ -154,6 +154,34 @@ Swap `native` for `gx2_test` or `game` to build the others; the image
 already carries libnx and deko3d, so nothing else needs fetching.
 
 
+## On Linux, in one command
+
+Bluefin, Silverblue or any Linux with podman. Nothing is installed on the
+host: recomp and devkitPro run in two podman images that are built on first
+use and cached.
+
+```sh
+./tools/linux-all.sh /path/to/tfbGame_cafe.rpx
+```
+
+It clones conquertron beside this checkout if it is missing, and builds
+recomp. It regenerates the game's C only when recomp has changed, then
+builds `game/Jouster.nro`. If the Switch is in hbmenu with USB connected,
+it copies the NRO over with `tools/courier.sh`. It remembers the dump's
+path, so later runs need no argument.
+
+To have GitHub trigger that on every push, run this once:
+
+```sh
+./tools/setup-runner-linux.sh
+```
+
+It registers this machine as the repository's self-hosted runner, as a
+user-level systemd service. After that, every push builds here and puts the
+NRO on the Switch. So does **Run workflow** on the build workflow, which
+has tick boxes for delivery and for `ARK_MEMCHECK`. The build and the NRO
+never leave this machine.
+
 ## Building on a push
 
 `tools/setup-runner.ps1` registers the build machine as a self-hosted GitHub

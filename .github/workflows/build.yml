@@ -1,7 +1,9 @@
-# Builds Jouster on the self-hosted Windows runner and, if the console is
-# plugged in, couriers it over.
+# Builds Jouster on the owner's own machine (a self-hosted runner) and, if the
+# console is plugged in, couriers it over. Linux by default
+# (tools/setup-runner-linux.sh); Windows when the repository variable
+# ARK_RUNNER_OS is "windows" (tools/setup-runner.ps1).
 #
-# Why self-hosted rather than a GitHub runner: game/source/generated_*.c is the
+# Why self-hosted rather than a GitHub-hosted runner: game/source/generated_*.c is the
 # recompiled output of a real, legally-dumped tfbGame_cafe.rpx. It is
 # deliberately not in git (see LICENSE and .gitignore), it is ~308MB, and it
 # cannot be uploaded anywhere. Only a machine that already holds the dump can
@@ -34,6 +36,10 @@ on:
         description: 'Courier the NRO to the console over MTP'
         type: boolean
         default: true
+      memcheck:
+        description: 'Build with the guest-memory range check (ARK_MEMCHECK=1)'
+        type: boolean
+        default: false
 
 concurrency:
   # One build at a time. They share a working tree and a build directory, so
@@ -46,7 +52,113 @@ permissions:
   contents: read
 
 jobs:
+  # The build machine is Linux by default: tools/setup-runner-linux.sh makes
+  # one, and everything runs in podman there (tools/linux-all.sh). Set the
+  # repository variable ARK_RUNNER_OS to "windows" to use the Windows job
+  # below instead. Only one of the two runs, so a push never waits on a
+  # runner that does not exist.
+  build-linux:
+    if: ${{ vars.ARK_RUNNER_OS != 'windows' }}
+    runs-on: [self-hosted, linux, arkchemy]
+    env:
+      # Optional override; normally the runner's own .env (written by
+      # tools/setup-runner-linux.sh) supplies ARK_REPO.
+      ARK_REPO_OVERRIDE: ${{ vars.ARK_REPO_LINUX || '' }}
+    steps:
+      - name: Point the working checkout at this commit
+        run: |
+          set -eu
+          # the runner's .env sets ARK_REPO; the ARK_REPO_LINUX repository variable overrides it
+          repo="${ARK_REPO_OVERRIDE:-${ARK_REPO:-}}"
+          [ -n "$repo" ] || { echo "no ARK_REPO -- run tools/setup-runner-linux.sh" >&2; exit 1; }
+          echo "ARK_REPO=$repo" >> "$GITHUB_ENV"
+          cd "$repo"
+          echo "building ${GITHUB_SHA} in $repo"
+          git fetch origin --prune
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git stash push -m "actions-build-${GITHUB_RUN_ID}"
+            echo "ARK_STASHED=1" >> "$GITHUB_ENV"
+            echo "Temporarily stashed local tracked changes in \`git stash\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ARK_STASHED=0" >> "$GITHUB_ENV"
+          fi
+          git checkout "${GITHUB_REF_NAME}"
+          git merge --ff-only "origin/${GITHUB_REF_NAME}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}" || {
+            echo "HEAD is not the pushed commit -- something else moved this checkout" >&2
+            git log --oneline -3 >&2
+            exit 1; }
+
+      - name: Bring conquertron along
+        # Its branch of the same name when there is one, else main -- the
+        # pair is developed together. Only when the checkout is clean: local
+        # recompiler edits are the whole reason the sibling checkout wins
+        # (see tools/fetch-conquertron.sh), so they are never moved.
+        run: |
+          set -eu
+          cq="$(dirname "$ARK_REPO")/conquertron"
+          [ -d "$cq/.git" ] || { git clone -q https://github.com/Arkchemy/conquertron.git "$cq"; }
+          if ! git -C "$cq" diff --quiet || ! git -C "$cq" diff --cached --quiet; then
+            echo "conquertron has local changes -- building it as it stands" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git -C "$cq" fetch -q origin --prune
+          ref=main
+          git -C "$cq" rev-parse -q --verify "origin/${GITHUB_REF_NAME}" >/dev/null && ref="${GITHUB_REF_NAME}"
+          git -C "$cq" checkout -q "$ref" 2>/dev/null || git -C "$cq" checkout -q -b "$ref" "origin/$ref"
+          git -C "$cq" merge -q --ff-only "origin/$ref"
+          echo "conquertron \`$ref\` at \`$(git -C "$cq" rev-parse --short HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          ARK_DELIVER=none ARK_MEMCHECK=${{ inputs.memcheck && '1' || '0' }} ./tools/linux-all.sh
+
+      - name: Record what was built
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          nro="game/Jouster.nro"
+          stamp="$(grep -a -o 'ARKCHEMY_BUILD [A-Za-z0-9 :]*' "$nro" | head -1 | sed 's/ARKCHEMY_BUILD //')"
+          {
+            echo "### Jouster \`${stamp:-unknown}\`"
+            echo ""
+            echo "\`$(wc -c < "$nro")\` bytes from \`$(git rev-parse --short HEAD)\`, at \`$ARK_REPO/$nro\` on the build machine."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deliver over USB
+        # Best effort, like the Windows job: a build that compiled is still a
+        # build. The summary says whether it landed.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deliver }}
+        continue-on-error: true
+        run: |
+          set -eu
+          cd "$ARK_REPO"
+          mkdir -p build/courier && cp game/Jouster.nro build/courier/Jouster.nro
+          out="$(tools/courier.sh --once 2>&1 || true)"
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'PUSH Jouster.*hash-verified'; then
+            echo "Delivered to the Switch (switch/Jouster.nro), hash-verified." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Not delivered -- the Switch was not in hbmenu with USB connected. The build is waiting in build/courier: run tools/courier.sh on the build machine, or re-run this workflow." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Restore local tracked changes
+        if: ${{ always() && env.ARK_STASHED == '1' }}
+        run: |
+          set -u
+          cd "$ARK_REPO"
+          if git stash pop --index; then
+            echo "Restored stashed local tracked changes." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Could not auto-restore local tracked changes; left in \`git stash\` for manual recovery." >> "$GITHUB_STEP_SUMMARY"
+            git reset --hard HEAD
+          fi
+
   build:
+    if: ${{ vars.ARK_RUNNER_OS == 'windows' }}
     runs-on: [self-hosted, windows, arkchemy]
     defaults:
       run:
