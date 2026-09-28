@@ -2896,6 +2896,8 @@ static void game_thread_func(void *arg) {
                 else if (!strncmp(line, "replay", 6)) g_arkchemy_cfg_replay = (uint32_t)v;
                 else if (!strncmp(line, "dump2", 5))  g_arkchemy_cfg_dump2  = (uint32_t)v;
                 else if (!strncmp(line, "owner", 5))  g_ark_own_target      = (uint32_t)v;
+                /* RELFIX A/B without a rebuild; see probe-hooks.py */
+                else if (!strncmp(line, "relfix", 6)) g_ark_relfix_enabled  = (uint32_t)v;
             }
             fclose(cf);
         }

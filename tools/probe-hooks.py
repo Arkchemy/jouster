@@ -61,10 +61,16 @@ ENTRY = {
 }
 
 AFTER = {
-    # RELGATE (TALLY's tasks): igArchive::updateTasks loads task->_block
-    # (+0x1c) into r21 from the task in r16; null means the block is not
-    # handed back. See ark_rel_gate in ark_blockprobe.h.
-    0x21682a0: "ark_rel_gate(ctx->r[16], ctx->r[21]);",
+    # RELGATE (TALLY's tasks): igArchive::updateTasks loads the task's
+    # second block (+0x1c) into r21 from the task in r16; null skips the
+    # release. Records the first block (+0x18) and its state (block+0x14) as
+    # well, and with relfix=1 in watch.cfg hands a first block still in use
+    # (state 1) back as cached (state 2) -- RELFIX in ark_blockprobe.h, off
+    # unless asked for.
+    0x21682a0: ("{ uint32_t t_ = ctx->r[16], b_ = ctx->r[21], a_ = ppc_load_u32(ctx, t_ + 0x18u),"
+                " s_ = a_ ? ppc_load_u32(ctx, a_ + 0x14u) : 0u; ark_rel_gate2(t_, b_, a_, s_);"
+                " if (g_ark_relfix_enabled && !b_ && a_ && s_ == 1u)"
+                " { ppc_store_u32(ctx, a_ + 0x14u, 2u); g_ark_relfix_applied++; } }"),
 }
 
 def main():
