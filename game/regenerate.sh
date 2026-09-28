@@ -49,7 +49,7 @@ mkdir -p "$OUT_INCLUDE"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-rm -f "$OUT_SOURCE"/generated_*.c "$OUT_INCLUDE"/generated_decls.h
+rm -f "$OUT_SOURCE"/generated_*.c "$OUT_INCLUDE"/generated_decls.h "$OUT_INCLUDE"/generated_info.h
 
 echo "running recomp against $RPX (this takes a while, ~8.5M lines of output)..."
 # recomp exits 2 (not 0) when it hits real, known-unhandled instructions --
@@ -215,5 +215,12 @@ PYEOF
 
 echo "renaming recompiled functions that native code replaces..."
 python3 "$GAME_ROOT/../tools/native-overrides.py" "$GAME_ROOT"
+
+# Record what produced this C, for the log's GENERATED line: the conquertron
+# revision (dirty if it had local changes), the dump's hash and the time.
+cq_rev="$(git -C "$CONQUERTRON" describe --always --dirty 2>/dev/null || echo unknown)"
+rpx_sum="$(sha1sum "$RPX" 2>/dev/null | cut -c1-12)"
+printf '#define ARK_GENERATED_WITH "conquertron %s, rpx sha1 %s, %s"\n' \
+    "$cq_rev" "${rpx_sum:-unknown}" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$OUT_INCLUDE/generated_info.h"
 
 echo "done."

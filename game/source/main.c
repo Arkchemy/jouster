@@ -36,6 +36,12 @@
 
 #include "ppc_runtime.h"
 #include "ark_blockprobe.h"
+#if defined(__has_include) && __has_include("generated_info.h")
+#include "generated_info.h"   /* written by regenerate.sh */
+#endif
+#ifndef ARK_GENERATED_WITH
+#define ARK_GENERATED_WITH "unknown -- generated C predates regenerate.sh recording it"
+#endif
 #include "ark_fstime.h"
 #include "cafeos_coreinit_fs.h"
 #include "cafeos_coreinit_mem.h"
@@ -4239,6 +4245,11 @@ int main(int argc, char *argv[]) {
      * cannot be used to match a tally line to the log that produced it. */
     checkpoint("Arkchemy (Jouster) game smoke test starting -- build %s",
                ark_build_marker + sizeof("ARKCHEMY_BUILD ") - 1);
+    /* Which recompiler produced this build's generated C, written by
+     * regenerate.sh. Added 2026-09-28: a Windows build that worked and Linux
+     * builds that did not turned out to differ only in generated C made at
+     * different times, and no log could say when or by what. */
+    checkpoint("GENERATED %s", ARK_GENERATED_WITH);
 
     /* Report the process's real memory limits, added 2026-08-24. This
      * build needs ~1GB of BSS plus ~158MB of .text, which is far past
