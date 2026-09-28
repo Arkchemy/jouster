@@ -63,7 +63,7 @@ podman run --rm -v "$ARK":/work:z -w /work/jouster/game docker.io/devkitpro/devk
     "dkp-pacman -Sy --noconfirm --needed switch-bzip2 switch-curl switch-dav1d switch-ffmpeg switch-mbedtls switch-zlib >/dev/null; make -j\$(nproc) CONQUERTRON=/work/${DIR#"$ARK"/} 2>&1 | grep -E 'error|linking|built' || true"
 [ -f "$JO/game/Jouster.nro" ] || { echo "build failed" >&2; exit 1; }
 
-echo "== deliver (Switch in hbmenu, USB connected)"
+echo "== deliver (Switch in Haze or DBI MTP, USB connected)"
 mkdir -p "$JO/build/courier"
 cp "$JO/game/Jouster.nro" "$JO/build/courier/"
 "$JO/tools/courier.sh" --once
