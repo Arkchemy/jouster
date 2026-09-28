@@ -22,6 +22,11 @@
 # $ARK/cq-<variant>, so the container can see it. Regenerating replaces
 # game/source/generated_*.c; run `bisect-build.sh head` to go back.
 set -e
+# From inside another distrobox (a terminal or agent running in one), there is
+# no `distrobox` to enter `ark` with: hand the whole run to the host instead.
+if ! command -v distrobox >/dev/null 2>&1 && command -v distrobox-host-exec >/dev/null 2>&1; then
+    exec distrobox-host-exec "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$@"
+fi
 V="$1"; RPX="$2"
 [ -n "$V" ] && [ -f "$RPX" ] || { echo "usage: $0 head|sep20|nosync <tfbGame_cafe.rpx>" >&2; exit 2; }
 JO="$(cd "$(dirname "$0")/.." && pwd)"
