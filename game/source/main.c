@@ -3515,8 +3515,25 @@ static void game_thread_func(void *arg) {
     }
     checkpoint("[game thread] calling ppc_run_static_initializers (114 real C++ static initializers)...");
     ppc_run_static_initializers(&g_ctx);
+    /* Tell the game's own _main that its constructors have run.
+     *
+     * _main (0x2579828), which the entry point calls before main, walks the
+     * constructor table at .rodata+834628 -- the same 114 __sti functions,
+     * in the same order, that ppc_run_static_initializers just ran -- unless
+     * the word at .data+104156 (guest 112348) is non-zero, and sets it as it
+     * starts. Nothing set it here, so every build made from a fresh
+     * regenerate constructed every global twice. Found 2026-09-28: the
+     * second pass is ~1,805 calls between the static initializers and
+     * igRefAlchemy, where the working build had ~175, and afterwards
+     * igArkCore's construction allocates before any memory context exists
+     * and mallocString retries forever (reads=0 draws=0 on hardware). On
+     * Cafe OS the constructors run exactly once, inside _main; this makes
+     * that true again. */
+    if (ppc_load_u32(&g_ctx, 112348u) == 0u)
+        ppc_store_u32(&g_ctx, 112348u, 1u);
     g_static_init_done = true;
-    checkpoint("[game thread] ppc_run_static_initializers done");
+    checkpoint("[game thread] ppc_run_static_initializers done -- _main's ran-once flag (guest 112348) = %u",
+               (unsigned)ppc_load_u32(&g_ctx, 112348u));
     // Real, targeted fix added 2026-08-21 after a full real hardware trace
     // (see cafeos_coreinit_mem.h's own ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR
     // comment for the complete explanation) found the true root cause of
