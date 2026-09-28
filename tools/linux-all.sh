@@ -115,6 +115,7 @@ fi
 # ------------------------------------------------------------------- 6. build
 # Idempotent, and cheap: also fixes a tree generated before regenerate.sh ran it
 run "$HOST_IMG" python3 tools/native-overrides.py game
+run "$HOST_IMG" python3 tools/probe-hooks.py game
 
 # Dependency files carry absolute paths. A build directory made anywhere else
 # (another machine, Windows) makes make demand files that do not exist here.

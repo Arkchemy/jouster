@@ -216,6 +216,9 @@ PYEOF
 echo "renaming recompiled functions that native code replaces..."
 python3 "$GAME_ROOT/../tools/native-overrides.py" "$GAME_ROOT"
 
+echo "adding the diagnostic probe calls..."
+python3 "$GAME_ROOT/../tools/probe-hooks.py" "$GAME_ROOT"
+
 # Record what produced this C, for the log's GENERATED line: the conquertron
 # revision (dirty if it had local changes), the dump's hash and the time.
 cq_rev="$(git -C "$CONQUERTRON" describe --always --dirty 2>/dev/null || echo unknown)"
