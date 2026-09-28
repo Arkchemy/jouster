@@ -36,6 +36,7 @@
 
 #include "ppc_runtime.h"
 #include "ark_blockprobe.h"
+#include "ark_jprobe.h"      /* BLKWRITE, BLKPOOL */
 #if defined(__has_include) && __has_include("generated_info.h")
 #include "generated_info.h"   /* written by regenerate.sh */
 #endif
@@ -6743,19 +6744,19 @@ int main(int argc, char *argv[]) {
                                                            (unsigned)g_ark_hz[0], (unsigned)g_ark_hz[1],
                                                            (unsigned)g_ark_hz[2], (unsigned)g_ark_hz[3]);
                                                 char bwb[420]; int bwo = 0; bwb[0] = 0;
-                                                for (unsigned i = 0; i < g_ark_bw_n && i < 8u; i++) {
+                                                for (unsigned i = 0; i < g_ark_blkw_n && i < 8u; i++) {
                                                     bwo += snprintf(bwb + bwo, sizeof bwb - (size_t)bwo,
                                                                     " [%s lr=0x%x dst=0x%x n=%u v=0x%x]",
-                                                                    g_ark_bw[i][4] == 1u ? "memset" : "memcpy",
-                                                                    (unsigned)g_ark_bw[i][0], (unsigned)g_ark_bw[i][1],
-                                                                    (unsigned)g_ark_bw[i][2], (unsigned)g_ark_bw[i][3]);
+                                                                    g_ark_blkw[i][4] == 1u ? "memset" : "memcpy",
+                                                                    (unsigned)g_ark_blkw[i][0], (unsigned)g_ark_blkw[i][1],
+                                                                    (unsigned)g_ark_blkw[i][2], (unsigned)g_ark_blkw[i][3]);
                                                     if (bwo >= (int)sizeof bwb - 1) break;
                                                 }
                                                 checkpoint("BULKWRITE seen=%u n=%u%s -- memset/memcpy covering the"
                                                            " fill= address. These bypass ppc_store_u32 entirely, so"
                                                            " the store watch cannot see them and its hits=0 never"
                                                            " meant unwritten",
-                                                           (unsigned)g_ark_bw_seen, (unsigned)g_ark_bw_n,
+                                                           (unsigned)g_ark_bw_seen, (unsigned)g_ark_blkw_n,
                                                            bwb[0] ? bwb : " <none>");
 
                                                 char hsb[600]; int hso = 0; hsb[0] = 0;
@@ -7715,6 +7716,46 @@ int main(int argc, char *argv[]) {
                                                            (unsigned)g_ark_rel_a_other,
                                                            (unsigned)g_ark_relfix_applied,
                                                            (unsigned)g_ark_relfix_enabled);
+                                                {
+                                                    /* BLKWRITE and BLKPOOL: see ark_jprobe.h */
+                                                    char bw[900]; int bwo = 0; bw[0] = 0;
+                                                    for (unsigned i = 0; i < g_ark_blkw_n && i < ARK_BLKW_SITES
+                                                             && bwo < (int)sizeof bw - 1; i++)
+                                                        bwo += snprintf(bw + bwo, sizeof bw - (size_t)bwo,
+                                                                        " [%x n=%u =0:%u =1:%u =2:%u other:%u last=0x%x<-%u]",
+                                                                        (unsigned)g_ark_blkw[i][0], (unsigned)g_ark_blkw[i][1],
+                                                                        (unsigned)g_ark_blkw[i][2], (unsigned)g_ark_blkw[i][3],
+                                                                        (unsigned)g_ark_blkw[i][4], (unsigned)g_ark_blkw[i][5],
+                                                                        (unsigned)g_ark_blkw[i][6], (unsigned)g_ark_blkw[i][7]);
+                                                    checkpoint("BLKWRITE sites=%u over=%u%s -- every store to +0x14"
+                                                               " in the archive task and block code, per site: calls,"
+                                                               " values written, last base<-value. Match last= against"
+                                                               " BLKPOOL to tell block state writes from task fields",
+                                                               (unsigned)g_ark_blkw_n, (unsigned)g_ark_blkw_over,
+                                                               bwo ? bw : " <none>");
+                                                    char bp[600]; int bpo = 0; bp[0] = 0;
+                                                    uint32_t bm = g_ark_blkmgr, bl = 0, bn = 0, ba = 0;
+                                                    if (bm) {
+                                                        bl = ppc_load_u32(&g_ctx, bm + 8u);
+                                                        bn = bl ? ppc_load_u32(&g_ctx, bl + 8u) : 0u;
+                                                        ba = bl ? ppc_load_u32(&g_ctx, bl + 0x14u) : 0u;
+                                                    }
+                                                    for (uint32_t i = 0; ba && i < bn && i < 8u
+                                                             && bpo < (int)sizeof bp - 1; i++) {
+                                                        uint32_t b = ppc_load_u32(&g_ctx, ba + 4u * i);
+                                                        bpo += snprintf(bp + bpo, sizeof bp - (size_t)bpo,
+                                                                        " [0x%x st=%u +8=0x%x +c=0x%x +10=0x%x]",
+                                                                        (unsigned)b,
+                                                                        (unsigned)ppc_load_u32(&g_ctx, b + 0x14u),
+                                                                        (unsigned)ppc_load_u32(&g_ctx, b + 0x08u),
+                                                                        (unsigned)ppc_load_u32(&g_ctx, b + 0x0cu),
+                                                                        (unsigned)ppc_load_u32(&g_ctx, b + 0x10u));
+                                                    }
+                                                    checkpoint("BLKPOOL mgr=0x%x n=%u%s -- the block manager's pool at"
+                                                               " exit, read the way getNumAvailableBlocks walks it:"
+                                                               " state 0 or 2 is available, 1 is in use",
+                                                               (unsigned)bm, (unsigned)bn, bpo ? bp : " <none>");
+                                                }
                                                 checkpoint("ARCPUMP pumps=%u enabled=%u -- the archive"
                                                            " pump added 2026-09-20, driven from"
                                                            " OSWaitEvent's cooperative wait slices."

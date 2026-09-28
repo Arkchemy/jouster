@@ -47,7 +47,7 @@ ENTRY = {
     "ppc_startBlockRead__Q2_4Core9igArchiveSFPQ2_4Core16igFileDescriptorPvUiT3": "ark_pump(3);",
     "ppc_decompressBatch__4CoreFPQ3_4Core10igJobQueue5Batch": "ark_pump(4);",
     "ppc_allocate__Q2_4Core21igArchiveBlockManagerFv": "ark_pump(5);",
-    "ppc_getNumAvailableBlocks__Q2_4Core21igArchiveBlockManagerFv": "ark_pump(7);",
+    "ppc_getNumAvailableBlocks__Q2_4Core21igArchiveBlockManagerFv": "ark_pump(7); g_ark_blkmgr = ctx->r[3];",
     "ppc_addWork__Q2_4Core9igArchiveFPQ2_4Core14igFileWorkItemQ2_4Core14igBlockingType": "ark_pump(9);",
     "ppc_update__Q2_4Core9igArchiveFQ2_4Core14igBlockingType": "ark_pump(14);",
     "ppc_update__Q2_4Core13igFileContextFv": "ark_pump(15);",
@@ -61,6 +61,27 @@ ENTRY = {
 }
 
 AFTER = {
+    # BLKWRITE (ark_jprobe.h): every store to +0x14 in the archive task and
+    # block code that is not a stack spill -- site, base register, value.
+    # Listed 2026-09-28 from the generated C: stw rS, 0x14(rB), rB != r1, in
+    # updateTasks, startBlockRead, startNewTasks, addWork and deallocate.
+    0x2167cb0: "ark_blkw(0x2167cb0u, ctx->r[4], ctx->r[19]);",
+    0x2167cbc: "ark_blkw(0x2167cbcu, ctx->r[5], ctx->r[19]);",
+    0x2167f48: "ark_blkw(0x2167f48u, ctx->r[10], ctx->r[19]);",
+    0x2167f54: "ark_blkw(0x2167f54u, ctx->r[12], ctx->r[19]);",
+    0x21682d0: "ark_blkw(0x21682d0u, ctx->r[21], ctx->r[10]);",
+    0x21682f0: "ark_blkw(0x21682f0u, ctx->r[11], ctx->r[19]);",
+    0x2168698: "ark_blkw(0x2168698u, ctx->r[30], ctx->r[26]);",
+    0x2168bc4: "ark_blkw(0x2168bc4u, ctx->r[29], ctx->r[4]);",
+    0x2168e50: "ark_blkw(0x2168e50u, ctx->r[3], ctx->r[6]);",
+    0x2168e78: "ark_blkw(0x2168e78u, ctx->r[3], ctx->r[8]);",
+    0x2169248: "ark_blkw(0x2169248u, ctx->r[29], ctx->r[8]);",
+    0x2169278: "ark_blkw(0x2169278u, ctx->r[29], ctx->r[8]);",
+    0x2169604: "ark_blkw(0x2169604u, ctx->r[29], ctx->r[8]);",
+    0x2169644: "ark_blkw(0x2169644u, ctx->r[29], ctx->r[8]);",
+    0x216afbc: "ark_blkw(0x216afbcu, ctx->r[29], ctx->r[4]);",
+    0x216b098: "ark_blkw(0x216b098u, ctx->r[31], ctx->r[4]);",
+    0x216e31c: "ark_blkw(0x216e31cu, ctx->r[10], ctx->r[8]);",
     # RELGATE (TALLY's tasks): igArchive::updateTasks loads the task's
     # second block (+0x1c) into r21 from the task in r16; null skips the
     # release. Records the first block (+0x18) and its state (block+0x14) as
@@ -117,10 +138,11 @@ def main():
                 pending_after = AFTER[int(im.group(1), 16)]
         # ark_blockprobe.h is kept out of ppc_runtime.h so that touching it
         # rebuilds two objects, not 224 -- include it only where a probe sits
-        inc = '#include "ark_blockprobe.h"\n'
-        if any(MARK in l for l in out) and inc not in out:
-            at = out.index('#include "ppc_runtime.h"\n') + 1
-            out.insert(at, inc); changed = True
+        # (ark_jprobe.h is jouster's own, in game/include)
+        for inc in ('#include "ark_blockprobe.h"\n', '#include "ark_jprobe.h"\n'):
+            if any(MARK in l for l in out) and inc not in out:
+                at = out.index('#include "ppc_runtime.h"\n') + 1
+                out.insert(at, inc); changed = True
         if changed:
             with open(path, "w") as f:
                 f.writelines(out)
