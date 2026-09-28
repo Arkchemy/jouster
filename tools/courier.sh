@@ -1,18 +1,20 @@
 #!/bin/sh
 # Moves builds and logs between this machine and the Switch, by itself.
 #
-# The Switch's MTP mount is only up while it sits in hbmenu: launching any
-# homebrew drops it, returning restores it. That makes the mount a free
-# run-start/run-finish signal, and it makes writing to the card safe by
-# construction -- you cannot write mid-run, because there is nothing to write
-# to. This script leans on that rather than trying to detect the game itself.
+# The Switch's MTP mount is only up while it runs its USB transfer app (Haze,
+# or DBI's MTP responder) -- not in plain hbmenu, where the console shows up on
+# USB as a controller and nothing more. Launching the game drops the mount and
+# reopening the app restores it. That makes the mount a free run-start/
+# run-finish signal, and it makes writing to the card safe by construction --
+# you cannot write mid-run, because there is nothing to write to. This script
+# leans on that rather than trying to detect the game itself.
 #
 # Every stdout line is one event, so this can be driven by a watcher that
 # turns lines into notifications. It is deliberately quiet otherwise: a poll
 # that finds nothing new prints nothing.
 #
-# Drop files in $DROP and they land on the card the next time the Switch is in
-# hbmenu, verified by hash:
+# Drop files in $DROP and they land on the card the next time the transfer app
+# is open, verified by hash:
 #
 #   $DROP/<Name>.nro    ->  switch/<Name>.nro        (Jouster.nro, Armory.nro)
 #   $DROP/sd/<path>     ->  <card>/<path>            (anything else, e.g.
@@ -39,6 +41,15 @@
 # byte-identical in size because the ROM blob dominates (176MB), so size
 # cannot tell a fresh .nro from a stale one.
 set -eu
+
+# The MTP mount is a gvfs FUSE mount in the HOST's /run/user, which a
+# distrobox does not see: from inside one, every pass would report the card
+# unreachable with the Switch sitting in Haze. Found 2026-09-28. Run on the
+# host instead. Environment overrides do not cross distrobox-host-exec, so
+# ARK_CARD (the no-Switch test mode) keeps this in the container.
+if [ -f /run/.containerenv ] && [ -z "${ARK_CARD:-}" ] && command -v distrobox-host-exec >/dev/null 2>&1; then
+    exec distrobox-host-exec "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$@"
+fi
 
 # Read the whole script into memory before running any of it.
 #
@@ -128,14 +139,33 @@ card_root() {
     for c in $CARD_GLOB; do
         [ -d "$c/SD Card" ] || continue
         # MTP is up only while the console is running its USB transfer app
-    # (Haze/DBI) -- NOT in hbmenu, and not while a game runs. A stale
-    # gvfs entry can also linger after the console launches something;
+        # (Haze/DBI) -- NOT in hbmenu, and not while a game runs. A stale
+        # gvfs entry can also linger after the console launches something;
         # only a directory that actually lists counts as mounted.
         ls "$c/SD Card" >/dev/null 2>&1 || continue
+        printf '%s\n' "$(basename "$c")" > "$STATE/mtp-host"
         printf '%s/SD Card\n' "$c"
         return 0
     done
     return 1
+}
+
+# The Switch never leaves USB -- outside the transfer app it stays plugged in
+# as a controller -- so gvfs keeps the old mount when the game launches, and
+# when the app comes back that mount stays dead and lists nothing. Measured
+# 2026-09-28: Haze open, card "unreachable" until the mount was dropped and
+# made again by hand. So drop a mount that does not list, and mount the
+# console we last saw. With no transfer app running the mount fails at once
+# ("No MTP devices found"), which costs nothing on a poll.
+remount() {
+    [ -z "${ARK_CARD:-}" ] && command -v gio >/dev/null 2>&1 || return 0
+    for c in $CARD_GLOB; do
+        [ -d "$c" ] || continue
+        ls "$c/SD Card" >/dev/null 2>&1 && continue
+        gio mount -u "mtp://${c##*mtp:host=}/" 2>/dev/null || true
+    done
+    [ -f "$STATE/mtp-host" ] || return 0
+    gio mount "mtp://$(sed 's/^mtp:host=//' "$STATE/mtp-host")/" 2>/dev/null || true
 }
 
 hash_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
@@ -257,7 +287,7 @@ push_nro() {
 }
 
 pass() {
-    if card="$(card_root)"; then
+    if card="$(card_root)" || { remount; card="$(card_root)"; }; then
         if [ ! -f "$STATE/mounted" ]; then
             echo "CARD reachable (MTP up -- the USB transfer app is running)"
             : > "$STATE/mounted"
@@ -266,7 +296,9 @@ pass() {
         pull_shaders "$card"
         push_nro "$card"
     else
-        if [ -f "$STATE/mounted" ]; then
+        # Always said on a single pass: --once is someone asking, and silence
+        # read as "nothing new" when it meant "never got to look".
+        if [ -f "$STATE/mounted" ] || [ "${ONCE:-0}" = 1 ]; then
             echo "CARD unreachable (MTP down -- not in the USB transfer app)"
             rm -f "$STATE/mounted"
         fi
@@ -274,5 +306,5 @@ pass() {
     return 0
 }
 
-if [ "${1:-}" = "--once" ]; then pass; exit 0; fi
+if [ "${1:-}" = "--once" ]; then ONCE=1 pass; exit 0; fi
 while :; do pass; sleep "$INTERVAL"; done
