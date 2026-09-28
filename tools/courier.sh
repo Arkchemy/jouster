@@ -165,7 +165,14 @@ remount() {
         gio mount -u "mtp://${c##*mtp:host=}/" 2>/dev/null || true
     done
     [ -f "$STATE/mtp-host" ] || return 0
-    gio mount "mtp://$(sed 's/^mtp:host=//' "$STATE/mtp-host")/" 2>/dev/null || true
+    gio mount "mtp://$(sed 's/^mtp:host=//' "$STATE/mtp-host")/" 2>/dev/null || true   # "already mounted" still needs the wait
+    # gio returns before the console answers its first listing: on
+    # 2026-09-28 a pass right after a remount still found nothing to list,
+    # and the next one, seconds later, found the card. Give it a moment.
+    for _try in 1 2 3 4 5 6; do
+        card_root >/dev/null && return 0
+        sleep 1
+    done
 }
 
 hash_of() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
